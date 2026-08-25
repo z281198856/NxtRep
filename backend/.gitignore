@@ -1,0 +1,10 @@
+.env
+.idea/
+.pytest_cache/
+.ruff_cache/
+.uv-cache/
+.venv/
+__pycache__/
+*.py[cod]
+*.db
+.postgresql.log
