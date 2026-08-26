@@ -1,0 +1,163 @@
+from datetime import date
+from uuid import UUID
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from nxtrep_backend.db.models import (
+    CalendarEvent,
+    CalendarRescheduleDraft,
+    Exercise,
+    TrainingPlanDraft,
+    TrainingPlanVersion,
+    TrainingTemplate,
+)
+
+
+class SqlAlchemyTrainingRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list_templates(
+        self,
+        *,
+        goal_type: str | None,
+        days_per_week: int | None,
+        equipment: str | None,
+    ) -> list[TrainingTemplate]:
+        conditions = [TrainingTemplate.is_active.is_(True)]
+        if goal_type:
+            conditions.append(TrainingTemplate.goal_types.contains([goal_type]))
+        if days_per_week:
+            conditions.append(TrainingTemplate.days_per_week == days_per_week)
+        if equipment:
+            conditions.append(TrainingTemplate.equipment.contains([equipment]))
+        result = await self.session.scalars(
+            select(TrainingTemplate).where(*conditions).order_by(TrainingTemplate.name)
+        )
+        return list(result)
+
+    async def get_template(self, template_id: UUID) -> TrainingTemplate | None:
+        return await self.session.scalar(
+            select(TrainingTemplate).where(
+                TrainingTemplate.id == template_id, TrainingTemplate.is_active.is_(True)
+            )
+        )
+
+    async def visible_exercise_ids(self, user_id: UUID, exercise_ids: set[UUID]) -> set[UUID]:
+        if not exercise_ids:
+            return set()
+        return set(
+            await self.session.scalars(
+                select(Exercise.id).where(
+                    Exercise.id.in_(exercise_ids),
+                    Exercise.deleted_at.is_(None),
+                    (Exercise.owner_user_id.is_(None) | (Exercise.owner_user_id == user_id)),
+                )
+            )
+        )
+
+    async def add_draft(self, draft: TrainingPlanDraft) -> TrainingPlanDraft:
+        self.session.add(draft)
+        await self.session.flush()
+        return draft
+
+    async def get_draft(
+        self, user_id: UUID, draft_id: UUID, *, lock: bool = False
+    ) -> TrainingPlanDraft | None:
+        statement = select(TrainingPlanDraft).where(
+            TrainingPlanDraft.id == draft_id, TrainingPlanDraft.user_id == user_id
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return await self.session.scalar(statement)
+
+    async def get_active_plan(self, user_id: UUID) -> TrainingPlanVersion | None:
+        return await self.session.scalar(
+            select(TrainingPlanVersion).where(
+                TrainingPlanVersion.user_id == user_id, TrainingPlanVersion.status == "active"
+            )
+        )
+
+    async def get_plan_version(self, version_id: UUID) -> TrainingPlanVersion | None:
+        return await self.session.get(TrainingPlanVersion, version_id)
+
+    async def list_plan_versions(
+        self, user_id: UUID, plan_id: UUID, page: int, page_size: int
+    ) -> tuple[list[TrainingPlanVersion], int]:
+        conditions = [
+            TrainingPlanVersion.user_id == user_id,
+            TrainingPlanVersion.plan_id == plan_id,
+        ]
+        total = await self.session.scalar(
+            select(func.count()).select_from(TrainingPlanVersion).where(*conditions)
+        )
+        versions = list(
+            await self.session.scalars(
+                select(TrainingPlanVersion)
+                .where(*conditions)
+                .order_by(TrainingPlanVersion.version.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        return versions, int(total or 0)
+
+    async def add_plan_version(self, version: TrainingPlanVersion) -> TrainingPlanVersion:
+        self.session.add(version)
+        await self.session.flush()
+        return version
+
+    async def list_calendar(
+        self, user_id: UUID, start_date: date, end_date: date
+    ) -> list[CalendarEvent]:
+        return list(
+            await self.session.scalars(
+                select(CalendarEvent)
+                .where(
+                    CalendarEvent.user_id == user_id,
+                    CalendarEvent.scheduled_date >= start_date,
+                    CalendarEvent.scheduled_date <= end_date,
+                )
+                .order_by(CalendarEvent.scheduled_date, CalendarEvent.created_at)
+            )
+        )
+
+    async def get_calendar_event(
+        self, user_id: UUID, event_id: UUID, *, lock: bool = False
+    ) -> CalendarEvent | None:
+        statement = select(CalendarEvent).where(
+            CalendarEvent.id == event_id, CalendarEvent.user_id == user_id
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return await self.session.scalar(statement)
+
+    async def get_event_on_date(self, user_id: UUID, target_date: date) -> CalendarEvent | None:
+        return await self.session.scalar(
+            select(CalendarEvent).where(
+                CalendarEvent.user_id == user_id,
+                CalendarEvent.scheduled_date == target_date,
+                CalendarEvent.status == "planned",
+            )
+        )
+
+    async def add_reschedule_draft(self, draft: CalendarRescheduleDraft) -> CalendarRescheduleDraft:
+        self.session.add(draft)
+        await self.session.flush()
+        return draft
+
+    async def get_reschedule_draft(
+        self, user_id: UUID, draft_id: UUID, *, lock: bool = False
+    ) -> CalendarRescheduleDraft | None:
+        statement = select(CalendarRescheduleDraft).where(
+            CalendarRescheduleDraft.id == draft_id,
+            CalendarRescheduleDraft.user_id == user_id,
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return await self.session.scalar(statement)
+
+    async def add_calendar_events(self, events: list[CalendarEvent]) -> None:
+        self.session.add_all(events)
+        await self.session.flush()
