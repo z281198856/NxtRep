@@ -103,6 +103,15 @@ class NutritionTargetDraft(IdMixin, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("status IN ('editing', 'submitted')", name="status"),
         CheckConstraint("version >= 1", name="version_positive"),
+        CheckConstraint(
+            "kcal_min >= 0 AND protein_min_g >= 0 AND carbs_min_g >= 0 AND fat_min_g >= 0",
+            name="minimums_non_negative",
+        ),
+        CheckConstraint(
+            "kcal_min <= kcal_max AND protein_min_g <= protein_max_g AND "
+            "carbs_min_g <= carbs_max_g AND fat_min_g <= fat_max_g",
+            name="ranges_ordered",
+        ),
     )
 
     user_id: Mapped[UUID] = mapped_column(

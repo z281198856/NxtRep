@@ -1,5 +1,5 @@
 from copy import deepcopy
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -72,15 +72,23 @@ class WorkoutService:
             calendar_event = await self.training.get_calendar_event(user_id, body.calendar_event_id)
             if calendar_event is None:
                 raise WorkoutNotFoundError("Calendar event not found")
+            if calendar_event.status not in {"planned", "missed"}:
+                raise WorkoutConflictError("Calendar event cannot be started in its current state")
             plan_day_id = calendar_event.plan_day_id
             if calendar_event.actual_workout_id:
                 raise WorkoutConflictError("Calendar event already has a workout")
-            if calendar_event.plan_version_id:
+            if calendar_event.content_snapshot:
+                day_snapshot = deepcopy(calendar_event.content_snapshot)
+            elif calendar_event.plan_version_id:
                 version = await self.training.get_plan_version(calendar_event.plan_version_id)
                 day_snapshot = self._find_day(version, plan_day_id)
+            if day_snapshot is None:
+                raise WorkoutNotFoundError("Calendar event plan snapshot not found")
         elif plan_day_id:
             version = await self.training.get_active_plan(user_id)
             day_snapshot = self._find_day(version, plan_day_id)
+            if day_snapshot is None:
+                raise WorkoutNotFoundError("Active plan day not found")
         workout = Workout(
             user_id=user_id,
             calendar_event_id=body.calendar_event_id,
@@ -135,6 +143,8 @@ class WorkoutService:
             raise WorkoutNotFoundError("Workout not found")
         if workout.status != "in_progress":
             raise WorkoutConflictError("Workout is already finished", workout.version)
+        if body.completed_at < workout.started_at:
+            raise WorkoutConflictError("completed_at cannot precede workout start", workout.version)
         existing = await self.repository.get_set_by_client_id(workout_id, body.client_generated_id)
         if existing:
             return existing
@@ -240,10 +250,11 @@ class WorkoutService:
         workout.version += 1
         sets = await self.repository.list_sets(workout_id)
         total_volume = sum((item.weight_kg * item.reps for item in sets), Decimal("0"))
+        working_set_count = sum("warmup" not in item.tags for item in sets)
         aggregate = await self.get_aggregate(user_id, workout_id)
         target_sets = sum(int(item.target_snapshot.get("sets", 0)) for item in aggregate.exercises)
         adherence = (
-            min(Decimal(len(sets)) / Decimal(target_sets), Decimal("1"))
+            min(Decimal(working_set_count) / Decimal(target_sets), Decimal("1"))
             if target_sets
             else Decimal("0")
         )
@@ -256,23 +267,32 @@ class WorkoutService:
             ]
             if exercise.exercise_id is None or not working_sets:
                 continue
-            candidate = max(working_sets, key=lambda item: item.weight_kg)
-            previous = await self.repository.best_record(
-                user_id, exercise.exercise_id, "max_weight"
-            )
-            if previous is None or candidate.weight_kg > previous:
-                records.append(
-                    PersonalRecord(
-                        user_id=user_id,
-                        exercise_id=exercise.exercise_id,
-                        exercise_name_snapshot=exercise.name_snapshot,
-                        record_type="max_weight",
-                        value=candidate.weight_kg,
-                        occurred_at=candidate.completed_at,
-                        workout_id=workout.id,
-                        set_id=candidate.id,
-                    )
+            candidates = {
+                "max_weight": max(working_sets, key=lambda item: (item.weight_kg, item.reps)),
+                "max_reps": max(working_sets, key=lambda item: (item.reps, item.weight_kg)),
+            }
+            for record_type, candidate in candidates.items():
+                value = (
+                    candidate.weight_kg
+                    if record_type == "max_weight"
+                    else Decimal(candidate.reps)
                 )
+                previous = await self.repository.best_record(
+                    user_id, exercise.exercise_id, record_type
+                )
+                if previous is None or value > previous:
+                    records.append(
+                        PersonalRecord(
+                            user_id=user_id,
+                            exercise_id=exercise.exercise_id,
+                            exercise_name_snapshot=exercise.name_snapshot,
+                            record_type=record_type,
+                            value=value,
+                            occurred_at=candidate.completed_at,
+                            workout_id=workout.id,
+                            set_id=candidate.id,
+                        )
+                    )
         await self.repository.add_records(records)
         if workout.calendar_event_id:
             event = await self.training.get_calendar_event(
@@ -320,7 +340,15 @@ class WorkoutService:
             current_weight = max((item.weight_kg for item in sets), default=Decimal("0"))
             all_completed = len(sets) >= int(target.get("sets", 0))
             rir_values = [item.rir for item in sets if item.rir is not None]
-            can_increase = all_completed and rir_values and min(rir_values) >= 2
+            has_pain = bool(aggregate.workout.pain)
+            was_interrupted = aggregate.workout.status == "interrupted"
+            can_increase = (
+                all_completed
+                and bool(rir_values)
+                and min(rir_values) >= 2
+                and not has_pain
+                and not was_interrupted
+            )
             proposed = current_weight + Decimal("2.500") if can_increase else current_weight
             evidence = [f"本次完成 {len(sets)} 组"]
             warnings = []
@@ -328,6 +356,10 @@ class WorkoutService:
                 evidence.append(f"最低 RIR 为 {min(rir_values)}")
             else:
                 warnings.append("缺少 RIR，使用保守建议")
+            if has_pain:
+                warnings.append("本次记录了疼痛，暂停加重并优先评估疼痛")
+            if was_interrupted:
+                warnings.append("本次训练中断，不据此增加训练负荷")
             suggestions.append(
                 {
                     "exercise_id": str(exercise.exercise_id),
@@ -357,19 +389,30 @@ class WorkoutService:
             raise WorkoutConflictError("Progression draft was modified", draft.version)
         draft.status = "submitted"
         draft.version += 1
+        active_plan = await self.training.get_active_plan(user_id)
         return await self.confirmations.add_confirmation(
             Confirmation(
                 user_id=user_id,
                 operation_type="training_progression_apply",
                 before=None,
-                after={"draft_id": str(draft.id), "draft_version": draft.version},
+                after={
+                    "draft_id": str(draft.id),
+                    "draft_version": draft.version,
+                    "base_plan_version_id": str(active_plan.id) if active_plan else None,
+                },
                 reason="用户提交下一次训练进阶建议",
                 impact="确认后生成新的训练计划版本，历史训练不变",
                 expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         )
 
-    async def apply_progression(self, user_id: UUID, draft_id: UUID, draft_version: int) -> dict:
+    async def apply_progression(
+        self,
+        user_id: UUID,
+        draft_id: UUID,
+        draft_version: int,
+        base_plan_version_id: UUID | None,
+    ) -> dict:
         draft = await self.repository.get_progression_draft_by_id(user_id, draft_id, lock=True)
         if draft is None:
             raise WorkoutConflictError("Progression draft changed before approval")
@@ -378,6 +421,8 @@ class WorkoutService:
         current = await self.training.get_active_plan(user_id)
         if current is None:
             raise WorkoutConflictError("No active plan to update")
+        if current.id != base_plan_version_id:
+            raise WorkoutConflictError("Active training plan changed before approval")
         days = deepcopy(current.days)
         proposals = {item["exercise_id"]: item["proposed_target"] for item in draft.suggestions}
         for day in days:
@@ -402,6 +447,14 @@ class WorkoutService:
             activated_at=datetime.now(UTC),
         )
         await self.training.add_plan_version(version)
+        future_events = await self.training.list_future_plan_events(
+            user_id, current.id, date.today()
+        )
+        days_by_id = {str(day.get("id")): day for day in days}
+        for event in future_events:
+            event.plan_version_id = version.id
+            event.content_snapshot = deepcopy(days_by_id.get(str(event.plan_day_id)))
+        await self.training.session.flush()
         return {"resource_id": str(current.plan_id), "resource_version": version.version}
 
     @staticmethod

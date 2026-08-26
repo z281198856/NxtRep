@@ -126,14 +126,28 @@ async def create_plan_draft(
 
 @router.post("/plan-drafts/from-template", response_model=PlanDraftResponse, status_code=201)
 async def create_plan_draft_from_template(
-    body: PlanDraftFromTemplateRequest, user: CurrentUser, session: DbSession
+    body: PlanDraftFromTemplateRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
 ) -> PlanDraftResponse:
+    idem, decision = await begin_idempotent(
+        session,
+        user.id,
+        idempotency_key,
+        "POST /training/plan-drafts/from-template",
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, PlanDraftResponse, 201):
+        return replayed
     try:
-        return _draft_response(
+        response = _draft_response(
             await _service(session).create_from_template(user.id, body.template_id, body.name)
         )
     except RuntimeError as exc:
         _raise_training_error(exc)
+    await complete_idempotent(idem, decision, response, 201)
+    return response
 
 
 @router.get("/plan-drafts/{draft_id}", response_model=PlanDraftResponse)

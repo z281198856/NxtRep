@@ -37,7 +37,7 @@ from nxtrep_backend.schemas.workout import (
 )
 from nxtrep_backend.services.body import BodyService
 from nxtrep_backend.services.confirmation import DatabaseConfirmationService
-from nxtrep_backend.services.nutrition import NutritionService
+from nxtrep_backend.services.nutrition import NutritionNotFoundError, NutritionService
 from nxtrep_backend.services.training import TrainingService
 from nxtrep_backend.services.workout import WorkoutService
 
@@ -91,12 +91,39 @@ async def test_remaining_domains_persist_snapshots_versions_and_confirmations() 
             assert active_plan.days[0]["exercises"][0]["exercise_id"]
             assert calendar_count == 12
 
+            replacement_draft = await training.create_from_template(
+                user.id, OFFICIAL_TEMPLATE_ID, "第二版计划"
+            )
+            replacement_confirmation = await training.submit_draft(
+                user.id, replacement_draft.id, replacement_draft.version
+            )
+            await DatabaseConfirmationService(confirmations).approve(
+                user.id,
+                replacement_confirmation.id,
+                replacement_confirmation.version,
+            )
+            active_plan = await session.scalar(
+                select(TrainingPlanVersion).where(
+                    TrainingPlanVersion.user_id == user.id,
+                    TrainingPlanVersion.status == "active",
+                )
+            )
+            calendar_count = await session.scalar(
+                select(func.count())
+                .select_from(CalendarEvent)
+                .where(CalendarEvent.user_id == user.id)
+            )
+            assert active_plan is not None
+            assert active_plan.version == 2
+            assert calendar_count == 12
+
             calendar_event = await session.scalar(
                 select(CalendarEvent)
                 .where(CalendarEvent.user_id == user.id)
                 .order_by(CalendarEvent.scheduled_date, CalendarEvent.created_at)
             )
             assert calendar_event is not None
+            assert calendar_event.content_snapshot is not None
             started_at = datetime.now(UTC)
             workouts = WorkoutService(
                 SqlAlchemyWorkoutRepository(session),
@@ -138,7 +165,10 @@ async def test_remaining_domains_persist_snapshots_versions_and_confirmations() 
             assert recorded_set.version == 1
             assert finished["completed_sets"] == 1
             assert finished["total_volume_kg"] == Decimal("500")
-            assert len(finished["prs"]) == 1
+            assert {item["record_type"] for item in finished["prs"]} == {
+                "max_weight",
+                "max_reps",
+            }
 
             nutrition = NutritionService(SqlAlchemyNutritionRepository(session), confirmations)
             _, food_version = await nutrition.create_food(
@@ -166,6 +196,38 @@ async def test_remaining_domains_persist_snapshots_versions_and_confirmations() 
                 ),
             )
             assert entry.totals["kcal"] == "190.0"
+
+            other_user = User(
+                username=f"private-food-owner-{uuid4().hex}",
+                password_setup_required=False,
+            )
+            session.add(other_user)
+            await session.flush()
+            _, private_food_version = await nutrition.create_food(
+                other_user.id,
+                FoodCreateRequest(
+                    name="其他用户私有食物",
+                    basis_amount_g=Decimal("100"),
+                    kcal=Decimal("100"),
+                    protein_g=Decimal("10"),
+                    carbs_g=Decimal("10"),
+                    fat_g=Decimal("2"),
+                ),
+            )
+            with pytest.raises(NutritionNotFoundError):
+                await nutrition.create_entry(
+                    user.id,
+                    NutritionEntryCreateRequest(
+                        meal_type="snack",
+                        eaten_at=datetime.now(UTC),
+                        items=[
+                            NutritionItemInput(
+                                food_version_id=private_food_version.id,
+                                amount_g=Decimal("50"),
+                            )
+                        ],
+                    ),
+                )
 
             target_draft = await nutrition.create_target_draft(
                 user.id,
@@ -199,6 +261,33 @@ async def test_remaining_domains_persist_snapshots_versions_and_confirmations() 
             )
             assert active_target is not None
             assert active_target.values["kcal_min"] == "2000"
+
+            future_target_draft = await nutrition.create_target_draft(
+                user.id,
+                NutritionTargetDraftRequest(
+                    effective_from=date.today() + timedelta(days=7),
+                    kcal_min=Decimal("2300"),
+                    kcal_max=Decimal("2500"),
+                    protein_min_g=Decimal("120"),
+                    protein_max_g=Decimal("150"),
+                    carbs_min_g=Decimal("240"),
+                    carbs_max_g=Decimal("300"),
+                    fat_min_g=Decimal("60"),
+                    fat_max_g=Decimal("80"),
+                ),
+            )
+            future_confirmation = await nutrition.submit_target(
+                user.id,
+                future_target_draft.id,
+                future_target_draft.version,
+            )
+            await DatabaseConfirmationService(confirmations).approve(
+                user.id,
+                future_confirmation.id,
+                future_confirmation.version,
+            )
+            today_summary = await nutrition.daily_summary(user.id, date.today())
+            assert today_summary["target"]["kcal_min"] == "2000"
             assert await session.scalar(
                 select(func.count())
                 .select_from(NutritionEntry)
@@ -212,6 +301,8 @@ async def test_remaining_domains_persist_snapshots_versions_and_confirmations() 
                     measured_at=datetime.now(UTC),
                     weight_kg=Decimal("75.0"),
                     waist_cm=Decimal("82.0"),
+                    body_fat_percent=Decimal("18.5"),
+                    body_fat_method="smart_scale",
                     source="manual",
                 ),
             )
@@ -230,6 +321,7 @@ async def test_remaining_domains_persist_snapshots_versions_and_confirmations() 
                 .where(BodyMeasurementRevision.measurement_id == measurement.id)
             )
             assert updated.version == 2
+            assert updated.body_fat_percent == Decimal("18.5")
             assert revision_count == 1
         finally:
             await transaction.rollback()

@@ -54,6 +54,14 @@ class GoalsNotFoundError(RuntimeError):
     """当前用户还没有设置目标和限制。"""
 
 
+class GoalsExerciseUnavailableError(RuntimeError):
+    """偏好或排除列表引用了当前用户不可见的动作。"""
+
+    def __init__(self, exercise_ids: set[UUID]) -> None:
+        super().__init__("One or more exercises are unavailable")
+        self.exercise_ids = exercise_ids
+
+
 class GoalsService:
     def __init__(
         self,
@@ -68,6 +76,11 @@ class GoalsService:
         data: GoalsUpdateData,
         expected_version: int | None,
     ) -> GoalsUpdateResult:
+        requested_exercises = set(data.preferred_exercises) | set(data.disliked_exercises)
+        if requested_exercises:
+            visible = await self._repository.visible_exercise_ids(user_id, requested_exercises)
+            if missing := requested_exercises - visible:
+                raise GoalsExerciseUnavailableError(missing)
         state = await self._repository.get_state(
             user_id,
             for_update=True,

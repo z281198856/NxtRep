@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -82,6 +82,13 @@ class NutritionEntryCreateRequest(StrictModel):
     is_flexible_meal: bool = False
     notes: str | None = Field(default=None, max_length=2000)
 
+    @field_validator("eaten_at")
+    @classmethod
+    def require_eaten_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("eaten_at must include a timezone offset")
+        return value
+
 
 class NutritionEntryUpdateRequest(StrictModel):
     meal_type: Literal["breakfast", "lunch", "dinner", "snack", "other"] | None = None
@@ -91,6 +98,13 @@ class NutritionEntryUpdateRequest(StrictModel):
     notes: str | None = Field(default=None, max_length=2000)
     reason: str = Field(min_length=1, max_length=1000)
     expected_version: int = Field(ge=1)
+
+    @field_validator("eaten_at")
+    @classmethod
+    def require_updated_eaten_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("eaten_at must include a timezone offset")
+        return value
 
 
 class NutritionTotals(BaseModel):

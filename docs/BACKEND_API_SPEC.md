@@ -515,6 +515,7 @@ null
 #### 3. 从模板创建计划草稿
 
 - **接口地址**：`POST /training/plan-drafts/from-template`
+- **请求头**：需要认证、Idempotency-Key。
 - **请求参数**：`template_id` 必填，`name` 可选。
 
 ```json
@@ -622,6 +623,7 @@ GET /calendar?start_date=2026-08-01&end_date=2026-09-01
 #### 2. 创建漏练调整草稿
 
 - **接口地址**：`POST /calendar/reschedule-drafts`
+- **请求头**：需要认证、Idempotency-Key。
 - **请求参数**：
 
 | 参数名 | 类型 | 必填 | 说明 |
@@ -1041,7 +1043,11 @@ GET /nutrition/entries?date=2026-08-22
     "kcal_min": "550.00",
     "kcal_max": "750.00",
     "protein_min_g": "28.000",
-    "protein_max_g": "48.000"
+    "protein_max_g": "48.000",
+    "carbs_min_g": "50.000",
+    "carbs_max_g": "110.000",
+    "fat_min_g": "0.000",
+    "fat_max_g": "20.000"
   },
   "record_completeness": "0.85"
 }
@@ -1091,11 +1097,14 @@ GET /nutrition/entries?date=2026-08-22
 | waist_cm | decimal string | 否 | 腰围 |
 | neck_cm | decimal string | 否 | 颈围 |
 | hip_cm | decimal string | 否 | 臀围 |
+| body_fat_percent | decimal string | 否 | 用户从体脂秤、DEXA 等其他来源录入的体脂率 |
+| body_fat_method | string | 录入体脂时必填 | 体脂来源或测量方法 |
 | source | string | 是 | manual、scale 等来源 |
 | conditions | string | 否 | 测量条件 |
 | notes | string | 否 | 备注 |
 
-体重或一个围度至少填写一项。
+体重、一个围度或体脂率至少填写一项。手工录入体脂时，`body_fat_percent` 和
+`body_fat_method` 必须同时提交；不同来源的体脂值仅用于分别观察趋势。
 
 ```json
 {
@@ -1125,6 +1134,7 @@ GET /nutrition/entries?date=2026-08-22
 #### 4. 美军围度法体脂估算
 
 - **接口地址**：`POST /body/body-fat/navy`
+- **请求头**：`save=true` 时需要认证、Idempotency-Key；仅计算不保存时不要求幂等键。
 - **请求参数**：
 
 | 参数名 | 类型 | 必填 | 说明 |

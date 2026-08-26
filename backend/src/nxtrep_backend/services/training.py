@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -180,22 +181,38 @@ class TrainingService:
             raise TrainingConflictError("Training plan draft was already submitted", draft.version)
         draft.status = "submitted"
         draft.version += 1
+        active_plan = await self.repository.get_active_plan(user_id)
         confirmation = Confirmation(
             user_id=user_id,
             operation_type="training_plan_activate",
             before=None,
-            after={"plan_draft_id": str(draft.id), "draft_version": draft.version},
+            after={
+                "plan_draft_id": str(draft.id),
+                "draft_version": draft.version,
+                "base_plan_version_id": str(active_plan.id) if active_plan else None,
+            },
             reason="用户提交新的训练计划",
             impact="未来日历使用新计划，历史训练不变",
             expires_at=datetime.now(UTC) + timedelta(hours=24),
         )
         return await self.confirmations.add_confirmation(confirmation)
 
-    async def activate_draft(self, user_id: UUID, draft_id: UUID, draft_version: int) -> dict:
+    async def activate_draft(
+        self,
+        user_id: UUID,
+        draft_id: UUID,
+        draft_version: int,
+        base_plan_version_id: UUID | None,
+    ) -> dict:
         draft = await self.repository.get_draft(user_id, draft_id, lock=True)
         if draft is None or draft.version != draft_version or draft.status != "submitted":
             raise TrainingConflictError("Training plan draft changed before approval")
+        errors, _, _ = await self.validate_draft(user_id, draft)
+        if errors:
+            raise TrainingValidationError(errors)
         current = await self.repository.get_active_plan(user_id)
+        if (current.id if current else None) != base_plan_version_id:
+            raise TrainingConflictError("Active training plan changed before approval")
         if current:
             current.status = "superseded"
             plan_id = current.plan_id
@@ -218,6 +235,7 @@ class TrainingService:
         )
         await self.repository.add_plan_version(version)
         start = date.today()
+        await self.repository.delete_future_planned_events(user_id, start)
         events: list[CalendarEvent] = []
         for week in range(4):
             for day in draft.days:
@@ -229,6 +247,7 @@ class TrainingService:
                         plan_day_id=UUID(str(day["id"])),
                         title=str(day["name"]),
                         estimated_minutes=int(day["estimated_minutes"]),
+                        content_snapshot=deepcopy(day),
                     )
                 )
         await self.repository.add_calendar_events(events)
@@ -240,6 +259,8 @@ class TrainingService:
         missed = await self.repository.get_calendar_event(user_id, body.missed_event_id)
         if missed is None:
             raise TrainingNotFoundError("Calendar event not found")
+        if missed.status not in {"planned", "missed"} or missed.actual_workout_id is not None:
+            raise TrainingConflictError("Only uncompleted calendar events can be rescheduled")
         before = [self._event_snapshot(missed)]
         after: list[dict] = []
         duration_change = 0
@@ -249,6 +270,11 @@ class TrainingService:
             after = [{**before[0], "status": "skipped"}]
             duration_change = -missed.estimated_minutes
         elif body.strategy == "shift":
+            target = await self.repository.get_event_on_date(user_id, body.target_date)
+            if target is not None and target.id != missed.id:
+                raise TrainingValidationError(
+                    [{"field": "target_date", "message": "target date already has a workout"}]
+                )
             after = [{**before[0], "scheduled_date": body.target_date.isoformat()}]
         else:
             target = await self.repository.get_event_on_date(user_id, body.target_date)
@@ -257,18 +283,53 @@ class TrainingService:
                     [{"field": "target_date", "message": "merge target event not found"}]
                 )
             before.append(self._event_snapshot(target))
-            merged_minutes = missed.estimated_minutes + target.estimated_minutes
+            missed_day = await self._event_day_snapshot(missed)
+            target_day = await self._event_day_snapshot(target)
+            if missed_day is None or target_day is None:
+                raise TrainingValidationError(
+                    [{"field": "missed_event_id", "message": "plan snapshot is unavailable"}]
+                )
+            target_ids = {
+                str(item.get("exercise_id")) for item in target_day.get("exercises", [])
+            }
+            candidate = next(
+                (
+                    deepcopy(item)
+                    for item in missed_day.get("exercises", [])
+                    if str(item.get("exercise_id")) not in target_ids
+                ),
+                None,
+            )
+            if candidate is None:
+                raise TrainingValidationError(
+                    [{"field": "strategy", "message": "no non-duplicate exercise to merge"}]
+                )
+            merged_day = deepcopy(target_day)
+            merged_exercises = list(merged_day.get("exercises", []))
+            candidate["id"] = str(uuid4())
+            candidate["order_no"] = len(merged_exercises) + 1
+            merged_exercises.append(candidate)
+            merged_day["exercises"] = merged_exercises
+            missed_volume = self._day_volume({"exercises": [candidate]})
+            target_volume = self._day_volume(target_day)
+            added_ratio = missed_volume / target_volume if target_volume > 0 else Decimal("1")
+            added_minutes = max(
+                1,
+                int((Decimal(missed.estimated_minutes) * added_ratio).quantize(Decimal("1"))),
+            )
+            merged_minutes = target.estimated_minutes + added_minutes
+            merged_day["estimated_minutes"] = merged_minutes
             after = [
                 {
                     **self._event_snapshot(target),
                     "title": f"{target.title} + {missed.title}",
                     "estimated_minutes": merged_minutes,
+                    "content_snapshot": merged_day,
+                    "added_exercises": [candidate],
                 }
             ]
             if merged_minutes > 90:
                 warnings.append("合并后预计总时长超过 90 分钟")
-            missed_volume = await self._event_volume(missed)
-            target_volume = await self._event_volume(target)
             volume_change = (
                 Decimal("100")
                 if target_volume <= 0 and missed_volume > 0
@@ -280,7 +341,7 @@ class TrainingService:
             )
             if volume_change > Decimal("30"):
                 warnings.append("合并后预计训练量增加超过 30%")
-            duration_change = 0
+            duration_change = added_minutes
         draft = CalendarRescheduleDraft(
             user_id=user_id,
             missed_event_id=missed.id,
@@ -330,6 +391,14 @@ class TrainingService:
         missed = await self.repository.get_calendar_event(user_id, draft.missed_event_id, lock=True)
         if missed is None:
             raise TrainingConflictError("Calendar event changed before approval")
+        if missed.status not in {"planned", "missed"} or missed.actual_workout_id is not None:
+            raise TrainingConflictError("Calendar event changed before approval")
+        original_missed = draft.before_events[0]
+        if (
+            missed.scheduled_date.isoformat() != original_missed["scheduled_date"]
+            or missed.status != original_missed["status"]
+        ):
+            raise TrainingConflictError("Calendar event changed before approval")
         if draft.strategy == "skip":
             missed.status = "skipped"
         elif draft.strategy == "shift":
@@ -339,8 +408,17 @@ class TrainingService:
             target = await self.repository.get_event_on_date(user_id, draft.target_date)
             if target is None:
                 raise TrainingConflictError("Merge target changed before approval")
+            original_target = draft.before_events[1]
+            if (
+                target.id != UUID(original_target["id"])
+                or target.scheduled_date.isoformat() != original_target["scheduled_date"]
+                or target.status != original_target["status"]
+                or target.actual_workout_id is not None
+            ):
+                raise TrainingConflictError("Merge target changed before approval")
             target.title = str(draft.after_events[0]["title"])
             target.estimated_minutes = int(draft.after_events[0]["estimated_minutes"])
+            target.content_snapshot = draft.after_events[0]["content_snapshot"]
             missed.status = "skipped"
         await self.repository.session.flush()
         return {"resource_id": str(missed.id), "resource_version": draft.version}
@@ -357,10 +435,16 @@ class TrainingService:
         }
 
     async def _event_volume(self, event: CalendarEvent) -> Decimal:
+        day = await self._event_day_snapshot(event)
+        return self._day_volume(day)
+
+    async def _event_day_snapshot(self, event: CalendarEvent) -> dict | None:
+        if event.content_snapshot:
+            return deepcopy(event.content_snapshot)
         if event.plan_version_id is None or event.plan_day_id is None:
-            return Decimal("0")
+            return None
         version = await self.repository.get_plan_version(event.plan_version_id)
-        day = next(
+        return next(
             (
                 item
                 for item in (version.days if version else [])
@@ -368,6 +452,9 @@ class TrainingService:
             ),
             None,
         )
+
+    @staticmethod
+    def _day_volume(day: dict | None) -> Decimal:
         volume = Decimal("0")
         for item in (day or {}).get("exercises", []):
             sets = Decimal(str(item.get("target_sets", 0)))

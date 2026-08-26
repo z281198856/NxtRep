@@ -65,6 +65,9 @@ class IssuedTokenPair:
 
 
 class AccountService:
+    max_failed_login_attempts = 5
+    lockout_duration = timedelta(minutes=15)
+
     def __init__(
         self,
         repository: SqlAlchemyUserRepository,
@@ -215,7 +218,15 @@ class AccountService:
         if credential.locked_until is not None and credential.locked_until > now:
             raise AccountLockedError("Account is temporarily locked")
 
+        if credential.locked_until is not None:
+            credential.locked_until = None
+            credential.failed_login_attempts = 0
+
         if not verify_password(password, credential.password_hash):
+            credential.failed_login_attempts += 1
+            if credential.failed_login_attempts >= self.max_failed_login_attempts:
+                credential.locked_until = now + self.lockout_duration
+                raise AccountLockedError("Account is temporarily locked")
             raise InvalidCredentialsError("Invalid username or password")
 
         credential.failed_login_attempts = 0

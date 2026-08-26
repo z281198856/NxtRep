@@ -123,6 +123,9 @@ class CalendarEvent(IdMixin, TimestampMixin, Base):
     __tablename__ = "calendar_events"
     __table_args__ = (
         CheckConstraint("status IN ('planned', 'completed', 'missed', 'skipped')", name="status"),
+        CheckConstraint(
+            "estimated_minutes BETWEEN 1 AND 300", name="estimated_minutes_range"
+        ),
         Index("ix_calendar_events_user_date", "user_id", "scheduled_date"),
     )
 
@@ -139,7 +142,16 @@ class CalendarEvent(IdMixin, TimestampMixin, Base):
     plan_day_id: Mapped[UUID | None] = mapped_column(Uuid)
     title: Mapped[str] = mapped_column(String(120), nullable=False)
     estimated_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
-    actual_workout_id: Mapped[UUID | None] = mapped_column(Uuid)
+    content_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    actual_workout_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "workouts.id",
+            name="fk_calendar_events_actual_workout_id_workouts",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
+    )
 
 
 class CalendarRescheduleDraft(IdMixin, TimestampMixin, Base):

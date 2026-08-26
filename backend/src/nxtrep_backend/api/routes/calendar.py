@@ -45,13 +45,27 @@ async def get_calendar(
 
 @router.post("/reschedule-drafts", response_model=RescheduleDraftResponse, status_code=201)
 async def create_reschedule_draft(
-    body: RescheduleDraftCreateRequest, user: CurrentUser, session: DbSession
+    body: RescheduleDraftCreateRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
 ) -> RescheduleDraftResponse:
+    idem, decision = await begin_idempotent(
+        session,
+        user.id,
+        idempotency_key,
+        "POST /calendar/reschedule-drafts",
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, RescheduleDraftResponse, 201):
+        return replayed
     try:
         item = await _service(session).create_reschedule_draft(user.id, body)
-        return RescheduleDraftResponse.model_validate(item, from_attributes=True)
+        response = RescheduleDraftResponse.model_validate(item, from_attributes=True)
     except RuntimeError as exc:
         _raise_training_error(exc)
+    await complete_idempotent(idem, decision, response, 201)
+    return response
 
 
 @router.post("/reschedule-drafts/{draft_id}/submit", response_model=ConfirmationSubmitResponse)

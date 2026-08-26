@@ -45,7 +45,9 @@ DOCUMENTED_ENDPOINTS = {
 
 IDEMPOTENT_ENDPOINTS = {
     ("post", "/api/v1/training/plan-drafts"),
+    ("post", "/api/v1/training/plan-drafts/from-template"),
     ("post", "/api/v1/training/plan-drafts/{draft_id}/submit"),
+    ("post", "/api/v1/calendar/reschedule-drafts"),
     ("post", "/api/v1/calendar/reschedule-drafts/{draft_id}/submit"),
     ("post", "/api/v1/workouts"),
     ("post", "/api/v1/workouts/{workout_id}/sets"),

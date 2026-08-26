@@ -82,6 +82,24 @@ def test_body_measurement_requires_at_least_one_value() -> None:
         BodyMeasurementCreateRequest(measured_at=datetime.now(UTC), source="manual")
 
 
+def test_manual_body_fat_requires_value_and_method_together() -> None:
+    with pytest.raises(ValidationError, match="provided together"):
+        BodyMeasurementCreateRequest(
+            measured_at=datetime.now(UTC),
+            body_fat_percent=Decimal("18.5"),
+            source="scale",
+        )
+
+
+def test_persisted_measurement_datetime_requires_timezone() -> None:
+    with pytest.raises(ValidationError, match="timezone"):
+        BodyMeasurementCreateRequest(
+            measured_at=datetime(2026, 8, 26, 8, 0),
+            weight_kg=Decimal("75"),
+            source="manual",
+        )
+
+
 def test_female_navy_formula_requires_hip_measurement() -> None:
     with pytest.raises(ValidationError, match="hip_cm"):
         NavyBodyFatRequest(sex="female", height_cm=165, waist_cm=70, neck_cm=32)

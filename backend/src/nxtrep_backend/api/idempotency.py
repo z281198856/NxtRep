@@ -16,6 +16,7 @@ from nxtrep_backend.services.idempotency import (
 )
 
 IdempotencyKey = Annotated[UUID, Header(alias="Idempotency-Key")]
+OptionalIdempotencyKey = Annotated[UUID | None, Header(alias="Idempotency-Key")]
 
 
 async def begin_idempotent(

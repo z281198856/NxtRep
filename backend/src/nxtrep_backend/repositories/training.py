@@ -1,9 +1,10 @@
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nxtrep_backend.core.timezones import CHINA_TIMEZONE
 from nxtrep_backend.db.models import (
     CalendarEvent,
     CalendarRescheduleDraft,
@@ -111,6 +112,17 @@ class SqlAlchemyTrainingRepository:
     async def list_calendar(
         self, user_id: UUID, start_date: date, end_date: date
     ) -> list[CalendarEvent]:
+        await self.session.execute(
+            update(CalendarEvent)
+            .where(
+                CalendarEvent.user_id == user_id,
+                CalendarEvent.scheduled_date < datetime.now(CHINA_TIMEZONE).date(),
+                CalendarEvent.status == "planned",
+                CalendarEvent.actual_workout_id.is_(None),
+            )
+            .values(status="missed")
+        )
+        await self.session.flush()
         return list(
             await self.session.scalars(
                 select(CalendarEvent)
@@ -161,3 +173,29 @@ class SqlAlchemyTrainingRepository:
     async def add_calendar_events(self, events: list[CalendarEvent]) -> None:
         self.session.add_all(events)
         await self.session.flush()
+
+    async def delete_future_planned_events(self, user_id: UUID, from_date: date) -> None:
+        await self.session.execute(
+            delete(CalendarEvent).where(
+                CalendarEvent.user_id == user_id,
+                CalendarEvent.scheduled_date >= from_date,
+                CalendarEvent.status == "planned",
+                CalendarEvent.actual_workout_id.is_(None),
+            )
+        )
+        await self.session.flush()
+
+    async def list_future_plan_events(
+        self, user_id: UUID, plan_version_id: UUID, from_date: date
+    ) -> list[CalendarEvent]:
+        return list(
+            await self.session.scalars(
+                select(CalendarEvent).where(
+                    CalendarEvent.user_id == user_id,
+                    CalendarEvent.plan_version_id == plan_version_id,
+                    CalendarEvent.scheduled_date >= from_date,
+                    CalendarEvent.status == "planned",
+                    CalendarEvent.actual_workout_id.is_(None),
+                )
+            )
+        )

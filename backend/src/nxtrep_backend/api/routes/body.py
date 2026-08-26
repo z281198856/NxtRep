@@ -8,6 +8,7 @@ from nxtrep_backend.api.deps import CurrentUser, DbSession
 from nxtrep_backend.api.errors import ApiError
 from nxtrep_backend.api.idempotency import (
     IdempotencyKey,
+    OptionalIdempotencyKey,
     begin_idempotent,
     complete_idempotent,
     replay_response,
@@ -117,9 +118,35 @@ async def update_body_measurement(
 
 @body_router.post("/body-fat/navy", response_model=NavyBodyFatResponse)
 async def calculate_navy_body_fat(
-    body: NavyBodyFatRequest, user: CurrentUser, session: DbSession
+    body: NavyBodyFatRequest,
+    user: CurrentUser,
+    session: DbSession,
+    idempotency_key: OptionalIdempotencyKey = None,
 ) -> NavyBodyFatResponse:
-    return NavyBodyFatResponse.model_validate(await _service(session).navy_body_fat(user.id, body))
+    if body.save and idempotency_key is None:
+        raise ApiError(
+            status_code=422,
+            code="IDEMPOTENCY_KEY_REQUIRED",
+            message="Idempotency-Key is required when saving a body fat estimate",
+        )
+    if idempotency_key is None:
+        return NavyBodyFatResponse.model_validate(
+            await _service(session).navy_body_fat(user.id, body)
+        )
+    idem, decision = await begin_idempotent(
+        session,
+        user.id,
+        idempotency_key,
+        "POST /body/body-fat/navy",
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, NavyBodyFatResponse, 200):
+        return replayed
+    response = NavyBodyFatResponse.model_validate(
+        await _service(session).navy_body_fat(user.id, body)
+    )
+    await complete_idempotent(idem, decision, response, 200)
+    return response
 
 
 @progress_router.get("/overview", response_model=ProgressOverviewResponse)

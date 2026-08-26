@@ -18,6 +18,7 @@ from nxtrep_backend.schemas.profile import (
     ProfileUpdateRequest,
 )
 from nxtrep_backend.services.goals import (
+    GoalsExerciseUnavailableError,
     GoalsNotFoundError,
     GoalsService,
     GoalsStateError,
@@ -185,6 +186,13 @@ async def update_goals_and_constraints(
             status_code=status.HTTP_409_CONFLICT,
             code="GOALS_VERSION_REQUIRED",
             message="expected_version is required",
+        ) from exc
+    except GoalsExerciseUnavailableError as exc:
+        raise ApiError(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            code="GOALS_EXERCISE_UNAVAILABLE",
+            message="One or more preferred or disliked exercises are unavailable",
+            details={"exercise_ids": sorted(str(item) for item in exc.exercise_ids)},
         ) from exc
     except GoalsVersionConflictError as exc:
         raise ApiError(

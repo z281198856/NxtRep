@@ -1,8 +1,9 @@
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nxtrep_backend.db.models import Confirmation
@@ -64,6 +65,16 @@ class SqlAlchemyConfirmationRepository:
     async def list_confirmations(
         self, user_id: UUID, status: str | None, page: int, page_size: int
     ) -> tuple[list[Confirmation], int]:
+        await self.session.execute(
+            update(Confirmation)
+            .where(
+                Confirmation.user_id == user_id,
+                Confirmation.status == "pending",
+                Confirmation.expires_at <= datetime.now(UTC),
+            )
+            .values(status="expired", version=Confirmation.version + 1)
+        )
+        await self.session.flush()
         conditions = [Confirmation.user_id == user_id]
         if status:
             conditions.append(Confirmation.status == status)

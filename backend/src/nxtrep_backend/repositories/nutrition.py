@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nxtrep_backend.core.timezones import CHINA_TIMEZONE
 from nxtrep_backend.db.models import (
     Food,
     FoodVersion,
@@ -65,12 +66,17 @@ class SqlAlchemyNutritionRepository:
         self.session.add(version)
         await self.session.flush()
 
-    async def get_food_version(self, version_id: UUID) -> tuple[Food, FoodVersion] | None:
+    async def get_food_version(
+        self, user_id: UUID, version_id: UUID
+    ) -> tuple[Food, FoodVersion] | None:
         row = (
             await self.session.execute(
                 select(Food, FoodVersion)
                 .join(FoodVersion, FoodVersion.food_id == Food.id)
-                .where(FoodVersion.id == version_id)
+                .where(
+                    FoodVersion.id == version_id,
+                    or_(Food.owner_user_id.is_(None), Food.owner_user_id == user_id),
+                )
             )
         ).first()
         return (row[0], row[1]) if row else None
@@ -93,8 +99,8 @@ class SqlAlchemyNutritionRepository:
     async def list_entries(
         self, user_id: UUID, day: date, meal_type: str | None = None
     ) -> list[NutritionEntry]:
-        start = datetime.combine(day, time.min).astimezone()
-        end = datetime.combine(day, time.max).astimezone()
+        start = datetime.combine(day, time.min, tzinfo=CHINA_TIMEZONE)
+        end = datetime.combine(day, time.max, tzinfo=CHINA_TIMEZONE)
         conditions = [
             NutritionEntry.user_id == user_id,
             NutritionEntry.eaten_at >= start,
@@ -130,13 +136,20 @@ class SqlAlchemyNutritionRepository:
     async def get_active_target(
         self, user_id: UUID, on_date: date | None = None
     ) -> NutritionTargetVersion | None:
-        conditions = [
-            NutritionTargetVersion.user_id == user_id,
-            NutritionTargetVersion.status == "active",
-        ]
+        conditions = [NutritionTargetVersion.user_id == user_id]
         if on_date:
             conditions.append(NutritionTargetVersion.effective_from <= on_date)
-        return await self.session.scalar(select(NutritionTargetVersion).where(*conditions))
+        else:
+            conditions.append(NutritionTargetVersion.status == "active")
+        return await self.session.scalar(
+            select(NutritionTargetVersion)
+            .where(*conditions)
+            .order_by(
+                NutritionTargetVersion.effective_from.desc(),
+                NutritionTargetVersion.version.desc(),
+            )
+            .limit(1)
+        )
 
     async def add_target_version(self, target: NutritionTargetVersion) -> None:
         self.session.add(target)

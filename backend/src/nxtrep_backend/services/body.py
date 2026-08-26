@@ -3,6 +3,7 @@ from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 
+from nxtrep_backend.core.timezones import CHINA_TIMEZONE
 from nxtrep_backend.db.models import BodyFatEstimate, BodyMeasurement, BodyMeasurementRevision
 from nxtrep_backend.repositories.body import SqlAlchemyBodyRepository
 from nxtrep_backend.schemas.body import (
@@ -46,9 +47,20 @@ class BodyService:
         for name in fields:
             setattr(item, name, getattr(body, name))
         if all(
-            getattr(item, name) is None for name in ("weight_kg", "waist_cm", "neck_cm", "hip_cm")
+            getattr(item, name) is None
+            for name in (
+                "weight_kg",
+                "waist_cm",
+                "neck_cm",
+                "hip_cm",
+                "body_fat_percent",
+            )
         ):
             raise BodyConflictError("At least one measurement is required", item.version)
+        if (item.body_fat_percent is None) != (item.body_fat_method is None):
+            raise BodyConflictError(
+                "Body fat percent and method must be provided together", item.version
+            )
         item.version += 1
         await self.repository.add_revision(
             BodyMeasurementRevision(
@@ -96,8 +108,10 @@ class BodyService:
         return result
 
     async def overview(self, user_id: UUID, start_date: date, end_date: date) -> dict:
-        workouts, entries, measurements, records = await self.repository.progress_rows(
+        workouts, entries, measurements, records, calendar_events = (
+            await self.repository.progress_rows(
             user_id, start_date, end_date
+        )
         )
         completed = [item for item in workouts if item.status == "completed"]
         total_minutes = sum(
@@ -105,12 +119,36 @@ class BodyService:
             for item in completed
             if item.ended_at
         )
-        consumed = [Decimal(str(item.totals["kcal"])) for item in entries]
+        kcal_by_day: dict[date, Decimal] = {}
+        for item in entries:
+            local_day = item.eaten_at.astimezone(CHINA_TIMEZONE).date()
+            kcal_by_day[local_day] = kcal_by_day.get(local_day, Decimal("0")) + Decimal(
+                str(item.totals["kcal"])
+            )
         weighted = [item.weight_kg for item in measurements if item.weight_kg is not None]
-        completion = Decimal(len(completed)) / Decimal(len(workouts)) if workouts else Decimal("0")
-        completeness = min(
-            Decimal(len(entries)) / Decimal(max((end_date - start_date).days + 1, 1)), Decimal("1")
+        due_events = [
+            item
+            for item in calendar_events
+            if item.scheduled_date <= min(end_date, date.today())
+        ]
+        completion = (
+            Decimal(sum(item.status == "completed" for item in due_events))
+            / Decimal(len(due_events))
+            if due_events
+            else Decimal(len(completed)) / Decimal(len(workouts))
+            if workouts
+            else Decimal("0")
         )
+        total_days = max((end_date - start_date).days + 1, 1)
+        completeness = min(
+            Decimal(len(kcal_by_day)) / Decimal(total_days), Decimal("1")
+        )
+        smoothed_change = None
+        if len(weighted) >= 2:
+            window = min(7, max(1, len(weighted) // 2))
+            start_average = sum(weighted[:window], Decimal("0")) / Decimal(window)
+            end_average = sum(weighted[-window:], Decimal("0")) / Decimal(window)
+            smoothed_change = str((end_average - start_average).quantize(Decimal("0.01")))
         return {
             "training": {
                 "workout_count": len(workouts),
@@ -120,8 +158,11 @@ class BodyService:
             },
             "nutrition": {
                 "average_kcal": str(
-                    (sum(consumed, Decimal("0")) / Decimal(len(consumed))).quantize(Decimal("0.01"))
-                    if consumed
+                    (
+                        sum(kcal_by_day.values(), Decimal("0"))
+                        / Decimal(len(kcal_by_day))
+                    ).quantize(Decimal("0.01"))
+                    if kcal_by_day
                     else Decimal("0.00")
                 ),
                 "record_completeness": str(completeness.quantize(Decimal("0.01"))),
@@ -129,9 +170,7 @@ class BodyService:
             "body": {
                 "weight_start_kg": str(weighted[0]) if weighted else None,
                 "weight_end_kg": str(weighted[-1]) if weighted else None,
-                "smoothed_change_kg": str((weighted[-1] - weighted[0]).quantize(Decimal("0.01")))
-                if len(weighted) >= 2
-                else None,
+                "smoothed_change_kg": smoothed_change,
             },
         }
 
@@ -139,8 +178,17 @@ class BodyService:
         self, user_id: UUID, metric: str, start_date: date, end_date: date, window: str
     ) -> list[dict]:
         if metric == "body_fat":
-            rows = await self.repository.body_fat_in_range(user_id, start_date, end_date)
-            values = [(item.calculated_at.date(), item.value_percent) for item in rows]
+            estimates = await self.repository.body_fat_in_range(user_id, start_date, end_date)
+            measurements = await self.repository.measurements_in_range(
+                user_id, start_date, end_date
+            )
+            values = [
+                (item.calculated_at.date(), item.value_percent) for item in estimates
+            ] + [
+                (item.measured_at.date(), item.body_fat_percent)
+                for item in measurements
+                if item.body_fat_percent is not None
+            ]
         else:
             rows = await self.repository.measurements_in_range(user_id, start_date, end_date)
             attr = "weight_kg" if metric == "weight" else "waist_cm"
@@ -149,10 +197,18 @@ class BodyService:
                 for item in rows
                 if getattr(item, attr) is not None
             ]
+        daily_values: dict[date, Decimal] = {}
+        for day, value in values:
+            daily_values[day] = value
+        values = sorted(daily_values.items())
         size = {"raw": 1, "7d": 7, "14d": 14}[window]
         points = []
-        for index, (day, raw) in enumerate(values):
-            recent = [value for _, value in values[max(0, index - size + 1) : index + 1]]
+        for day, raw in values:
+            recent = [
+                value
+                for recent_day, value in values
+                if 0 <= (day - recent_day).days < size
+            ]
             smooth = sum(recent, Decimal("0")) / Decimal(len(recent))
             points.append({"date": day, "raw_value": raw, "smoothed_value": smooth})
         return points
@@ -173,6 +229,8 @@ class BodyService:
                 "waist_cm": item.waist_cm,
                 "neck_cm": item.neck_cm,
                 "hip_cm": item.hip_cm,
+                "body_fat_percent": item.body_fat_percent,
+                "body_fat_method": item.body_fat_method,
                 "source": item.source,
                 "conditions": item.conditions,
                 "notes": item.notes,

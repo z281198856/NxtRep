@@ -91,6 +91,10 @@ class DatabaseConfirmationService:
         self._check_pending(item, expected_version)
         if item is None:
             raise DatabaseConfirmationNotFoundError("Confirmation not found")
+        if item.expires_at <= datetime.now(UTC):
+            item.status = "expired"
+            item.version += 1
+            raise DatabaseConfirmationConflictError("Confirmation has expired", item.version)
         item.status = "rejected"
         item.rejection_reason = reason
         item.executed_at = datetime.now(UTC)
@@ -107,6 +111,9 @@ class DatabaseConfirmationService:
                 item.user_id,
                 UUID(item.after["plan_draft_id"]),
                 int(item.after["draft_version"]),
+                UUID(item.after["base_plan_version_id"])
+                if item.after.get("base_plan_version_id")
+                else None,
             )
         if item.operation_type == "calendar_reschedule":
             from nxtrep_backend.services.training import TrainingService
@@ -118,7 +125,12 @@ class DatabaseConfirmationService:
             from nxtrep_backend.services.nutrition import NutritionService
 
             return await NutritionService(SqlAlchemyNutritionRepository(session)).activate_target(
-                item.user_id, UUID(item.after["target_id"]), int(item.after["draft_version"])
+                item.user_id,
+                UUID(item.after["target_id"]),
+                int(item.after["draft_version"]),
+                UUID(item.after["base_target_version_id"])
+                if item.after.get("base_target_version_id")
+                else None,
             )
         if item.operation_type == "training_progression_apply":
             from nxtrep_backend.services.workout import WorkoutService
@@ -126,7 +138,12 @@ class DatabaseConfirmationService:
             return await WorkoutService(
                 SqlAlchemyWorkoutRepository(session), SqlAlchemyTrainingRepository(session)
             ).apply_progression(
-                item.user_id, UUID(item.after["draft_id"]), int(item.after["draft_version"])
+                item.user_id,
+                UUID(item.after["draft_id"]),
+                int(item.after["draft_version"]),
+                UUID(item.after["base_plan_version_id"])
+                if item.after.get("base_plan_version_id")
+                else None,
             )
         raise DatabaseConfirmationConflictError(f"Unsupported operation {item.operation_type}")
 

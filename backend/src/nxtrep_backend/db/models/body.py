@@ -24,8 +24,24 @@ class BodyMeasurement(IdMixin, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint(
             "weight_kg IS NOT NULL OR waist_cm IS NOT NULL OR "
-            "neck_cm IS NOT NULL OR hip_cm IS NOT NULL",
+            "neck_cm IS NOT NULL OR hip_cm IS NOT NULL OR body_fat_percent IS NOT NULL",
             name="at_least_one_measurement",
+        ),
+        CheckConstraint(
+            "body_fat_percent IS NULL OR body_fat_percent BETWEEN 1 AND 70",
+            name="body_fat_percent_range",
+        ),
+        CheckConstraint(
+            "(weight_kg IS NULL OR weight_kg > 0) AND "
+            "(waist_cm IS NULL OR waist_cm > 0) AND "
+            "(neck_cm IS NULL OR neck_cm > 0) AND "
+            "(hip_cm IS NULL OR hip_cm > 0)",
+            name="measurements_positive",
+        ),
+        CheckConstraint(
+            "(body_fat_percent IS NULL AND body_fat_method IS NULL) OR "
+            "(body_fat_percent IS NOT NULL AND body_fat_method IS NOT NULL)",
+            name="body_fat_method_pair",
         ),
         CheckConstraint("version >= 1", name="version_positive"),
         Index("ix_body_measurements_user_measured", "user_id", "measured_at"),
@@ -39,6 +55,8 @@ class BodyMeasurement(IdMixin, TimestampMixin, Base):
     waist_cm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
     neck_cm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
     hip_cm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    body_fat_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    body_fat_method: Mapped[str | None] = mapped_column(String(30))
     source: Mapped[str] = mapped_column(String(30), nullable=False)
     conditions: Mapped[str | None] = mapped_column(String(500))
     notes: Mapped[str | None] = mapped_column(String(2000))

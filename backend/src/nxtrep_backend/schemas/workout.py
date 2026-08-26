@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class StrictModel(BaseModel):
@@ -23,6 +23,13 @@ class WorkoutCreateRequest(StrictModel):
     started_at: datetime
     pre_check: PreWorkoutCheck | None = None
 
+    @field_validator("started_at")
+    @classmethod
+    def require_started_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("started_at must include a timezone offset")
+        return value
+
 
 class WorkoutSetCreateRequest(StrictModel):
     client_generated_id: UUID
@@ -35,6 +42,13 @@ class WorkoutSetCreateRequest(StrictModel):
     tags: list[Literal["warmup", "working", "failure", "drop"]] = Field(default_factory=list)
     notes: str | None = Field(default=None, max_length=1000)
     completed_at: datetime
+
+    @field_validator("completed_at")
+    @classmethod
+    def require_completed_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("completed_at must include a timezone offset")
+        return value
 
 
 class WorkoutSetUpdateRequest(StrictModel):
@@ -61,6 +75,13 @@ class WorkoutFinishRequest(StrictModel):
     pain: list[dict] = Field(default_factory=list)
     interruption_reason: str | None = Field(default=None, max_length=1000)
     expected_version: int = Field(ge=1)
+
+    @field_validator("ended_at")
+    @classmethod
+    def require_ended_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("ended_at must include a timezone offset")
+        return value
 
 
 class ProgressionDraftCreateRequest(StrictModel):

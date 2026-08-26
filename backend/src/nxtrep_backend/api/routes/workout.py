@@ -13,6 +13,7 @@ from nxtrep_backend.api.idempotency import (
     replay_response,
 )
 from nxtrep_backend.api.routes.training import _confirmation_response
+from nxtrep_backend.core.timezones import CHINA_TIMEZONE
 from nxtrep_backend.repositories.confirmation import SqlAlchemyConfirmationRepository
 from nxtrep_backend.repositories.training import SqlAlchemyTrainingRepository
 from nxtrep_backend.repositories.workout import SqlAlchemyWorkoutRepository, WorkoutAggregate
@@ -149,7 +150,7 @@ async def list_workouts(
         items.append(
             WorkoutHistoryItem(
                 id=workout.id,
-                date=workout.started_at.date(),
+                date=workout.started_at.astimezone(CHINA_TIMEZONE).date(),
                 status=workout.status,
                 duration_seconds=(
                     int((workout.ended_at - workout.started_at).total_seconds())

@@ -8,6 +8,7 @@ import pytest
 from nxtrep_backend.db.models import UserConstraint, UserGoal
 from nxtrep_backend.repositories.goals import GoalsState, SqlAlchemyGoalsRepository
 from nxtrep_backend.services.goals import (
+    GoalsExerciseUnavailableError,
     GoalsNotFoundError,
     GoalsService,
     GoalsStateError,
@@ -37,7 +38,23 @@ def make_repository(state: GoalsState) -> MagicMock:
     repository = MagicMock(spec=SqlAlchemyGoalsRepository)
     repository.get_state = AsyncMock(return_value=state)
     repository.save_new_version = AsyncMock()
+    repository.visible_exercise_ids = AsyncMock(side_effect=lambda user_id, ids: set(ids))
     return repository
+
+
+@pytest.mark.asyncio
+async def test_rejects_exercise_preferences_not_visible_to_user() -> None:
+    exercise_id = uuid4()
+    repository = make_repository(GoalsState(goal=None, constraints=None))
+    repository.visible_exercise_ids.side_effect = None
+    repository.visible_exercise_ids.return_value = set()
+    with pytest.raises(GoalsExerciseUnavailableError):
+        await GoalsService(repository).update_goals_and_constraints(
+            user_id=uuid4(),
+            data=make_data(preferred_exercises=[exercise_id]),
+            expected_version=None,
+        )
+    repository.save_new_version.assert_not_awaited()
 
 
 @pytest.mark.asyncio

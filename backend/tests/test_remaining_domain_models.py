@@ -56,6 +56,7 @@ def test_snapshot_columns_use_postgresql_jsonb() -> None:
         ("training_templates", "days"),
         ("training_plan_drafts", "days"),
         ("training_plan_versions", "days"),
+        ("calendar_events", "content_snapshot"),
         ("workout_exercises", "target_snapshot"),
         ("nutrition_entries", "items"),
         ("nutrition_entries", "totals"),
@@ -82,3 +83,10 @@ def test_plan_and_target_have_single_active_partial_indexes() -> None:
         active = next(index for name, index in indexes.items() if "one_active_user" in name)
         assert active.unique is True
         assert active.dialect_options["postgresql"]["where"] is not None
+
+
+def test_calendar_actual_workout_has_database_foreign_key() -> None:
+    targets = {
+        key.target_fullname for key in Base.metadata.tables["calendar_events"].foreign_keys
+    }
+    assert "workouts.id" in targets

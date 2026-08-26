@@ -8,6 +8,7 @@ from nxtrep_backend.db.models import (
     BodyFatEstimate,
     BodyMeasurement,
     BodyMeasurementRevision,
+    CalendarEvent,
     NutritionEntry,
     PersonalRecord,
     Workout,
@@ -118,7 +119,16 @@ class SqlAlchemyBodyRepository:
                 )
             )
         )
-        return workouts, entries, measurements, records
+        calendar_events = list(
+            await self.session.scalars(
+                select(CalendarEvent).where(
+                    CalendarEvent.user_id == user_id,
+                    CalendarEvent.scheduled_date >= start_date,
+                    CalendarEvent.scheduled_date <= end_date,
+                )
+            )
+        )
+        return workouts, entries, measurements, records, calendar_events
 
     async def list_records(
         self,

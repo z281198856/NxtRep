@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nxtrep_backend.db.models import User, UserConstraint, UserGoal
+from nxtrep_backend.db.models import Exercise, User, UserConstraint, UserGoal
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +54,21 @@ class SqlAlchemyGoalsRepository:
     ) -> None:
         self._session.add_all([goal, constraints])
         await self._session.flush()
+
+    async def visible_exercise_ids(
+        self, user_id: UUID, exercise_ids: set[UUID]
+    ) -> set[UUID]:
+        if not exercise_ids:
+            return set()
+        return set(
+            await self._session.scalars(
+                select(Exercise.id).where(
+                    Exercise.id.in_(exercise_ids),
+                    Exercise.deleted_at.is_(None),
+                    (Exercise.owner_user_id.is_(None) | (Exercise.owner_user_id == user_id)),
+                )
+            )
+        )
 
     async def _lock_user(self, user_id: UUID) -> None:
         statement = select(User.id).where(User.id == user_id).with_for_update()

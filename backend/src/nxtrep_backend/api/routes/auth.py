@@ -43,6 +43,7 @@ async def login(
             device_name=body.device_name,
         )
     except InvalidCredentialsError as exc:
+        await session.commit()
         raise ApiError(
             status_code=status.HTTP_401_UNAUTHORIZED,
             code="INVALID_CREDENTIALS",
@@ -62,6 +63,7 @@ async def login(
             message="Password setup is required",
         ) from exc
     except AccountLockedError as exc:
+        await session.commit()
         raise ApiError(
             status_code=status.HTTP_423_LOCKED,
             code="ACCOUNT_LOCKED",

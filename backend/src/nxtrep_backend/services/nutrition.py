@@ -60,7 +60,7 @@ class NutritionService:
     async def create_entry(
         self, user_id: UUID, body: NutritionEntryCreateRequest
     ) -> NutritionEntry:
-        items, totals = await self._snapshot_items(body.items)
+        items, totals = await self._snapshot_items(user_id, body.items)
         return await self.repository.add_entry(
             NutritionEntry(
                 user_id=user_id,
@@ -84,7 +84,7 @@ class NutritionService:
         old = self._entry_snapshot(entry)
         fields = body.model_fields_set - {"reason", "expected_version"}
         if "items" in fields and body.items is not None:
-            entry.items, entry.totals = await self._snapshot_items(body.items)
+            entry.items, entry.totals = await self._snapshot_items(user_id, body.items)
         for name in fields - {"items"}:
             setattr(entry, name, getattr(body, name))
         entry.version += 1
@@ -107,7 +107,12 @@ class NutritionService:
         remaining = None
         if target_values:
             remaining = {}
-            for key, consumed_key in (("kcal", "kcal"), ("protein", "protein_g")):
+            for key, consumed_key in (
+                ("kcal", "kcal"),
+                ("protein", "protein_g"),
+                ("carbs", "carbs_g"),
+                ("fat", "fat_g"),
+            ):
                 for bound in ("min", "max"):
                     target_key = f"{key}_{bound}" + ("_g" if key != "kcal" else "")
                     remaining[target_key] = str(
@@ -144,23 +149,38 @@ class NutritionService:
             raise NutritionConflictError("Nutrition target draft was modified", draft.version)
         draft.status = "submitted"
         draft.version += 1
+        active_target = await self.repository.get_active_target(user_id)
         return await self.confirmations.add_confirmation(
             Confirmation(
                 user_id=user_id,
                 operation_type="nutrition_target_activate",
                 before=None,
-                after={"target_id": str(draft.id), "draft_version": draft.version},
+                after={
+                    "target_id": str(draft.id),
+                    "draft_version": draft.version,
+                    "base_target_version_id": (
+                        str(active_target.id) if active_target else None
+                    ),
+                },
                 reason="用户提交新的营养目标",
                 impact="确认后新目标生效，旧目标保留为历史版本",
                 expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         )
 
-    async def activate_target(self, user_id: UUID, draft_id: UUID, draft_version: int) -> dict:
+    async def activate_target(
+        self,
+        user_id: UUID,
+        draft_id: UUID,
+        draft_version: int,
+        base_target_version_id: UUID | None,
+    ) -> dict:
         draft = await self.repository.get_target_draft(user_id, draft_id, lock=True)
         if draft is None or draft.version != draft_version or draft.status != "submitted":
             raise NutritionConflictError("Nutrition target changed before approval")
         current = await self.repository.get_active_target(user_id)
+        if (current.id if current else None) != base_target_version_id:
+            raise NutritionConflictError("Active nutrition target changed before approval")
         if current:
             current.status = "superseded"
             target_id = current.target_id
@@ -195,12 +215,14 @@ class NutritionService:
         )
         return {"resource_id": str(target_id), "resource_version": version_number}
 
-    async def _snapshot_items(self, items: list[NutritionItemInput]) -> tuple[list[dict], dict]:
+    async def _snapshot_items(
+        self, user_id: UUID, items: list[NutritionItemInput]
+    ) -> tuple[list[dict], dict]:
         snapshots: list[dict] = []
         totals = {key: Decimal("0") for key in ("kcal", "protein_g", "carbs_g", "fat_g")}
         for item in items:
             if item.food_version_id:
-                found = await self.repository.get_food_version(item.food_version_id)
+                found = await self.repository.get_food_version(user_id, item.food_version_id)
                 if found is None:
                     raise NutritionNotFoundError(f"Food version {item.food_version_id} not found")
                 food, version = found

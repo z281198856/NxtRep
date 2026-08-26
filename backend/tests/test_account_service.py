@@ -310,7 +310,26 @@ async def test_login_rejects_wrong_password() -> None:
             password="wrong-password",
         )
 
+    assert user.credential.failed_login_attempts == 1
     repository.add_refresh_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_login_locks_account_on_fifth_failed_attempt() -> None:
+    user = make_login_ready_user()
+    user.credential.failed_login_attempts = 4
+    repository = MagicMock(spec=SqlAlchemyUserRepository)
+    repository.get_by_username = AsyncMock(return_value=user)
+    repository.add_refresh_session = AsyncMock()
+
+    with pytest.raises(AccountLockedError):
+        await AccountService(repository, make_settings()).login(
+            username="zengsiqi",
+            password="wrong-password",
+        )
+
+    assert user.credential.failed_login_attempts == 5
+    assert user.credential.locked_until is not None
 
 
 @pytest.mark.asyncio

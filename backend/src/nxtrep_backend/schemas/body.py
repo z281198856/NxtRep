@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -16,16 +16,34 @@ class BodyMeasurementCreateRequest(StrictModel):
     waist_cm: Decimal | None = Field(default=None, gt=0, le=400)
     neck_cm: Decimal | None = Field(default=None, gt=0, le=200)
     hip_cm: Decimal | None = Field(default=None, gt=0, le=400)
+    body_fat_percent: Decimal | None = Field(default=None, gt=0, le=70)
+    body_fat_method: str | None = Field(default=None, min_length=1, max_length=30)
     source: str = Field(min_length=1, max_length=30)
     conditions: str | None = Field(default=None, max_length=500)
     notes: str | None = Field(default=None, max_length=2000)
 
+    @field_validator("measured_at")
+    @classmethod
+    def require_measured_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("measured_at must include a timezone offset")
+        return value
+
     @model_validator(mode="after")
     def validate_values(self) -> "BodyMeasurementCreateRequest":
         if all(
-            value is None for value in (self.weight_kg, self.waist_cm, self.neck_cm, self.hip_cm)
+            value is None
+            for value in (
+                self.weight_kg,
+                self.waist_cm,
+                self.neck_cm,
+                self.hip_cm,
+                self.body_fat_percent,
+            )
         ):
             raise ValueError("at least one body measurement is required")
+        if (self.body_fat_percent is None) != (self.body_fat_method is None):
+            raise ValueError("body_fat_percent and body_fat_method must be provided together")
         return self
 
 
@@ -35,11 +53,20 @@ class BodyMeasurementUpdateRequest(StrictModel):
     waist_cm: Decimal | None = Field(default=None, gt=0, le=400)
     neck_cm: Decimal | None = Field(default=None, gt=0, le=200)
     hip_cm: Decimal | None = Field(default=None, gt=0, le=400)
+    body_fat_percent: Decimal | None = Field(default=None, gt=0, le=70)
+    body_fat_method: str | None = Field(default=None, min_length=1, max_length=30)
     source: str | None = Field(default=None, min_length=1, max_length=30)
     conditions: str | None = Field(default=None, max_length=500)
     notes: str | None = Field(default=None, max_length=2000)
     reason: str = Field(min_length=1, max_length=1000)
     expected_version: int = Field(ge=1)
+
+    @field_validator("measured_at")
+    @classmethod
+    def require_updated_measured_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("measured_at must include a timezone offset")
+        return value
 
 
 class BodyMeasurementResponse(BaseModel):
@@ -49,6 +76,8 @@ class BodyMeasurementResponse(BaseModel):
     waist_cm: Decimal | None
     neck_cm: Decimal | None
     hip_cm: Decimal | None
+    body_fat_percent: Decimal | None = None
+    body_fat_method: str | None = None
     source: str
     conditions: str | None
     notes: str | None
