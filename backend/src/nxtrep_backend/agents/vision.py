@@ -4,6 +4,10 @@ from collections.abc import Sequence
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 
+from nxtrep_backend.providers.model_errors import (
+    VisionModelBusyError,
+    is_model_capacity_error,
+)
 from nxtrep_backend.services.agent_media import ResolvedAgentImage
 
 
@@ -58,8 +62,10 @@ class GlmVisionAnalyzer:
     def __init__(
         self,
         model: BaseChatModel,
+        fallback_model: BaseChatModel | None = None,
     ) -> None:
         self._model = model
+        self._fallback_model = fallback_model
 
     async def analyze(
         self,
@@ -72,11 +78,34 @@ class GlmVisionAnalyzer:
             images=images,
         )
 
-        response = await self._model.ainvoke(
-            [
-                HumanMessage(content=content),
-            ]
-        )
+        try:
+            return await self._analyze_with_model(self._model, content)
+        except Exception as exc:
+            if not is_model_capacity_error(exc):
+                raise
+
+            # The configured fallback model accepts one image only. Keep
+            # multi-image comparisons intact instead of silently dropping
+            # evidence from the request.
+            fallback = self._fallback_model if len(images) == 1 else None
+            if fallback is None:
+                raise VisionModelBusyError("The vision model is temporarily at capacity") from exc
+
+            try:
+                return await self._analyze_with_model(fallback, content)
+            except Exception as fallback_exc:
+                if is_model_capacity_error(fallback_exc):
+                    raise VisionModelBusyError(
+                        "The vision models are temporarily at capacity"
+                    ) from fallback_exc
+                raise
+
+    async def _analyze_with_model(
+        self,
+        model: BaseChatModel,
+        content: list[dict[str, object]],
+    ) -> str:
+        response = await model.ainvoke([HumanMessage(content=content)])
 
         text = self._extract_text(response.content)
 

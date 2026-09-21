@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     agent_intent_router_max_retries: int = Field(default=0, ge=0, le=10)
     vision_temperature: float = Field(default=0.1, ge=0, le=2)
     vision_timeout_seconds: int = Field(default=60, ge=1, le=300)
-    vision_max_retries: int = Field(default=0, ge=0, le=3)
+    vision_max_retries: int = Field(default=1, ge=0, le=3)
     agent_sse_heartbeat_seconds: float = Field(default=15.0, ge=5.0, le=60.0)
     agent_sse_disconnect_poll_seconds: float = Field(default=1.0, ge=0.1, le=5.0)
     storage_provider: Literal["aliyun_oss"] | None = None

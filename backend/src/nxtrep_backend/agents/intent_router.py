@@ -164,6 +164,8 @@ class AgentIntentRouter:
     4. body_progress 默认优先用于身体评估或身体进度对比。
     5. nutrition_entry 默认优先用于饮食分析或饮食记录草稿。
     6. chat_attachment 根据用户消息分配，可以进入一个或多个任务。
+       当用户明确询问附件图片内容且只有 general_question 任务时，
+       必须把该图片分配给 general_question，不得留在 unassigned_asset_ids。
     7. 无法确定用途的图片必须放入 unassigned_asset_ids。
     8. 需要用户补充信息时设置 needs_clarification=true，并填写 clarification_questions。
     9. 不得编造输入中不存在的 asset_id。
@@ -189,6 +191,7 @@ class AgentIntentRouter:
             try:
                 response = await structured_model.ainvoke(messages)
                 parsed = self._parse_response(response)
+                parsed = self._repair_single_general_image_assignment(parsed)
                 referenced_ids = {asset_id for task in parsed.tasks for asset_id in task.asset_ids}
                 referenced_ids.update(parsed.unassigned_asset_ids)
                 if referenced_ids != provided_ids:
@@ -203,10 +206,37 @@ class AgentIntentRouter:
         raise AgentIntentRoutingError("Intent model invocation failed") from last_error
 
     @staticmethod
-    def _is_simple_conversation(message: str) -> bool:
-        normalized = "".join(message.casefold().split()).strip(
-            ".,!?，。！？~～"
+    def _repair_single_general_image_assignment(
+        plan: AgentIntentPlan,
+    ) -> AgentIntentPlan:
+        """Keep an unambiguous single image question on the vision path.
+
+        Providers occasionally classify the text correctly as a general question
+        while leaving every attachment unassigned. If no clarification was
+        requested and there is exactly one otherwise image-less task, assigning
+        those attachments is deterministic and prevents the downstream answer
+        from incorrectly claiming that no image was supplied.
+        """
+        if (
+            plan.needs_clarification
+            or len(plan.tasks) != 1
+            or plan.tasks[0].task_type != "general_question"
+            or plan.tasks[0].asset_ids
+            or not plan.unassigned_asset_ids
+        ):
+            return plan
+
+        task = plan.tasks[0].model_copy(update={"asset_ids": list(plan.unassigned_asset_ids)})
+        return plan.model_copy(
+            update={
+                "tasks": [task],
+                "unassigned_asset_ids": [],
+            }
         )
+
+    @staticmethod
+    def _is_simple_conversation(message: str) -> bool:
+        normalized = "".join(message.casefold().split()).strip(".,!?，。！？~～")
         return normalized in {
             "你好",
             "您好",

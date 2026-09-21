@@ -55,6 +55,7 @@ class BodyProgressRepository {
           await _apiClient.post(
             '/body/progress-photos/$photoId/analysis-drafts',
             body: {'question': '请评估训练相关的体态和肌肉平衡，并给出可执行的训练建议。'},
+            timeout: const Duration(seconds: 150),
           ),
           context: '身体照片评估接口',
         ),
@@ -72,6 +73,7 @@ class BodyProgressRepository {
           'after_photo_id': afterPhotoId,
           'question': '请比较两张照片中可观察到的训练变化，说明局限并给出后续建议。',
         },
+        timeout: const Duration(seconds: 150),
       ),
       context: '身体照片对比接口',
     ),
@@ -79,10 +81,7 @@ class BodyProgressRepository {
 
   Future<List<ProgressReport>> listReports() async {
     final json = expectJsonObject(
-      await _apiClient.get(
-        '/reports',
-        query: {'page': '1', 'page_size': '20'},
-      ),
+      await _apiClient.get('/reports', query: {'page': '1', 'page_size': '20'}),
       context: '阶段报告列表接口',
     );
     return (json['list'] as List<dynamic>? ?? const [])
@@ -98,10 +97,7 @@ class BodyProgressRepository {
       expectJsonObject(
         await _apiClient.post(
           '/reports/phase',
-          body: {
-            'period_start': _date(start),
-            'period_end': _date(end),
-          },
+          body: {'period_start': _date(start), 'period_end': _date(end)},
         ),
         context: '阶段报告生成接口',
       ),

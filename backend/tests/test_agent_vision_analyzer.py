@@ -10,6 +10,7 @@ from nxtrep_backend.agents.vision import (
     VisionModelResponseError,
     build_glm_vision_content,
 )
+from nxtrep_backend.providers.model_errors import VisionModelBusyError
 from nxtrep_backend.schemas.media import ImagePurpose
 from nxtrep_backend.services.agent_media import ResolvedAgentImage
 
@@ -27,6 +28,10 @@ def make_model() -> MagicMock:
     model = MagicMock(spec=BaseChatModel)
     model.ainvoke = AsyncMock()
     return model
+
+
+class CapacityError(RuntimeError):
+    status_code = 429
 
 
 @pytest.mark.asyncio
@@ -83,3 +88,47 @@ async def test_analyzer_rejects_empty_model_response(content: object) -> None:
             question="描述图片",
             images=[make_image()],
         )
+
+
+@pytest.mark.asyncio
+async def test_analyzer_uses_fallback_for_single_image_capacity_error() -> None:
+    model = make_model()
+    fallback_model = make_model()
+    image = make_image()
+    model.ainvoke.side_effect = CapacityError("busy")
+    fallback_model.ainvoke.return_value = AIMessage(content="备用模型观察结果")
+    analyzer = GlmVisionAnalyzer(model, fallback_model)
+
+    result = await analyzer.analyze(question="描述图片", images=[image])
+
+    assert result == "备用模型观察结果"
+    model.ainvoke.assert_awaited_once()
+    fallback_model.ainvoke.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_analyzer_does_not_drop_images_to_use_single_image_fallback() -> None:
+    model = make_model()
+    fallback_model = make_model()
+    model.ainvoke.side_effect = CapacityError("busy")
+    analyzer = GlmVisionAnalyzer(model, fallback_model)
+
+    with pytest.raises(VisionModelBusyError):
+        await analyzer.analyze(
+            question="比较图片",
+            images=[make_image(), make_image()],
+        )
+
+    fallback_model.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_analyzer_reports_busy_when_primary_and_fallback_are_at_capacity() -> None:
+    model = make_model()
+    fallback_model = make_model()
+    model.ainvoke.side_effect = CapacityError("primary busy")
+    fallback_model.ainvoke.side_effect = CapacityError("fallback busy")
+    analyzer = GlmVisionAnalyzer(model, fallback_model)
+
+    with pytest.raises(VisionModelBusyError):
+        await analyzer.analyze(question="描述图片", images=[make_image()])

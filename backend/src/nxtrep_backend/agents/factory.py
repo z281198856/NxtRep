@@ -14,6 +14,7 @@ from nxtrep_backend.agents.nutrition_vision import (
 from nxtrep_backend.agents.runtime import build_agent
 from nxtrep_backend.agents.synthesis import AgentResponseSynthesizer
 from nxtrep_backend.agents.tools import AgentToolContext, groups_for_task
+from nxtrep_backend.agents.vision import GlmVisionAnalyzer
 from nxtrep_backend.core.config import get_settings
 from nxtrep_backend.providers.models import (
     build_fallback_intent_router_model,
@@ -242,6 +243,7 @@ def build_agent_workflow_service(
         agent_builder,
         fallback_agent_builder,
         knowledge_retrieval_enabled=(knowledge_retrieval_service is not None),
+        vision_analyzer=GlmVisionAnalyzer(vision_model, fallback_vision_model),
     )
     knowledge_handler = general_handler
     if knowledge_retrieval_service is not None:

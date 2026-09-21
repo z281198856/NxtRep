@@ -11,10 +11,12 @@ import 'package:nxtrep/core/network/api_exception.dart';
 ApiClient buildClient(
   MockClient httpClient, {
   String? Function()? accessTokenProvider,
+  Duration requestTimeout = const Duration(seconds: 15),
 }) => ApiClient(
   config: ApiConfig(baseUri: Uri.parse('https://api.example.test/api/v1')),
   accessTokenProvider: accessTokenProvider ?? () => null,
   httpClient: httpClient,
+  requestTimeout: requestTimeout,
 );
 
 void main() {
@@ -167,6 +169,45 @@ void main() {
       final results = await Future.wait([first, second]);
       expect(results, everyElement({'ok': true}));
       expect(refreshCalls, 1);
+    });
+  });
+
+  group('request timeout contract', () {
+    test('maps a stalled request to a network error', () async {
+      final stalled = Completer<http.Response>();
+      final client = buildClient(
+        MockClient((_) => stalled.future),
+        requestTimeout: const Duration(milliseconds: 20),
+      );
+
+      await expectLater(
+        client.get('/stalled', authenticated: false),
+        throwsA(
+          isA<ApiException>().having(
+            (error) => error.code,
+            'code',
+            'NETWORK_ERROR',
+          ),
+        ),
+      );
+    });
+
+    test('allows a longer timeout for slow vision endpoints', () async {
+      final client = buildClient(
+        MockClient((_) async {
+          await Future<void>.delayed(const Duration(milliseconds: 30));
+          return http.Response('{}', 200);
+        }),
+        requestTimeout: const Duration(milliseconds: 5),
+      );
+
+      final result = await client.post(
+        '/body/progress-photos/compare',
+        authenticated: false,
+        timeout: const Duration(milliseconds: 100),
+      );
+
+      expect(result, <String, dynamic>{});
     });
   });
 }

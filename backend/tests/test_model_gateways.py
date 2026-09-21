@@ -87,7 +87,7 @@ def test_glm_vision_gateway_is_independent_from_text_provider() -> None:
     assert isinstance(model, ChatOpenAI)
     assert model.model_name == "glm-4.6v-flash"
     assert model.temperature == 0.1
-    assert model.max_retries == 0
+    assert model.max_retries == 1
 
 
 def test_fallback_vision_gateway_uses_configured_free_model() -> None:
@@ -102,7 +102,7 @@ def test_fallback_vision_gateway_uses_configured_free_model() -> None:
 
     assert isinstance(model, ChatOpenAI)
     assert model.model_name == "glm-4v-flash"
-    assert model.max_retries == 0
+    assert model.max_retries == 1
 
 
 def test_fallback_vision_gateway_is_disabled_for_duplicate_model() -> None:

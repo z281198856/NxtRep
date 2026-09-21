@@ -7,13 +7,16 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph.state import CompiledStateGraph
 
+from nxtrep_backend.agents.vision import GlmVisionAnalyzer
 from nxtrep_backend.schemas.agent import AgentCitation, AgentIntentTask
+from nxtrep_backend.schemas.media import ImagePurpose
 from nxtrep_backend.services.agent_context import ActiveMemoryContext
 from nxtrep_backend.services.agent_execution import AgentBranchInput
 from nxtrep_backend.services.agent_handlers.general import (
     GeneralQuestionBranchHandler,
     GeneralQuestionResponseError,
 )
+from nxtrep_backend.services.agent_media import ResolvedAgentImage
 from nxtrep_backend.services.conversation import (
     AgentConversationContext,
     ConversationMessageContext,
@@ -42,9 +45,7 @@ def make_input(
         task=AgentIntentTask(
             task_type=task_type,
             asset_ids=[],
-            required_context=(
-                ["profile"] if required_context is None else required_context
-            ),
+            required_context=(["profile"] if required_context is None else required_context),
             missing_fields=missing_fields or [],
             confidence="high",
             routing_reason="The user asked a general fitness question",
@@ -105,6 +106,51 @@ async def test_handler_returns_trimmed_react_answer() -> None:
     assert result.status == "completed"
     assert result.result == {"answer": "下蹲时吸气并保持躯干稳定，起身通过发力点后呼气。"}
     assert result.requires_confirmation is False
+
+
+@pytest.mark.asyncio
+async def test_handler_includes_vision_observation_for_image_question() -> None:
+    react_agent = make_react_agent({"messages": [AIMessage(content="这张图展示了一个深蹲动作。")]})
+    analyzer = MagicMock(spec=GlmVisionAnalyzer)
+    analyzer.analyze = AsyncMock(return_value="观察到用户处于深蹲底部位置。")
+    handler = GeneralQuestionBranchHandler(
+        lambda task: react_agent,
+        vision_analyzer=analyzer,
+    )
+    asset_id = uuid4()
+    image = ResolvedAgentImage(
+        asset_id=asset_id,
+        purpose=ImagePurpose.BODY_PROGRESS,
+        content_type="image/jpeg",
+        data=b"sanitized-image",
+    )
+    base_input = make_input(required_context=[])
+    branch_input = AgentBranchInput(
+        user_id=base_input.user_id,
+        message="帮我看看这个动作",
+        task=AgentIntentTask(
+            task_type="general_question",
+            asset_ids=[asset_id],
+            required_context=[],
+            missing_fields=[],
+            confidence="high",
+            routing_reason="The user asked about an attached image",
+        ),
+        images=(image,),
+    )
+
+    result = await handler.execute(branch_input)
+
+    assert result.status == "completed"
+    analyzer.analyze.assert_awaited_once_with(
+        question="帮我看看这个动作",
+        images=(image,),
+    )
+    react_agent.ainvoke.assert_awaited_once()
+    content = react_agent.ainvoke.await_args.args[0]["messages"][-1]["content"]
+    assert "帮我看看这个动作" in content
+    assert "观察到用户处于深蹲底部位置。" in content
+    assert "c2FuaXRpemVkLWltYWdl" not in content
 
 
 @pytest.mark.asyncio

@@ -125,6 +125,29 @@ async def test_router_allows_one_image_in_multiple_tasks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_router_repairs_unassigned_image_for_single_general_question() -> None:
+    model, structured_model = make_dependencies()
+    image = make_image(ImagePurpose.CHAT_ATTACHMENT)
+    structured_model.ainvoke.return_value = {
+        "raw": None,
+        "parsed": AgentIntentPlan(
+            tasks=[make_task("general_question", [])],
+            unassigned_asset_ids=[image.asset_id],
+        ),
+        "parsing_error": None,
+    }
+    router = AgentIntentRouter(model)
+
+    result = await router.route(
+        message="Describe the image",
+        images=[image],
+    )
+
+    assert result.tasks[0].asset_ids == [image.asset_id]
+    assert result.unassigned_asset_ids == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("assignment", ["omitted", "invented"])
 async def test_router_rejects_image_assignment_mismatch(
     assignment: str,
@@ -259,9 +282,7 @@ async def test_router_does_not_locally_route_today_training_mutation() -> None:
 @pytest.mark.asyncio
 async def test_router_does_not_locally_route_plan_mutation() -> None:
     model, structured_model = make_dependencies()
-    expected = AgentIntentPlan(
-        tasks=[make_task("training_plan_draft", [])]
-    )
+    expected = AgentIntentPlan(tasks=[make_task("training_plan_draft", [])])
     structured_model.ainvoke.return_value = {
         "raw": None,
         "parsed": expected,
