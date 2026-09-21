@@ -103,6 +103,11 @@ class User(IdMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    settings: Mapped[UserSettings | None] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 class Credential(TimestampMixin, Base):
@@ -207,3 +212,56 @@ class RefreshSession(IdMixin, TimestampMixin, Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     user: Mapped[User] = relationship(back_populates="refresh_sessions")
+
+
+class UserSettings(TimestampMixin, Base):
+    __tablename__ = "user_settings"
+    __table_args__ = (
+        CheckConstraint(
+            "unit_system IN ('metric', 'imperial')",
+            name="unit_system",
+        ),
+        CheckConstraint(
+            "privacy_mode IN ('private', 'summary')",
+            name="privacy_mode",
+        ),
+        CheckConstraint("version >= 1", name="version_positive"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    unit_system: Mapped[str] = mapped_column(
+        String(8),
+        nullable=False,
+        default="metric",
+        server_default="metric",
+    )
+    timezone: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="Asia/Shanghai",
+        server_default="Asia/Shanghai",
+    )
+    privacy_mode: Mapped[str] = mapped_column(
+        String(8),
+        nullable=False,
+        default="private",
+        server_default="private",
+    )
+    share_anonymous_analytics: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+    )
+
+    user: Mapped[User] = relationship(back_populates="settings")

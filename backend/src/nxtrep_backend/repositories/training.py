@@ -45,6 +45,10 @@ class SqlAlchemyTrainingRepository:
             )
         )
 
+    async def delete_draft(self, draft: TrainingPlanDraft) -> None:
+        await self.session.delete(draft)
+        await self.session.flush()
+
     async def visible_exercise_ids(self, user_id: UUID, exercise_ids: set[UUID]) -> set[UUID]:
         if not exercise_ids:
             return set()
@@ -55,6 +59,15 @@ class SqlAlchemyTrainingRepository:
                     Exercise.deleted_at.is_(None),
                     (Exercise.owner_user_id.is_(None) | (Exercise.owner_user_id == user_id)),
                 )
+            )
+        )
+
+    async def get_visible_exercise(self, user_id: UUID, exercise_id: UUID) -> Exercise | None:
+        return await self.session.scalar(
+            select(Exercise).where(
+                Exercise.id == exercise_id,
+                Exercise.deleted_at.is_(None),
+                (Exercise.owner_user_id.is_(None) | (Exercise.owner_user_id == user_id)),
             )
         )
 
@@ -82,6 +95,67 @@ class SqlAlchemyTrainingRepository:
 
     async def get_plan_version(self, version_id: UUID) -> TrainingPlanVersion | None:
         return await self.session.get(TrainingPlanVersion, version_id)
+
+    async def get_plan_version_for_user(
+        self,
+        *,
+        user_id: UUID,
+        plan_id: UUID,
+        version: int,
+        lock: bool = False,
+    ) -> TrainingPlanVersion | None:
+        statement = select(TrainingPlanVersion).where(
+            TrainingPlanVersion.user_id == user_id,
+            TrainingPlanVersion.plan_id == plan_id,
+            TrainingPlanVersion.version == version,
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return await self.session.scalar(statement)
+
+    async def get_latest_plan(
+        self,
+        *,
+        user_id: UUID,
+        plan_id: UUID,
+    ) -> TrainingPlanVersion | None:
+        return await self.session.scalar(
+            select(TrainingPlanVersion)
+            .where(
+                TrainingPlanVersion.user_id == user_id,
+                TrainingPlanVersion.plan_id == plan_id,
+            )
+            .order_by(TrainingPlanVersion.version.desc())
+            .limit(1)
+        )
+
+    async def list_latest_plans(
+        self,
+        *,
+        user_id: UUID,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[TrainingPlanVersion], int]:
+        versions = list(
+            await self.session.scalars(
+                select(TrainingPlanVersion)
+                .where(TrainingPlanVersion.user_id == user_id)
+                .order_by(
+                    TrainingPlanVersion.plan_id,
+                    TrainingPlanVersion.version.desc(),
+                )
+            )
+        )
+        latest_by_plan: dict[UUID, TrainingPlanVersion] = {}
+        for item in versions:
+            latest_by_plan.setdefault(item.plan_id, item)
+        latest = sorted(
+            latest_by_plan.values(),
+            key=lambda item: item.activated_at,
+            reverse=True,
+        )
+        offset = (page - 1) * page_size
+        return latest[offset : offset + page_size], len(latest)
 
     async def list_plan_versions(
         self, user_id: UUID, plan_id: UUID, page: int, page_size: int
@@ -173,6 +247,11 @@ class SqlAlchemyTrainingRepository:
     async def add_calendar_events(self, events: list[CalendarEvent]) -> None:
         self.session.add_all(events)
         await self.session.flush()
+
+    async def add_calendar_event(self, event: CalendarEvent) -> CalendarEvent:
+        self.session.add(event)
+        await self.session.flush()
+        return event
 
     async def delete_future_planned_events(self, user_id: UUID, from_date: date) -> None:
         await self.session.execute(

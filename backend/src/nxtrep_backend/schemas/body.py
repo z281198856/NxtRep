@@ -92,6 +92,11 @@ class BodyMeasurementListResponse(BaseModel):
     has_more: bool
 
 
+class BodyMeasurementDeleteRequest(StrictModel):
+    expected_version: int = Field(ge=1)
+    reason: str = Field(default="用户请求删除身体测量", min_length=1, max_length=1000)
+
+
 class NavyBodyFatRequest(StrictModel):
     sex: Literal["male", "female"]
     height_cm: Decimal = Field(gt=0, le=300)
@@ -121,10 +126,110 @@ class NavyBodyFatResponse(BaseModel):
     disclaimer: str = "结果仅用于观察趋势，不是医学测量"
 
 
+class ManualBodyFatRequest(StrictModel):
+    calculated_at: datetime
+    method: str = Field(min_length=1, max_length=30)
+    value_percent: Decimal = Field(gt=0, le=70)
+    range_min_percent: Decimal | None = Field(default=None, gt=0, le=70)
+    range_max_percent: Decimal | None = Field(default=None, gt=0, le=70)
+    confidence: Literal["low", "medium", "high"] = "medium"
+    notes: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("calculated_at")
+    @classmethod
+    def require_calculated_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("calculated_at must include a timezone offset")
+        return value
+
+    @model_validator(mode="after")
+    def validate_manual_range(self) -> "ManualBodyFatRequest":
+        lower = self.range_min_percent or self.value_percent
+        upper = self.range_max_percent or self.value_percent
+        if lower > self.value_percent or upper < self.value_percent:
+            raise ValueError("body fat value must be within the supplied range")
+        return self
+
+
+class BodyFatEstimateResponse(BaseModel):
+    id: UUID
+    calculated_at: datetime
+    method: str
+    inputs: dict
+    value_percent: Decimal
+    range_min_percent: Decimal
+    range_max_percent: Decimal
+    confidence: str
+
+
+class BodyFatEstimateListResponse(BaseModel):
+    list: list[BodyFatEstimateResponse]
+    total: int
+    page: int
+    page_size: int
+    has_more: bool
+
+
+class BodyImagePhotoQuality(StrictModel):
+    view: Literal["front", "side", "back", "unknown"]
+    lighting: Literal["poor", "acceptable", "good"]
+    framing: Literal["poor", "acceptable", "good"]
+    usable_for_assessment: bool
+    limitations: list[str] = Field(default_factory=list, max_length=10)
+
+
+class BodyImageObservation(StrictModel):
+    category: Literal[
+        "shoulder_balance",
+        "trunk_alignment",
+        "pelvis_balance",
+        "lower_body_alignment",
+        "muscle_balance",
+        "other",
+    ]
+    observation: str = Field(min_length=1, max_length=500)
+    visual_evidence: str = Field(min_length=1, max_length=500)
+    confidence: Literal["low", "medium", "high"]
+
+
+class BodyImageAssessmentResult(StrictModel):
+    photo_quality: list[BodyImagePhotoQuality] = Field(
+        min_length=1,
+        max_length=4,
+    )
+    summary: str = Field(min_length=1, max_length=1000)
+    observations: list[BodyImageObservation] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    training_considerations: list[str] = Field(
+        default_factory=list,
+        max_length=10,
+    )
+    recommended_next_steps: list[str] = Field(
+        default_factory=list,
+        max_length=10,
+    )
+    follow_up_questions: list[str] = Field(
+        default_factory=list,
+        max_length=10,
+    )
+    professional_review_recommended: bool = False
+    disclaimer: Literal["仅基于照片中的可观察信息，不构成医学诊断或精确身体成分测量"] = (
+        "仅基于照片中的可观察信息，不构成医学诊断或精确身体成分测量"
+    )
+
+
 class ProgressOverviewResponse(BaseModel):
     training: dict
     nutrition: dict
     body: dict
+
+
+class ProgressSectionResponse(BaseModel):
+    start_date: date
+    end_date: date
+    data: dict
 
 
 class BodyTrendPoint(BaseModel):

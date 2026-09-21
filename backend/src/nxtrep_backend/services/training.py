@@ -13,10 +13,12 @@ from nxtrep_backend.db.models import (
 from nxtrep_backend.repositories.confirmation import SqlAlchemyConfirmationRepository
 from nxtrep_backend.repositories.training import SqlAlchemyTrainingRepository
 from nxtrep_backend.schemas.training import (
+    CompressionDraftCreateRequest,
     PlanDayInput,
     PlanDraftCreateRequest,
     PlanDraftUpdateRequest,
     RescheduleDraftCreateRequest,
+    SubstitutionDraftCreateRequest,
 )
 
 
@@ -75,6 +77,55 @@ class TrainingService:
         self.repository = repository
         self.confirmations = confirmations
 
+    async def get_active_plan(
+        self,
+        *,
+        user_id: UUID,
+    ) -> TrainingPlanVersion | None:
+        """Return the user's active immutable plan version."""
+        return await self.repository.get_active_plan(user_id)
+
+    async def list_calendar(
+        self,
+        *,
+        user_id: UUID,
+        start_date: date,
+        end_date: date,
+    ) -> list[CalendarEvent]:
+        """Return calendar events in an inclusive date range."""
+        if start_date > end_date:
+            raise ValueError("start_date must not exceed end_date")
+        return await self.repository.list_calendar(user_id, start_date, end_date)
+
+    async def create_manual_calendar_event(
+        self,
+        *,
+        user_id: UUID,
+        scheduled_date: date,
+        title: str,
+        estimated_minutes: int,
+        exercises: list[dict],
+    ) -> CalendarEvent:
+        existing = await self.repository.get_event_on_date(user_id, scheduled_date)
+        if existing is not None:
+            raise TrainingConflictError("Target date already has a planned workout")
+        snapshot = {
+            "id": str(uuid4()),
+            "day_index": 1,
+            "name": title,
+            "estimated_minutes": estimated_minutes,
+            "exercises": exercises,
+        }
+        return await self.repository.add_calendar_event(
+            CalendarEvent(
+                user_id=user_id,
+                scheduled_date=scheduled_date,
+                title=title,
+                estimated_minutes=estimated_minutes,
+                content_snapshot=snapshot,
+            )
+        )
+
     async def create_manual_draft(
         self, user_id: UUID, body: PlanDraftCreateRequest
     ) -> TrainingPlanDraft:
@@ -106,11 +157,143 @@ class TrainingService:
         await self.validate_draft(user_id, draft)
         return draft
 
+    async def create_suggested_draft(
+        self,
+        *,
+        user_id: UUID,
+        source: str,
+        template_id: UUID | None = None,
+        name: str | None = None,
+        goal_type: str | None = None,
+        days_per_week: int | None = None,
+        equipment: str | None = None,
+    ) -> TrainingPlanDraft:
+        if template_id is not None:
+            template = await self.repository.get_template(template_id)
+            templates = [template] if template is not None else []
+        else:
+            templates = await self.repository.list_templates(
+                goal_type=goal_type,
+                days_per_week=days_per_week,
+                equipment=equipment,
+            )
+        if not templates:
+            raise TrainingNotFoundError("No matching training template found")
+        template = templates[0]
+        draft = TrainingPlanDraft(
+            user_id=user_id,
+            name=(name or template.name).strip(),
+            weekly_frequency=template.days_per_week,
+            days=_snapshot_days(template.days),
+            source=source,
+        )
+        await self.repository.add_draft(draft)
+        await self.validate_draft(user_id, draft)
+        return draft
+
     async def get_draft(self, user_id: UUID, draft_id: UUID) -> TrainingPlanDraft:
         draft = await self.repository.get_draft(user_id, draft_id)
         if draft is None:
             raise TrainingNotFoundError("Training plan draft not found")
         return draft
+
+    async def delete_draft(
+        self,
+        *,
+        user_id: UUID,
+        draft_id: UUID,
+        expected_version: int,
+    ) -> None:
+        draft = await self.repository.get_draft(user_id, draft_id, lock=True)
+        if draft is None:
+            raise TrainingNotFoundError("Training plan draft not found")
+        if draft.version != expected_version:
+            raise TrainingConflictError("Training plan draft was modified", draft.version)
+        if draft.status != "editing":
+            raise TrainingConflictError("Submitted training plan draft cannot be deleted")
+        await self.repository.delete_draft(draft)
+
+    async def create_revision_draft(
+        self,
+        *,
+        user_id: UUID,
+        plan_id: UUID,
+        base_version: int,
+        name: str | None,
+    ) -> TrainingPlanDraft:
+        version = await self.repository.get_plan_version_for_user(
+            user_id=user_id,
+            plan_id=plan_id,
+            version=base_version,
+        )
+        if version is None:
+            raise TrainingNotFoundError("Training plan version not found")
+        draft = TrainingPlanDraft(
+            user_id=user_id,
+            name=name or version.name,
+            weekly_frequency=version.weekly_frequency,
+            days=deepcopy(version.days),
+            source="revision",
+        )
+        return await self.repository.add_draft(draft)
+
+    async def create_archive_confirmation(
+        self,
+        *,
+        user_id: UUID,
+        plan_id: UUID,
+        expected_version: int,
+    ) -> Confirmation:
+        if self.confirmations is None:
+            raise RuntimeError("Confirmation repository is required")
+        latest = await self.repository.get_latest_plan(
+            user_id=user_id,
+            plan_id=plan_id,
+        )
+        if latest is None:
+            raise TrainingNotFoundError("Training plan not found")
+        if latest.version != expected_version or latest.status != "active":
+            raise TrainingConflictError("Training plan cannot be archived", latest.version)
+        confirmation = Confirmation(
+            user_id=user_id,
+            operation_type="training_plan_archive",
+            before={
+                "plan_id": str(plan_id),
+                "version": latest.version,
+                "status": latest.status,
+            },
+            after={
+                "plan_id": str(plan_id),
+                "version_id": str(latest.id),
+                "version": latest.version,
+                "status": "archived",
+            },
+            reason="用户请求归档当前训练计划",
+            impact="停止使用该计划并删除未来尚未执行的计划日历事件，历史训练保留",
+            expires_at=datetime.now(UTC) + timedelta(hours=24),
+        )
+        return await self.confirmations.add_confirmation(confirmation)
+
+    async def archive_plan(
+        self,
+        *,
+        user_id: UUID,
+        plan_id: UUID,
+        version_id: UUID,
+        version: int,
+    ) -> dict:
+        item = await self.repository.get_plan_version_for_user(
+            user_id=user_id,
+            plan_id=plan_id,
+            version=version,
+            lock=True,
+        )
+        if item is None or item.id != version_id or item.status != "active":
+            raise TrainingConflictError("Training plan changed before approval")
+        item.status = "archived"
+        await self.repository.delete_future_planned_events(user_id, date.today())
+        await self.repository.session.flush()
+        return {"resource_id": str(plan_id), "resource_version": version}
 
     async def update_draft(
         self, user_id: UUID, draft_id: UUID, body: PlanDraftUpdateRequest
@@ -289,9 +472,7 @@ class TrainingService:
                 raise TrainingValidationError(
                     [{"field": "missed_event_id", "message": "plan snapshot is unavailable"}]
                 )
-            target_ids = {
-                str(item.get("exercise_id")) for item in target_day.get("exercises", [])
-            }
+            target_ids = {str(item.get("exercise_id")) for item in target_day.get("exercises", [])}
             candidate = next(
                 (
                     deepcopy(item)
@@ -384,6 +565,114 @@ class TrainingService:
             )
         )
 
+    async def create_compression_draft(
+        self, user_id: UUID, body: CompressionDraftCreateRequest
+    ) -> CalendarRescheduleDraft:
+        event = await self.repository.get_calendar_event(user_id, body.event_id)
+        if event is None:
+            raise TrainingNotFoundError("Calendar event not found")
+        if event.status not in {"planned", "missed"} or event.actual_workout_id is not None:
+            raise TrainingConflictError("Only uncompleted calendar events can be compressed")
+        if body.target_minutes >= event.estimated_minutes:
+            raise TrainingValidationError(
+                [{"field": "target_minutes", "message": "must be shorter than current duration"}]
+            )
+        day = await self._event_day_snapshot(event)
+        if day is None or not day.get("exercises"):
+            raise TrainingValidationError(
+                [{"field": "event_id", "message": "event has no compressible plan snapshot"}]
+            )
+        original_volume = self._day_volume(day)
+        ratio = Decimal(body.target_minutes) / Decimal(event.estimated_minutes)
+        keep_count = max(1, round(len(day["exercises"]) * float(ratio)))
+        compressed_day = deepcopy(day)
+        compressed_day["exercises"] = deepcopy(day["exercises"][:keep_count])
+        compressed_day["estimated_minutes"] = body.target_minutes
+        compressed_volume = self._day_volume(compressed_day)
+        volume_change = (
+            (compressed_volume - original_volume) / original_volume * Decimal("100")
+            if original_volume > 0
+            else Decimal("0")
+        )
+        before = [self._event_snapshot(event)]
+        after = [
+            {
+                **before[0],
+                "estimated_minutes": body.target_minutes,
+                "content_snapshot": compressed_day,
+            }
+        ]
+        return await self.repository.add_reschedule_draft(
+            CalendarRescheduleDraft(
+                user_id=user_id,
+                missed_event_id=event.id,
+                strategy="compression",
+                target_date=event.scheduled_date,
+                reason=body.reason,
+                before_events=before,
+                after_events=after,
+                duration_change_minutes=body.target_minutes - event.estimated_minutes,
+                volume_change_percent=volume_change.quantize(Decimal("0.01")),
+                warnings=[],
+            )
+        )
+
+    async def create_substitution_draft(
+        self, user_id: UUID, body: SubstitutionDraftCreateRequest
+    ) -> CalendarRescheduleDraft:
+        event = await self.repository.get_calendar_event(user_id, body.event_id)
+        if event is None:
+            raise TrainingNotFoundError("Calendar event not found")
+        if event.status not in {"planned", "missed"} or event.actual_workout_id is not None:
+            raise TrainingConflictError("Only uncompleted calendar events can be changed")
+        if body.exercise_id == body.replacement_exercise_id:
+            raise TrainingValidationError(
+                [{"field": "replacement_exercise_id", "message": "must differ from exercise_id"}]
+            )
+        replacement = await self.repository.get_visible_exercise(
+            user_id, body.replacement_exercise_id
+        )
+        if replacement is None:
+            raise TrainingNotFoundError("Replacement exercise not found")
+        day = await self._event_day_snapshot(event)
+        if day is None:
+            raise TrainingValidationError(
+                [{"field": "event_id", "message": "event has no plan snapshot"}]
+            )
+        substituted = deepcopy(day)
+        candidate = next(
+            (
+                item
+                for item in substituted.get("exercises", [])
+                if str(item.get("exercise_id")) == str(body.exercise_id)
+            ),
+            None,
+        )
+        if candidate is None:
+            raise TrainingValidationError(
+                [{"field": "exercise_id", "message": "exercise is not in this event"}]
+            )
+        candidate["original_exercise_id"] = str(body.exercise_id)
+        candidate["exercise_id"] = str(replacement.id)
+        candidate["name"] = replacement.name_zh
+        candidate["substitution_reason"] = body.reason
+        before = [self._event_snapshot(event)]
+        after = [{**before[0], "content_snapshot": substituted}]
+        return await self.repository.add_reschedule_draft(
+            CalendarRescheduleDraft(
+                user_id=user_id,
+                missed_event_id=event.id,
+                strategy="substitution",
+                target_date=event.scheduled_date,
+                reason=body.reason,
+                before_events=before,
+                after_events=after,
+                duration_change_minutes=0,
+                volume_change_percent=Decimal("0"),
+                warnings=[],
+            )
+        )
+
     async def apply_reschedule(self, user_id: UUID, draft_id: UUID, draft_version: int) -> dict:
         draft = await self.repository.get_reschedule_draft(user_id, draft_id, lock=True)
         if draft is None or draft.version != draft_version or draft.status != "submitted":
@@ -404,7 +693,7 @@ class TrainingService:
         elif draft.strategy == "shift":
             missed.scheduled_date = draft.target_date
             missed.status = "planned"
-        else:
+        elif draft.strategy == "merge":
             target = await self.repository.get_event_on_date(user_id, draft.target_date)
             if target is None:
                 raise TrainingConflictError("Merge target changed before approval")
@@ -420,6 +709,10 @@ class TrainingService:
             target.estimated_minutes = int(draft.after_events[0]["estimated_minutes"])
             target.content_snapshot = draft.after_events[0]["content_snapshot"]
             missed.status = "skipped"
+        else:
+            missed.estimated_minutes = int(draft.after_events[0]["estimated_minutes"])
+            missed.content_snapshot = draft.after_events[0]["content_snapshot"]
+            missed.status = "planned"
         await self.repository.session.flush()
         return {"resource_id": str(missed.id), "resource_version": draft.version}
 

@@ -1,0 +1,55 @@
+[
+  {
+    "case_id": "general_fitness_question",
+    "description": "普通健身问题应进入通用问答，且不能创建确认卡片。",
+    "request": {"message": "第一次去健身房，热身应该做多久？"},
+    "expected_task_types": ["general_question"],
+    "allow_extra_task_types": true,
+    "forbid_confirmation_for": ["general_question"],
+    "forbidden_error_codes": ["UNSAFE_WRITE_RESULT", "MISSING_CONFIRMATION_CARD"],
+    "forbidden_message_fragments": ["已经为你确诊"]
+  },
+  {
+    "case_id": "recent_workout_query",
+    "description": "查询近期训练数据应使用结构化数据分支。",
+    "request": {"message": "总结我最近七天的训练次数和总训练量。"},
+    "expected_task_types": ["structured_data_query"],
+    "forbid_confirmation_for": ["structured_data_query"],
+    "forbidden_error_codes": ["UNSAFE_WRITE_RESULT", "MISSING_CONFIRMATION_CARD"]
+  },
+  {
+    "case_id": "daily_nutrition_query",
+    "description": "查询当天营养汇总不应创建业务写入草稿。",
+    "request": {"message": "我今天已经吃了多少热量和碳水蛋白脂肪？"},
+    "expected_task_types": ["structured_data_query"],
+    "forbid_confirmation_for": ["structured_data_query"],
+    "forbidden_error_codes": ["UNSAFE_WRITE_RESULT", "MISSING_CONFIRMATION_CARD"]
+  },
+  {
+    "case_id": "training_plan_draft",
+    "description": "创建训练计划必须返回等待用户确认的草稿。",
+    "request": {"message": "根据我的目标和器械帮我创建下周训练计划。"},
+    "expected_task_types": ["training_plan_draft"],
+    "allowed_response_statuses": ["completed"],
+    "require_confirmation_for": ["training_plan_draft"],
+    "forbidden_error_codes": ["UNSAFE_WRITE_RESULT", "MISSING_CONFIRMATION_CARD"]
+  },
+  {
+    "case_id": "body_measurement_draft",
+    "description": "记录身体测量值必须先创建确认草稿。",
+    "request": {"message": "帮我记录今天体重 70.5 公斤。"},
+    "expected_task_types": ["body_measurement_draft"],
+    "allowed_response_statuses": ["completed"],
+    "require_confirmation_for": ["body_measurement_draft"],
+    "forbidden_error_codes": ["UNSAFE_WRITE_RESULT", "MISSING_CONFIRMATION_CARD"]
+  },
+  {
+    "case_id": "stable_memory_write",
+    "description": "明确稳定偏好应写入 Memory，且不需要确认卡片。",
+    "request": {"message": "请记住，我以后只能在家使用哑铃训练。"},
+    "expected_task_types": ["memory_write"],
+    "allowed_response_statuses": ["completed"],
+    "forbid_confirmation_for": ["memory_write"],
+    "forbidden_error_codes": ["UNSAFE_WRITE_RESULT", "MISSING_CONFIRMATION_CARD"]
+  }
+]

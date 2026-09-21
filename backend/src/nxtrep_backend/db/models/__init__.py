@@ -3,17 +3,22 @@ from nxtrep_backend.db.models.account import (
     Profile,
     RefreshSession,
     User,
+    UserSettings,
     UserStatus,
 )
+from nxtrep_backend.db.models.agent_run import AgentRun
 from nxtrep_backend.db.models.body import (
     BodyFatEstimate,
     BodyMeasurement,
     BodyMeasurementRevision,
 )
+from nxtrep_backend.db.models.body_progress import BodyProgressPhoto
 from nxtrep_backend.db.models.confirmation import Confirmation
+from nxtrep_backend.db.models.conversation import AgentConversation, AgentMessage
 from nxtrep_backend.db.models.exercise import (
     Exercise,
     ExerciseAlias,
+    ExerciseContentFeedback,
     ExerciseMedia,
     ExerciseMuscle,
     ExerciseSubstitution,
@@ -28,13 +33,38 @@ from nxtrep_backend.db.models.idempotency import (
     IdempotencyRecord,
     IdempotencyStatus,
 )
+from nxtrep_backend.db.models.knowledge import (
+    KnowledgeChunk,
+    KnowledgeDocument,
+    KnowledgeEmbedding,
+    KnowledgeSource,
+)
+from nxtrep_backend.db.models.media import ImageAsset
+from nxtrep_backend.db.models.memory import AgentMemory
 from nxtrep_backend.db.models.nutrition import (
+    FlexibleMeal,
     Food,
+    FoodAlias,
     FoodVersion,
     NutritionEntry,
+    NutritionEntryDraft,
     NutritionEntryRevision,
     NutritionTargetDraft,
     NutritionTargetVersion,
+    Recipe,
+)
+from nxtrep_backend.db.models.platform import (
+    AppAlert,
+    AppNotification,
+    AuditEvent,
+    DeletionDraft,
+    ExportJob,
+    GeneratedReport,
+    NotificationSetting,
+    PushDevice,
+    SyncChange,
+    SyncConflict,
+    SyncResource,
 )
 from nxtrep_backend.db.models.training import (
     CalendarEvent,
@@ -53,15 +83,21 @@ from nxtrep_backend.db.models.workout import (
 )
 
 __all__ = [
+    "AgentMemory",
+    "AgentConversation",
+    "AgentRun",
+    "AgentMessage",
     "BodyFatEstimate",
     "BodyMeasurement",
     "BodyMeasurementRevision",
+    "BodyProgressPhoto",
     "CalendarEvent",
     "CalendarRescheduleDraft",
     "Confirmation",
     "Credential",
     "Exercise",
     "ExerciseAlias",
+    "ExerciseContentFeedback",
     "ExerciseMedia",
     "ExerciseMuscle",
     "ExerciseSubstitution",
@@ -70,16 +106,21 @@ __all__ = [
     "IdempotencyRecord",
     "IdempotencyStatus",
     "Food",
+    "FoodAlias",
     "FoodVersion",
+    "FlexibleMeal",
     "NutritionEntry",
+    "NutritionEntryDraft",
     "NutritionEntryRevision",
     "NutritionTargetDraft",
     "NutritionTargetVersion",
+    "Recipe",
     "PersonalRecord",
     "Profile",
     "ProgressionDraft",
     "RefreshSession",
     "User",
+    "UserSettings",
     "UserConstraint",
     "UserGoal",
     "UserStatus",
@@ -90,4 +131,20 @@ __all__ = [
     "WorkoutExercise",
     "WorkoutSet",
     "WorkoutSetRevision",
+    "AppNotification",
+    "AppAlert",
+    "AuditEvent",
+    "DeletionDraft",
+    "ExportJob",
+    "GeneratedReport",
+    "NotificationSetting",
+    "PushDevice",
+    "SyncChange",
+    "SyncConflict",
+    "SyncResource",
+    "ImageAsset",
+    "KnowledgeChunk",
+    "KnowledgeDocument",
+    "KnowledgeEmbedding",
+    "KnowledgeSource",
 ]

@@ -18,10 +18,14 @@ from nxtrep_backend.api.routes.training import (
 from nxtrep_backend.repositories.training import SqlAlchemyTrainingRepository
 from nxtrep_backend.schemas.confirmation import ConfirmationSubmitResponse
 from nxtrep_backend.schemas.training import (
+    CalendarEventCreateRequest,
+    CalendarEventDetailResponse,
     CalendarEventResponse,
+    CompressionDraftCreateRequest,
     ExpectedVersionRequest,
     RescheduleDraftCreateRequest,
     RescheduleDraftResponse,
+    SubstitutionDraftCreateRequest,
 )
 
 router = APIRouter()
@@ -41,6 +45,51 @@ async def get_calendar(
         )
     items = await SqlAlchemyTrainingRepository(session).list_calendar(user.id, start_date, end_date)
     return [CalendarEventResponse.model_validate(item, from_attributes=True) for item in items]
+
+
+@router.get("/events/{event_id}", response_model=CalendarEventDetailResponse)
+async def get_calendar_event(
+    event_id: UUID,
+    user: CurrentUser,
+    session: DbSession,
+) -> CalendarEventDetailResponse:
+    item = await SqlAlchemyTrainingRepository(session).get_calendar_event(user.id, event_id)
+    if item is None:
+        from nxtrep_backend.api.errors import ApiError
+
+        raise ApiError(status_code=404, code="CALENDAR_EVENT_NOT_FOUND", message="Event not found")
+    return CalendarEventDetailResponse.model_validate(item, from_attributes=True)
+
+
+@router.post("/events", response_model=CalendarEventDetailResponse, status_code=201)
+async def create_calendar_event(
+    body: CalendarEventCreateRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> CalendarEventDetailResponse:
+    idem, decision = await begin_idempotent(
+        session,
+        user.id,
+        idempotency_key,
+        "POST /calendar/events",
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, CalendarEventDetailResponse, 201):
+        return replayed
+    try:
+        item = await _service(session).create_manual_calendar_event(
+            user_id=user.id,
+            scheduled_date=body.scheduled_date,
+            title=body.title,
+            estimated_minutes=body.estimated_minutes,
+            exercises=[exercise.model_dump(mode="json") for exercise in body.exercises],
+        )
+        response = CalendarEventDetailResponse.model_validate(item, from_attributes=True)
+    except RuntimeError as exc:
+        _raise_training_error(exc)
+    await complete_idempotent(idem, decision, response, 201)
+    return response
 
 
 @router.post("/reschedule-drafts", response_model=RescheduleDraftResponse, status_code=201)
@@ -66,6 +115,78 @@ async def create_reschedule_draft(
         _raise_training_error(exc)
     await complete_idempotent(idem, decision, response, 201)
     return response
+
+
+@router.post("/compression-drafts", response_model=RescheduleDraftResponse, status_code=201)
+async def create_compression_draft(
+    body: CompressionDraftCreateRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> RescheduleDraftResponse:
+    idem, decision = await begin_idempotent(
+        session,
+        user.id,
+        idempotency_key,
+        "POST /calendar/compression-drafts",
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, RescheduleDraftResponse, 201):
+        return replayed
+    try:
+        response = RescheduleDraftResponse.model_validate(
+            await _service(session).create_compression_draft(user.id, body),
+            from_attributes=True,
+        )
+    except RuntimeError as exc:
+        _raise_training_error(exc)
+    await complete_idempotent(idem, decision, response, 201)
+    return response
+
+
+@router.post("/substitution-drafts", response_model=RescheduleDraftResponse, status_code=201)
+async def create_substitution_draft(
+    body: SubstitutionDraftCreateRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> RescheduleDraftResponse:
+    idem, decision = await begin_idempotent(
+        session,
+        user.id,
+        idempotency_key,
+        "POST /calendar/substitution-drafts",
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, RescheduleDraftResponse, 201):
+        return replayed
+    try:
+        response = RescheduleDraftResponse.model_validate(
+            await _service(session).create_substitution_draft(user.id, body),
+            from_attributes=True,
+        )
+    except RuntimeError as exc:
+        _raise_training_error(exc)
+    await complete_idempotent(idem, decision, response, 201)
+    return response
+
+
+@router.get("/reschedule-drafts/{draft_id}", response_model=RescheduleDraftResponse)
+async def get_reschedule_draft(
+    draft_id: UUID,
+    user: CurrentUser,
+    session: DbSession,
+) -> RescheduleDraftResponse:
+    item = await SqlAlchemyTrainingRepository(session).get_reschedule_draft(user.id, draft_id)
+    if item is None:
+        from nxtrep_backend.api.errors import ApiError
+
+        raise ApiError(
+            status_code=404,
+            code="RESCHEDULE_DRAFT_NOT_FOUND",
+            message="Reschedule draft not found",
+        )
+    return RescheduleDraftResponse.model_validate(item, from_attributes=True)
 
 
 @router.post("/reschedule-drafts/{draft_id}/submit", response_model=ConfirmationSubmitResponse)

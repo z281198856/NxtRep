@@ -304,3 +304,32 @@ class ExerciseMedia(IdMixin, TimestampMixin, Base):
         default=1,
         server_default=text("1"),
     )
+
+
+class ExerciseContentFeedback(IdMixin, TimestampMixin, Base):
+    """用户对动作讲解、分类或媒体内容提交的纠错反馈。"""
+
+    __tablename__ = "exercise_content_feedback"
+    __table_args__ = (
+        CheckConstraint(
+            "feedback_type IN ('instruction', 'classification', 'media', 'safety', 'other')",
+            name="feedback_type",
+        ),
+        CheckConstraint("status IN ('open', 'resolved', 'dismissed')", name="status"),
+        Index("ix_exercise_content_feedback_exercise_created", "exercise_id", "created_at"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    exercise_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("exercises.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    feedback_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    message: Mapped[str] = mapped_column(String(2000), nullable=False)
+    context: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="open", server_default="open"
+    )

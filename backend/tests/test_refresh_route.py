@@ -57,6 +57,7 @@ def test_refresh_returns_rotated_token_pair(
         access_token="new-access-token",
         refresh_token="n" * 64,
         expires_in=900,
+        refresh_expires_in=2_592_000,
         user=user,
     )
 
@@ -71,12 +72,15 @@ def test_refresh_returns_rotated_token_pair(
         "refresh_token": "n" * 64,
         "token_type": "bearer",
         "expires_in": 900,
+        "refresh_expires_in": 2_592_000,
         "user": {
             "id": str(user.id),
             "username": "zengsiqi",
             "password_setup_required": False,
         },
     }
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
     refresh_tokens.assert_awaited_once_with(
         refresh_token="o" * 64,
     )

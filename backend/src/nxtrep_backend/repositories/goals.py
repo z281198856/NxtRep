@@ -55,9 +55,16 @@ class SqlAlchemyGoalsRepository:
         self._session.add_all([goal, constraints])
         await self._session.flush()
 
-    async def visible_exercise_ids(
-        self, user_id: UUID, exercise_ids: set[UUID]
-    ) -> set[UUID]:
+    async def list_goals(self, user_id: UUID) -> list[UserGoal]:
+        return list(
+            await self._session.scalars(
+                select(UserGoal)
+                .where(UserGoal.user_id == user_id)
+                .order_by(UserGoal.version.desc())
+            )
+        )
+
+    async def visible_exercise_ids(self, user_id: UUID, exercise_ids: set[UUID]) -> set[UUID]:
         if not exercise_ids:
             return set()
         return set(

@@ -1,11 +1,12 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Query, status
+from fastapi import APIRouter, Header, Query, Response, status
 from pydantic import ValidationError
 
 from nxtrep_backend.api.deps import CurrentUser, DbSession
 from nxtrep_backend.api.errors import ApiError
+from nxtrep_backend.db.models import ExerciseContentFeedback
 from nxtrep_backend.repositories.exercise import (
     ExerciseDetailRecord,
     SqlAlchemyExercisesRepository,
@@ -13,9 +14,18 @@ from nxtrep_backend.repositories.exercise import (
 from nxtrep_backend.repositories.idempotency import (
     SqlAlchemyIdempotencyRepository,
 )
+from nxtrep_backend.repositories.training import SqlAlchemyTrainingRepository
+from nxtrep_backend.repositories.workout import SqlAlchemyWorkoutRepository
 from nxtrep_backend.schemas.exercise import (
+    ExerciseClassificationDraftRequest,
+    ExerciseClassificationDraftResponse,
+    ExerciseContentFeedbackRequest,
+    ExerciseContentFeedbackResponse,
     ExerciseCreateRequest,
     ExerciseDetailResponse,
+    ExerciseHistoryItemResponse,
+    ExerciseHistoryResponse,
+    ExerciseHistorySetResponse,
     ExerciseListItemResponse,
     ExerciseListQuery,
     ExerciseListResponse,
@@ -37,8 +47,10 @@ from nxtrep_backend.services.idempotency import (
     IdempotencyService,
     IdempotencyStateError,
 )
+from nxtrep_backend.services.workout import WorkoutNotFoundError, WorkoutService
 
 router = APIRouter()
+content_router = APIRouter()
 
 IdempotencyKey = Annotated[
     UUID,
@@ -48,6 +60,40 @@ ExpectedVersion = Annotated[
     int,
     Query(ge=1),
 ]
+
+
+@content_router.post(
+    "/{exercise_id}/feedback",
+    response_model=ExerciseContentFeedbackResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_exercise_content_feedback(
+    exercise_id: UUID,
+    body: ExerciseContentFeedbackRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> ExerciseContentFeedbackResponse:
+    repository = SqlAlchemyExercisesRepository(session)
+    try:
+        await ExercisesService(repository).get_exercise_detail(
+            user_id=user.id, exercise_id=exercise_id
+        )
+    except ExerciseNotFoundError as exc:
+        raise ApiError(
+            status_code=404,
+            code="EXERCISE_NOT_FOUND",
+            message="Exercise not found",
+        ) from exc
+    item = await repository.add_feedback(
+        ExerciseContentFeedback(
+            user_id=user.id,
+            exercise_id=exercise_id,
+            feedback_type=body.feedback_type,
+            message=body.message.strip(),
+            context=body.context,
+        )
+    )
+    return ExerciseContentFeedbackResponse.model_validate(item, from_attributes=True)
 
 
 def _build_exercise_detail_response(
@@ -150,6 +196,121 @@ async def get_exercise_detail(
         ) from exc
 
     return _build_exercise_detail_response(result)
+
+
+@router.get(
+    "/{exercise_id}/substitutions",
+    response_model=list[ExerciseSubstitutionResponse],
+)
+async def get_exercise_substitutions(
+    exercise_id: UUID,
+    user: CurrentUser,
+    session: DbSession,
+) -> list[ExerciseSubstitutionResponse]:
+    try:
+        result = await ExercisesService(SqlAlchemyExercisesRepository(session)).get_exercise_detail(
+            user_id=user.id, exercise_id=exercise_id
+        )
+    except ExerciseNotFoundError as exc:
+        raise ApiError(
+            status_code=404,
+            code="EXERCISE_NOT_FOUND",
+            message="Exercise not found",
+        ) from exc
+    return [
+        ExerciseSubstitutionResponse(
+            id=item.exercise.id,
+            name_zh=item.exercise.name_zh,
+            equipment=item.exercise.equipment,
+            reason=item.reason,
+        )
+        for item in result.substitutions
+    ]
+
+
+@router.get("/{exercise_id}/history", response_model=ExerciseHistoryResponse)
+async def get_exercise_history(
+    exercise_id: UUID,
+    user: CurrentUser,
+    session: DbSession,
+    limit: int = Query(default=10, ge=1, le=20),
+) -> ExerciseHistoryResponse:
+    service = WorkoutService(
+        SqlAlchemyWorkoutRepository(session),
+        SqlAlchemyTrainingRepository(session),
+    )
+    try:
+        entries = await service.list_exercise_history(
+            user_id=user.id,
+            exercise_id=exercise_id,
+            limit=limit,
+        )
+    except WorkoutNotFoundError as exc:
+        raise ApiError(
+            status_code=404,
+            code="EXERCISE_NOT_FOUND",
+            message="Exercise not found",
+        ) from exc
+    return ExerciseHistoryResponse(
+        exercise_id=exercise_id,
+        history=[
+            ExerciseHistoryItemResponse(
+                workout_id=entry.workout.id,
+                started_at=entry.workout.started_at,
+                status=entry.workout.status,
+                name_snapshot=entry.exercise.name_snapshot,
+                sets=[
+                    ExerciseHistorySetResponse.model_validate(item, from_attributes=True)
+                    for item in entry.sets
+                ],
+            )
+            for entry in entries
+        ],
+    )
+
+
+@router.post(
+    "/{exercise_id}/classification-drafts",
+    response_model=ExerciseClassificationDraftResponse,
+)
+async def create_exercise_classification_draft(
+    exercise_id: UUID,
+    body: ExerciseClassificationDraftRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> ExerciseClassificationDraftResponse:
+    try:
+        detail = await ExercisesService(SqlAlchemyExercisesRepository(session)).get_exercise_detail(
+            user_id=user.id, exercise_id=exercise_id
+        )
+    except ExerciseNotFoundError as exc:
+        raise ApiError(
+            status_code=404,
+            code="EXERCISE_NOT_FOUND",
+            message="Exercise not found",
+        ) from exc
+    if not detail.exercise.is_custom:
+        raise ApiError(
+            status_code=409,
+            code="EXERCISE_CLASSIFICATION_NOT_EDITABLE",
+            message="Only custom exercises can be classified",
+        )
+    if detail.exercise.version != body.expected_version:
+        raise ApiError(
+            status_code=409,
+            code="EXERCISE_VERSION_CONFLICT",
+            message="Exercise has been modified",
+            details={"current_version": detail.exercise.version},
+        )
+    return ExerciseClassificationDraftResponse(
+        exercise_id=exercise_id,
+        expected_version=body.expected_version,
+        suggested_movement_pattern=detail.exercise.movement_pattern,
+        suggested_difficulty=detail.exercise.difficulty,
+        suggested_primary_muscles=detail.primary_muscles,
+        suggested_secondary_muscles=detail.secondary_muscles,
+        confidence="0.65" if detail.primary_muscles else "0.30",
+    )
 
 
 @router.post(
@@ -303,15 +464,14 @@ async def update_custom_exercise(
 
 @router.delete(
     "/{exercise_id}",
-    response_model=None,
-    status_code=status.HTTP_200_OK,
+    status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_custom_exercise(
     exercise_id: UUID,
     expected_version: ExpectedVersion,
     user: CurrentUser,
     session: DbSession,
-) -> None:
+) -> Response:
     repository = SqlAlchemyExercisesRepository(session)
     service = ExercisesService(repository)
 
@@ -338,4 +498,4 @@ async def delete_custom_exercise(
             },
         ) from exc
 
-    return None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

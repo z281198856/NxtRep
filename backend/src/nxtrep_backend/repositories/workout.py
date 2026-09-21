@@ -23,13 +23,23 @@ class WorkoutAggregate:
     sets_by_exercise: dict[UUID, list[WorkoutSet]]
 
 
+@dataclass(slots=True)
+class ExerciseWorkoutEntry:
+    workout: Workout
+    exercise: WorkoutExercise
+    sets: list[WorkoutSet]
+
+
 class SqlAlchemyWorkoutRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def get_active(self, user_id: UUID) -> Workout | None:
         return await self.session.scalar(
-            select(Workout).where(Workout.user_id == user_id, Workout.status == "in_progress")
+            select(Workout).where(
+                Workout.user_id == user_id,
+                Workout.status.in_(("in_progress", "paused")),
+            )
         )
 
     async def add_workout(self, workout: Workout, exercises: list[WorkoutExercise]) -> None:
@@ -62,7 +72,10 @@ class SqlAlchemyWorkoutRepository:
         sets = list(
             await self.session.scalars(
                 select(WorkoutSet)
-                .where(WorkoutSet.workout_id == workout.id)
+                .where(
+                    WorkoutSet.workout_id == workout.id,
+                    WorkoutSet.voided_at.is_(None),
+                )
                 .order_by(WorkoutSet.workout_exercise_id, WorkoutSet.set_index)
             )
         )
@@ -100,6 +113,49 @@ class SqlAlchemyWorkoutRepository:
             )
         )
         return items, int(total or 0)
+
+    async def list_exercise_history(
+        self,
+        *,
+        user_id: UUID,
+        exercise_id: UUID,
+        limit: int,
+    ) -> list[ExerciseWorkoutEntry]:
+        rows = (
+            await self.session.execute(
+                select(Workout, WorkoutExercise)
+                .join(
+                    WorkoutExercise,
+                    WorkoutExercise.workout_id == Workout.id,
+                )
+                .where(
+                    Workout.user_id == user_id,
+                    WorkoutExercise.exercise_id == exercise_id,
+                )
+                .order_by(Workout.started_at.desc())
+                .limit(limit)
+            )
+        ).all()
+        entries: list[ExerciseWorkoutEntry] = []
+        for workout, exercise in rows:
+            sets = list(
+                await self.session.scalars(
+                    select(WorkoutSet)
+                    .where(
+                        WorkoutSet.workout_exercise_id == exercise.id,
+                        WorkoutSet.voided_at.is_(None),
+                    )
+                    .order_by(WorkoutSet.set_index)
+                )
+            )
+            entries.append(
+                ExerciseWorkoutEntry(
+                    workout=workout,
+                    exercise=exercise,
+                    sets=sets,
+                )
+            )
+        return entries
 
     async def get_workout_exercise(
         self, workout_id: UUID, item_id: UUID, *, lock: bool = False
@@ -145,6 +201,7 @@ class SqlAlchemyWorkoutRepository:
             select(WorkoutSet).where(
                 WorkoutSet.workout_exercise_id == workout_exercise_id,
                 WorkoutSet.set_index == set_index,
+                WorkoutSet.voided_at.is_(None),
             )
         )
 
@@ -157,10 +214,29 @@ class SqlAlchemyWorkoutRepository:
         self.session.add(revision)
         await self.session.flush()
 
+    async def list_set_revisions(self, user_id: UUID, workout_id: UUID) -> list[WorkoutSetRevision]:
+        return list(
+            await self.session.scalars(
+                select(WorkoutSetRevision)
+                .join(WorkoutSet, WorkoutSet.id == WorkoutSetRevision.set_id)
+                .join(Workout, Workout.id == WorkoutSet.workout_id)
+                .where(Workout.id == workout_id, Workout.user_id == user_id)
+                .order_by(WorkoutSetRevision.created_at, WorkoutSetRevision.id)
+            )
+        )
+
+    async def add_workout_exercise(self, item: WorkoutExercise) -> WorkoutExercise:
+        self.session.add(item)
+        await self.session.flush()
+        return item
+
     async def list_sets(self, workout_id: UUID) -> list[WorkoutSet]:
         return list(
             await self.session.scalars(
-                select(WorkoutSet).where(WorkoutSet.workout_id == workout_id)
+                select(WorkoutSet).where(
+                    WorkoutSet.workout_id == workout_id,
+                    WorkoutSet.voided_at.is_(None),
+                )
             )
         )
 
@@ -211,3 +287,12 @@ class SqlAlchemyWorkoutRepository:
             .where(PersonalRecord.workout_id == workout_id)
         )
         return int(value or 0)
+
+    async def list_records(self, workout_id: UUID) -> list[PersonalRecord]:
+        return list(
+            await self.session.scalars(
+                select(PersonalRecord)
+                .where(PersonalRecord.workout_id == workout_id)
+                .order_by(PersonalRecord.occurred_at, PersonalRecord.id)
+            )
+        )

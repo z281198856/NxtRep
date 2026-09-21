@@ -53,6 +53,7 @@ def test_token_pair_response() -> None:
         access_token="access-token",
         refresh_token="r" * 64,
         expires_in=900,
+        refresh_expires_in=2_592_000,
         user=AuthUserResponse(
             id=user_id,
             username="zengsiqi",
@@ -62,4 +63,5 @@ def test_token_pair_response() -> None:
 
     assert response.token_type == "bearer"
     assert response.expires_in == 900
+    assert response.refresh_expires_in == 2_592_000
     assert response.user.id == user_id

@@ -33,6 +33,8 @@ from nxtrep_backend.schemas.nutrition import (
 from nxtrep_backend.schemas.workout import (
     WorkoutCreateRequest,
     WorkoutFinishRequest,
+    WorkoutPauseRequest,
+    WorkoutResumeRequest,
     WorkoutSetCreateRequest,
 )
 from nxtrep_backend.services.body import BodyService
@@ -47,6 +49,61 @@ pytestmark = pytest.mark.skipif(
 )
 
 OFFICIAL_TEMPLATE_ID = UUID("20000000-0000-4000-8000-000000000001")
+
+
+@pytest.mark.asyncio
+async def test_workout_timer_state_persists_pause_and_resume() -> None:
+    async with SessionFactory() as session:
+        transaction = await session.begin()
+        try:
+            user = User(
+                username=f"workout-timer-{uuid4().hex}",
+                password_setup_required=False,
+            )
+            session.add(user)
+            await session.flush()
+
+            repository = SqlAlchemyWorkoutRepository(session)
+            service = WorkoutService(repository, SqlAlchemyTrainingRepository(session))
+            started_at = datetime(2026, 9, 12, 8, tzinfo=UTC)
+            aggregate = await service.create_workout(
+                user.id,
+                WorkoutCreateRequest(started_at=started_at),
+            )
+
+            paused = await service.pause_workout(
+                user.id,
+                aggregate.workout.id,
+                WorkoutPauseRequest(
+                    paused_at=started_at + timedelta(minutes=10),
+                    expected_version=1,
+                ),
+            )
+            assert paused.workout.status == "paused"
+            assert (await repository.get_active(user.id)).id == aggregate.workout.id
+
+            resumed = await service.resume_workout(
+                user.id,
+                aggregate.workout.id,
+                WorkoutResumeRequest(
+                    resumed_at=started_at + timedelta(minutes=20),
+                    expected_version=2,
+                ),
+            )
+            assert resumed.workout.status == "in_progress"
+            assert resumed.workout.total_paused_seconds == 600
+
+            finished = await service.finish_workout(
+                user.id,
+                aggregate.workout.id,
+                WorkoutFinishRequest(
+                    ended_at=started_at + timedelta(minutes=60),
+                    expected_version=3,
+                ),
+            )
+            assert finished["duration_seconds"] == 3000
+        finally:
+            await transaction.rollback()
 
 
 @pytest.mark.asyncio
@@ -288,11 +345,14 @@ async def test_remaining_domains_persist_snapshots_versions_and_confirmations() 
             )
             today_summary = await nutrition.daily_summary(user.id, date.today())
             assert today_summary["target"]["kcal_min"] == "2000"
-            assert await session.scalar(
-                select(func.count())
-                .select_from(NutritionEntry)
-                .where(NutritionEntry.user_id == user.id)
-            ) == 1
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(NutritionEntry)
+                    .where(NutritionEntry.user_id == user.id)
+                )
+                == 1
+            )
 
             body = BodyService(SqlAlchemyBodyRepository(session))
             measurement = await body.create_measurement(

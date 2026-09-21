@@ -1,5 +1,4 @@
-from datetime import date
-from decimal import Decimal
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Query
@@ -13,7 +12,6 @@ from nxtrep_backend.api.idempotency import (
     replay_response,
 )
 from nxtrep_backend.api.routes.training import _confirmation_response
-from nxtrep_backend.core.timezones import CHINA_TIMEZONE
 from nxtrep_backend.repositories.confirmation import SqlAlchemyConfirmationRepository
 from nxtrep_backend.repositories.training import SqlAlchemyTrainingRepository
 from nxtrep_backend.repositories.workout import SqlAlchemyWorkoutRepository, WorkoutAggregate
@@ -22,23 +20,33 @@ from nxtrep_backend.schemas.workout import (
     ExpectedVersionRequest,
     ProgressionDraftCreateRequest,
     ProgressionDraftResponse,
+    WorkoutAbandonRequest,
     WorkoutCreateRequest,
+    WorkoutExerciseAddRequest,
     WorkoutExerciseReplaceRequest,
     WorkoutExerciseResponse,
+    WorkoutExerciseSkipRequest,
     WorkoutFinishRequest,
     WorkoutFinishResponse,
-    WorkoutHistoryItem,
     WorkoutHistoryResponse,
+    WorkoutPauseRequest,
+    WorkoutPreCheckUpdateRequest,
     WorkoutResponse,
+    WorkoutRestTimerResponse,
+    WorkoutResumeRequest,
+    WorkoutRevisionResponse,
     WorkoutSetCreateRequest,
     WorkoutSetResponse,
     WorkoutSetUpdateRequest,
+    WorkoutSetVoidRequest,
+    WorkoutSummaryResponse,
 )
 from nxtrep_backend.services.workout import (
     WorkoutConflictError,
     WorkoutNotFoundError,
     WorkoutService,
     set_payload,
+    workout_duration_seconds,
 )
 
 router = APIRouter()
@@ -71,11 +79,41 @@ def _set_response(item) -> WorkoutSetResponse:
 
 def _workout_response(aggregate: WorkoutAggregate) -> WorkoutResponse:
     workout = aggregate.workout
+    now = datetime.now(UTC)
+    rest_timer = None
+    if workout.status == "in_progress":
+        latest = max(
+            (
+                (completed_set, exercise)
+                for exercise in aggregate.exercises
+                for completed_set in aggregate.sets_by_exercise.get(exercise.id, [])
+            ),
+            key=lambda pair: pair[0].completed_at,
+            default=None,
+        )
+        if latest is not None:
+            completed_set, exercise = latest
+            duration = int(exercise.target_snapshot.get("rest_seconds") or 0)
+            ends_at = completed_set.completed_at + timedelta(seconds=duration)
+            remaining = max(0, int((ends_at - now).total_seconds()))
+            if duration > 0 and remaining > 0:
+                rest_timer = WorkoutRestTimerResponse(
+                    workout_exercise_id=exercise.id,
+                    set_id=completed_set.id,
+                    duration_seconds=duration,
+                    started_at=completed_set.completed_at,
+                    ends_at=ends_at,
+                    remaining_seconds=remaining,
+                )
     return WorkoutResponse(
         id=workout.id,
         status=workout.status,
         started_at=workout.started_at,
         ended_at=workout.ended_at,
+        paused_at=workout.paused_at,
+        total_paused_seconds=int(workout.total_paused_seconds or 0),
+        elapsed_seconds=workout_duration_seconds(workout, now),
+        rest_timer=rest_timer,
         version=workout.version,
         pre_check=workout.pre_check,
         overall_difficulty=workout.overall_difficulty,
@@ -88,6 +126,8 @@ def _workout_response(aggregate: WorkoutAggregate) -> WorkoutResponse:
                 exercise_id=item.exercise_id,
                 name_snapshot=item.name_snapshot,
                 target_snapshot=item.target_snapshot,
+                skipped=bool(item.target_snapshot.get("skipped")),
+                skip_reason=item.target_snapshot.get("skip_reason"),
                 sets=[_set_response(row) for row in aggregate.sets_by_exercise.get(item.id, [])],
             )
             for item in aggregate.exercises
@@ -139,35 +179,14 @@ async def list_workouts(
             code="INVALID_DATE_RANGE",
             message="start_date must not exceed end_date",
         )
-    repository = SqlAlchemyWorkoutRepository(session)
-    workouts, total = await repository.list_workouts(
-        user.id, start_date, end_date, status_filter, page, page_size
-    )
-    items = []
-    for workout in workouts:
-        sets = await repository.list_sets(workout.id)
-        volume = sum((item.weight_kg * item.reps for item in sets), Decimal("0"))
-        items.append(
-            WorkoutHistoryItem(
-                id=workout.id,
-                date=workout.started_at.astimezone(CHINA_TIMEZONE).date(),
-                status=workout.status,
-                duration_seconds=(
-                    int((workout.ended_at - workout.started_at).total_seconds())
-                    if workout.ended_at
-                    else None
-                ),
-                completed_sets=len(sets),
-                total_volume_kg=volume,
-                pr_count=await repository.count_records(workout.id),
-            )
-        )
-    return WorkoutHistoryResponse(
-        list=items,
-        total=total,
+
+    return await _service(session).list_history(
+        user_id=user.id,
+        start_date=start_date,
+        end_date=end_date,
+        status=status_filter,
         page=page,
         page_size=page_size,
-        has_more=page * page_size < total,
     )
 
 
@@ -177,6 +196,45 @@ async def get_workout(workout_id: UUID, user: CurrentUser, session: DbSession) -
         return _workout_response(await _service(session).get_aggregate(user.id, workout_id))
     except RuntimeError as exc:
         _raise_workout_error(exc)
+
+
+@router.patch("/{workout_id}/pre-check", response_model=WorkoutResponse)
+async def update_workout_pre_check(
+    workout_id: UUID,
+    body: WorkoutPreCheckUpdateRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> WorkoutResponse:
+    try:
+        return _workout_response(
+            await _service(session).update_pre_check(user.id, workout_id, body)
+        )
+    except RuntimeError as exc:
+        _raise_workout_error(exc)
+
+
+@router.post("/{workout_id}/exercises", response_model=WorkoutResponse, status_code=201)
+async def add_workout_exercise(
+    workout_id: UUID,
+    body: WorkoutExerciseAddRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> WorkoutResponse:
+    operation = f"POST /workouts/{workout_id}/exercises"
+    idem, decision = await begin_idempotent(
+        session, user.id, idempotency_key, operation, body.model_dump(mode="json")
+    )
+    if replayed := replay_response(decision, WorkoutResponse, 201):
+        return replayed
+    try:
+        response = _workout_response(
+            await _service(session).add_exercise(user.id, workout_id, body)
+        )
+    except RuntimeError as exc:
+        _raise_workout_error(exc)
+    await complete_idempotent(idem, decision, response, 201)
+    return response
 
 
 @router.post("/{workout_id}/sets", response_model=WorkoutSetResponse, status_code=201)
@@ -215,6 +273,20 @@ async def update_workout_set(
         _raise_workout_error(exc)
 
 
+@router.delete("/{workout_id}/sets/{set_id}", response_model=WorkoutSetResponse)
+async def void_workout_set(
+    workout_id: UUID,
+    set_id: UUID,
+    body: WorkoutSetVoidRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> WorkoutSetResponse:
+    try:
+        return _set_response(await _service(session).void_set(user.id, workout_id, set_id, body))
+    except RuntimeError as exc:
+        _raise_workout_error(exc)
+
+
 @router.post("/{workout_id}/exercises/{item_id}/replace", response_model=WorkoutResponse)
 async def replace_workout_exercise(
     workout_id: UUID,
@@ -229,6 +301,134 @@ async def replace_workout_exercise(
         )
     except RuntimeError as exc:
         _raise_workout_error(exc)
+
+
+@router.post("/{workout_id}/exercises/{item_id}/skip", response_model=WorkoutResponse)
+async def skip_workout_exercise(
+    workout_id: UUID,
+    item_id: UUID,
+    body: WorkoutExerciseSkipRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> WorkoutResponse:
+    operation = f"POST /workouts/{workout_id}/exercises/{item_id}/skip"
+    idem, decision = await begin_idempotent(
+        session, user.id, idempotency_key, operation, body.model_dump(mode="json")
+    )
+    if replayed := replay_response(decision, WorkoutResponse, 200):
+        return replayed
+    try:
+        response = _workout_response(
+            await _service(session).skip_exercise(user.id, workout_id, item_id, body)
+        )
+    except RuntimeError as exc:
+        _raise_workout_error(exc)
+    await complete_idempotent(idem, decision, response, 200)
+    return response
+
+
+@router.post("/{workout_id}/pause", response_model=WorkoutResponse)
+async def pause_workout(
+    workout_id: UUID,
+    body: WorkoutPauseRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> WorkoutResponse:
+    operation = f"POST /workouts/{workout_id}/pause"
+    idem, decision = await begin_idempotent(
+        session, user.id, idempotency_key, operation, body.model_dump(mode="json")
+    )
+    if replayed := replay_response(decision, WorkoutResponse, 200):
+        return replayed
+    try:
+        response = _workout_response(
+            await _service(session).pause_workout(user.id, workout_id, body)
+        )
+    except RuntimeError as exc:
+        _raise_workout_error(exc)
+    await complete_idempotent(idem, decision, response, 200)
+    return response
+
+
+@router.post("/{workout_id}/resume", response_model=WorkoutResponse)
+async def resume_workout(
+    workout_id: UUID,
+    body: WorkoutResumeRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> WorkoutResponse:
+    operation = f"POST /workouts/{workout_id}/resume"
+    idem, decision = await begin_idempotent(
+        session, user.id, idempotency_key, operation, body.model_dump(mode="json")
+    )
+    if replayed := replay_response(decision, WorkoutResponse, 200):
+        return replayed
+    try:
+        response = _workout_response(
+            await _service(session).resume_workout(user.id, workout_id, body)
+        )
+    except RuntimeError as exc:
+        _raise_workout_error(exc)
+    await complete_idempotent(idem, decision, response, 200)
+    return response
+
+
+@router.post("/{workout_id}/abandon", response_model=WorkoutResponse)
+async def abandon_workout(
+    workout_id: UUID,
+    body: WorkoutAbandonRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> WorkoutResponse:
+    operation = f"POST /workouts/{workout_id}/abandon"
+    idem, decision = await begin_idempotent(
+        session, user.id, idempotency_key, operation, body.model_dump(mode="json")
+    )
+    if replayed := replay_response(decision, WorkoutResponse, 200):
+        return replayed
+    try:
+        response = _workout_response(
+            await _service(session).abandon_workout(user.id, workout_id, body)
+        )
+    except RuntimeError as exc:
+        _raise_workout_error(exc)
+    await complete_idempotent(idem, decision, response, 200)
+    return response
+
+
+@router.get("/{workout_id}/summary", response_model=WorkoutSummaryResponse)
+async def get_workout_summary(
+    workout_id: UUID,
+    user: CurrentUser,
+    session: DbSession,
+) -> WorkoutSummaryResponse:
+    try:
+        return WorkoutSummaryResponse.model_validate(
+            await _service(session).get_summary(user.id, workout_id)
+        )
+    except RuntimeError as exc:
+        _raise_workout_error(exc)
+
+
+@router.get("/{workout_id}/revisions", response_model=list[WorkoutRevisionResponse])
+async def list_workout_revisions(
+    workout_id: UUID,
+    user: CurrentUser,
+    session: DbSession,
+) -> list[WorkoutRevisionResponse]:
+    repository = SqlAlchemyWorkoutRepository(session)
+    if await repository.get_workout(user.id, workout_id) is None:
+        raise ApiError(
+            status_code=404,
+            code="WORKOUT_NOT_FOUND",
+            message="Workout not found",
+        )
+    rows = await repository.list_set_revisions(user.id, workout_id)
+    return [WorkoutRevisionResponse.model_validate(item, from_attributes=True) for item in rows]
 
 
 @router.post("/{workout_id}/finish", response_model=WorkoutFinishResponse)

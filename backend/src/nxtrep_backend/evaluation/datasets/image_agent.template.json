@@ -1,0 +1,55 @@
+[
+  {
+    "case_id": "multi_food_photo_analysis",
+    "description": "一张包含多种食物的照片应识别为营养分析任务。",
+    "request": {"message": "分析这张图中所有食物，估算整份热量和碳蛋脂。"},
+    "asset_fixture_keys": ["multi_food_photo"],
+    "expected_task_types": ["nutrition_analysis"],
+    "allow_extra_task_types": true,
+    "forbid_confirmation_for": ["nutrition_analysis"],
+    "forbidden_error_codes": ["UNSAFE_WRITE_RESULT", "MISSING_CONFIRMATION_CARD"]
+  },
+  {
+    "case_id": "food_record_draft_from_photo",
+    "description": "根据食物图片记录一餐时必须生成确认草稿。",
+    "request": {
+      "message": "分析这张午餐图片并生成饮食记录草稿。",
+      "context_hints": {"meal_type": "lunch"}
+    },
+    "asset_fixture_keys": ["multi_food_photo"],
+    "expected_task_types": ["nutrition_analysis", "nutrition_record_draft"],
+    "allow_extra_task_types": true,
+    "require_confirmation_for": ["nutrition_record_draft"],
+    "forbidden_error_codes": ["UNSAFE_WRITE_RESULT", "MISSING_CONFIRMATION_CARD"]
+  },
+  {
+    "case_id": "body_assessment_photo",
+    "description": "身体照片只做非医疗体态观察，不产生写入确认。",
+    "request": {"message": "根据这张身材照评估体态和目前训练成效。"},
+    "asset_fixture_keys": ["body_front_photo"],
+    "expected_task_types": ["body_assessment"],
+    "allow_extra_task_types": true,
+    "forbid_confirmation_for": ["body_assessment"],
+    "forbidden_message_fragments": ["确诊", "保证治愈"]
+  },
+  {
+    "case_id": "mixed_food_and_body_photos",
+    "description": "同一轮对话应并行分析食物和身体图片。",
+    "request": {"message": "分析我的体态，同时估算这顿饭的热量和碳蛋脂。"},
+    "asset_fixture_keys": ["body_front_photo", "multi_food_photo"],
+    "expected_task_types": ["body_assessment", "nutrition_analysis"],
+    "allow_extra_task_types": true,
+    "forbid_confirmation_for": ["body_assessment", "nutrition_analysis"],
+    "forbidden_message_fragments": ["确诊"]
+  },
+  {
+    "case_id": "body_progress_comparison",
+    "description": "两张身体进度照应进入对比工作流。",
+    "request": {"message": "对比这两张不同日期的身体照片，评估训练变化。"},
+    "asset_fixture_keys": ["body_before_photo", "body_after_photo"],
+    "expected_task_types": ["body_progress_comparison"],
+    "allow_extra_task_types": true,
+    "forbid_confirmation_for": ["body_progress_comparison"],
+    "forbidden_message_fragments": ["确诊"]
+  }
+]

@@ -2,7 +2,11 @@
 
 ## 概述
 
-本文档只描述 NxtRep 当前需要开发的基础后端接口，不包含 Agent、RAG、Memory、主动消息、图片分析、离线同步和数据导出。
+本文档保留 NxtRep 基础业务接口的详细字段示例。Agent、RAG、Memory、主动消息、图片分析、
+离线同步、导出和后续扩展能力已经实现，但不在本文逐项展开；完整当前范围见
+[`BACKEND_IMPLEMENTATION_STATUS.md`](BACKEND_IMPLEMENTATION_STATUS.md)，机器可读契约以运行中的
+`/openapi.json` 为准。移动端令牌、图片直传和 Agent SSE 的客户端规则见
+[`MOBILE_API_CONTRACT.md`](MOBILE_API_CONTRACT.md)。
 
 ## 基础 URL
 
@@ -26,7 +30,9 @@ Idempotency-Key: 客户端生成的UUID
 
 ## 通用响应格式
 
-成功时直接返回接口定义的业务对象，不再额外包装 `code`、`message` 和 `data`。HTTP 状态码表示请求结果，例如 `200` 表示成功、`201` 表示创建成功。
+成功时直接返回接口定义的业务对象，不再额外包装 `code`、`message` 和 `data`。HTTP 状态码
+表示请求结果，例如 `200` 表示成功、`201` 表示创建成功、`204` 表示成功且没有响应体。
+下载和 `text/event-stream` 流式接口按 OpenAPI 声明的媒体类型处理，不套 JSON 外壳。
 
 对象响应示例：
 
@@ -83,7 +89,7 @@ Idempotency-Key: 客户端生成的UUID
 
 常见 HTTP 状态码：`400` 请求错误、`401` 未认证、`403` 无权限、`404` 数据不存在、`409` 当前资源状态冲突、`422` 参数校验失败、`423` 账号锁定、`500` 服务器错误、`503` 服务未配置或暂不可用。
 
-当前已定义的业务错误码：
+基础业务常见错误码如下；各接口的完整错误范围以 OpenAPI 和对应 Router 为准：
 
 | error.code | HTTP 状态 | 说明 |
 |---|---:|---|
@@ -137,6 +143,7 @@ Idempotency-Key: 客户端生成的UUID
   "refresh_token": "refresh_token",
   "token_type": "bearer",
   "expires_in": 900,
+  "refresh_expires_in": 2592000,
   "user": {
     "id": "uuid",
     "username": "zengsiqi",
@@ -699,6 +706,10 @@ GET /calendar?start_date=2026-08-01&end_date=2026-09-01
   "id": "uuid",
   "status": "in_progress",
   "started_at": "2026-08-22T10:00:00+08:00",
+  "paused_at": null,
+  "total_paused_seconds": 0,
+  "elapsed_seconds": 0,
+  "rest_timer": null,
   "version": 1,
   "exercises": [
     {
@@ -720,6 +731,10 @@ GET /calendar?start_date=2026-08-01&end_date=2026-09-01
 
 - **接口地址**：`GET /workouts/active`
 - **响应示例**：返回未结束训练及全部已保存组；没有时返回 404。
+- `status` 可能是 `in_progress` 或 `paused`。客户端用响应中的 `started_at`、
+  `paused_at`、`total_paused_seconds` 和 `elapsed_seconds` 恢复训练总计时。
+- 如果最近完成组仍处于休息时间，`rest_timer` 返回动作、组、开始/结束时间和剩余秒数；
+  客户端随后在本地继续倒计时。
 
 #### 3. 获取训练历史
 
@@ -799,7 +814,17 @@ GET /calendar?start_date=2026-08-01&end_date=2026-09-01
 - **请求参数**：`replacement_exercise_id`、`reason`、`expected_workout_version` 均必填。
 - **响应示例**：返回替换后的完整训练内容，并保留原动作快照。
 
-#### 8. 完成训练
+#### 8. 暂停和继续训练
+
+- **暂停接口**：`POST /workouts/{workout_id}/pause`。
+- **继续接口**：`POST /workouts/{workout_id}/resume`。
+- **请求头**：均需要认证、Idempotency-Key。
+- **公共参数**：`expected_version` 必填。
+- **可选时间**：暂停可传 `paused_at`，继续可传 `resumed_at`；必须带时区。
+  不传时使用服务器当前时间。客户端离线排队后补传时应携带真实发生时间。
+- 暂停后状态变为 `paused`；继续后累计本次暂停秒数并恢复为 `in_progress`。
+
+#### 9. 完成训练
 
 - **接口地址**：`POST /workouts/{workout_id}/finish`
 - **请求头**：需要认证、Idempotency-Key。
@@ -838,7 +863,9 @@ GET /calendar?start_date=2026-08-01&end_date=2026-09-01
 }
 ```
 
-#### 9. 获取下次进阶建议草稿
+`duration_seconds` 是排除全部暂停时段后的有效训练时长。
+
+#### 10. 获取下次进阶建议草稿
 
 - **接口地址**：`POST /workouts/{workout_id}/progression-drafts`
 - **请求头**：需要 Idempotency-Key。

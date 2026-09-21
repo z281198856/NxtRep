@@ -10,6 +10,8 @@ from nxtrep_backend.repositories.profile import (
 )
 from nxtrep_backend.schemas.goals import (
     ConstraintsResponse,
+    GoalCheckResponse,
+    GoalResponse,
     GoalsAndConstraintsResponse,
     GoalsAndConstraintsUpdateRequest,
 )
@@ -150,8 +152,49 @@ async def get_goals_and_constraints(
     return _build_goals_response(result)
 
 
+@router.get("/goals", response_model=list[GoalResponse])
+async def list_goals(user: CurrentUser, session: DbSession) -> list[GoalResponse]:
+    items = await SqlAlchemyGoalsRepository(session).list_goals(user.id)
+    return [GoalResponse.model_validate(item, from_attributes=True) for item in items]
+
+
+@router.get("/constraints", response_model=ConstraintsResponse)
+async def get_constraints(user: CurrentUser, session: DbSession) -> ConstraintsResponse:
+    result = await get_goals_and_constraints(user, session)
+    return result.constraints
+
+
+@router.post("/goal-check", response_model=GoalCheckResponse)
+async def check_goal(
+    body: GoalsAndConstraintsUpdateRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> GoalCheckResponse:
+    requested = set(body.preferred_exercises) | set(body.disliked_exercises)
+    visible = await SqlAlchemyGoalsRepository(session).visible_exercise_ids(user.id, requested)
+    warnings = GoalsService._build_warnings(
+        goal_type=body.goal_type,
+        target_date=body.target_date,
+        equipment=body.equipment,
+    )
+    missing = requested - visible
+    if missing:
+        warnings.append("GOALS_EXERCISE_UNAVAILABLE")
+    return GoalCheckResponse(valid=not missing, warnings=warnings)
+
+
 @router.put(
     "/goals-and-constraints",
+    response_model=GoalsAndConstraintsResponse,
+    status_code=status.HTTP_200_OK,
+)
+@router.post(
+    "/goal-drafts",
+    response_model=GoalsAndConstraintsResponse,
+    status_code=status.HTTP_200_OK,
+)
+@router.put(
+    "/constraints",
     response_model=GoalsAndConstraintsResponse,
     status_code=status.HTTP_200_OK,
 )

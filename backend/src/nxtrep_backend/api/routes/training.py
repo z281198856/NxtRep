@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response, status
 
 from nxtrep_backend.api.deps import CurrentUser, DbSession
 from nxtrep_backend.api.errors import ApiError
@@ -11,18 +11,25 @@ from nxtrep_backend.api.idempotency import (
     replay_response,
 )
 from nxtrep_backend.repositories.confirmation import SqlAlchemyConfirmationRepository
+from nxtrep_backend.repositories.media import SqlAlchemyImageAssetRepository
 from nxtrep_backend.repositories.training import SqlAlchemyTrainingRepository
 from nxtrep_backend.schemas.confirmation import ConfirmationSubmitResponse
 from nxtrep_backend.schemas.training import (
     ActivePlanResponse,
     ExpectedVersionRequest,
+    PlanArchiveDraftRequest,
     PlanDraftCreateRequest,
     PlanDraftFromTemplateRequest,
+    PlanDraftGenerateRequest,
+    PlanDraftParseImageRequest,
+    PlanDraftParseTextRequest,
     PlanDraftResponse,
     PlanDraftUpdateRequest,
+    PlanRevisionDraftRequest,
     PlanValidationResponse,
     PlanVersionItemResponse,
     PlanVersionListResponse,
+    TrainingTemplateDetailResponse,
     TrainingTemplateResponse,
 )
 from nxtrep_backend.services.training import (
@@ -77,6 +84,19 @@ def _confirmation_response(item) -> ConfirmationSubmitResponse:
     )
 
 
+def _plan_version_response(item) -> PlanVersionItemResponse:
+    return PlanVersionItemResponse(
+        id=item.id,
+        plan_id=item.plan_id,
+        name=item.name,
+        version=item.version,
+        weekly_frequency=item.weekly_frequency,
+        days=item.days,
+        activated_at=item.activated_at,
+        status=item.status,
+    )
+
+
 @router.get("/templates", response_model=list[TrainingTemplateResponse])
 async def list_templates(
     user: CurrentUser,
@@ -98,6 +118,33 @@ async def list_templates(
         )
         for item in items
     ]
+
+
+@router.get(
+    "/templates/{template_id}",
+    response_model=TrainingTemplateDetailResponse,
+)
+async def get_template(
+    template_id: UUID,
+    user: CurrentUser,
+    session: DbSession,
+) -> TrainingTemplateDetailResponse:
+    item = await SqlAlchemyTrainingRepository(session).get_template(template_id)
+    if item is None:
+        raise ApiError(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="TRAINING_TEMPLATE_NOT_FOUND",
+            message="Training template not found",
+        )
+    return TrainingTemplateDetailResponse(
+        id=item.id,
+        name=item.name,
+        goal_types=item.goal_types,
+        days_per_week=item.days_per_week,
+        duration_minutes=item.duration_minutes,
+        equipment=item.equipment,
+        days=item.days,
+    )
 
 
 @router.post("/plan-drafts", response_model=PlanDraftResponse, status_code=201)
@@ -150,6 +197,133 @@ async def create_plan_draft_from_template(
     return response
 
 
+@router.post("/plan-drafts:parse-text", response_model=PlanDraftResponse, status_code=201)
+async def parse_text_plan_draft(
+    body: PlanDraftParseTextRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> PlanDraftResponse:
+    idem, decision = await begin_idempotent(
+        session,
+        user.id,
+        idempotency_key,
+        "POST /training/plan-drafts:parse-text",
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, PlanDraftResponse, 201):
+        return replayed
+    try:
+        response = _draft_response(
+            await _service(session).create_suggested_draft(
+                user_id=user.id,
+                source="parsed_text",
+                template_id=body.template_id,
+                name=body.name,
+            )
+        )
+    except RuntimeError as exc:
+        _raise_training_error(exc)
+    await complete_idempotent(idem, decision, response, 201)
+    return response
+
+
+@router.post("/plan-drafts:parse-image", response_model=PlanDraftResponse, status_code=201)
+async def parse_image_plan_draft(
+    body: PlanDraftParseImageRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> PlanDraftResponse:
+    idem, decision = await begin_idempotent(
+        session,
+        user.id,
+        idempotency_key,
+        "POST /training/plan-drafts:parse-image",
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, PlanDraftResponse, 201):
+        return replayed
+    asset = await SqlAlchemyImageAssetRepository(session).get_owned(
+        user_id=user.id, asset_id=body.image_asset_id
+    )
+    if asset is None:
+        raise ApiError(
+            status_code=404,
+            code="IMAGE_ASSET_NOT_FOUND",
+            message="Image asset not found",
+        )
+    if asset.status != "ready":
+        raise ApiError(
+            status_code=409,
+            code="IMAGE_ASSET_NOT_READY",
+            message="Image asset is not ready",
+        )
+    if asset.purpose not in {"training_plan", "chat_attachment"}:
+        raise ApiError(
+            status_code=409,
+            code="IMAGE_PURPOSE_INVALID",
+            message="Image is not a training plan asset",
+        )
+    try:
+        draft = await _service(session).create_suggested_draft(
+            user_id=user.id,
+            source="parsed_image",
+            template_id=body.template_id,
+            name=body.name,
+        )
+        draft.validation_warnings = [
+            *draft.validation_warnings,
+            {
+                "field": "image_asset_id",
+                "code": "IMAGE_PARSE_REQUIRES_REVIEW",
+                "message": (
+                    "The image establishes draft provenance; review all template-derived "
+                    "exercises before submitting"
+                ),
+            },
+        ]
+        await session.flush()
+        response = _draft_response(draft)
+    except RuntimeError as exc:
+        _raise_training_error(exc)
+    await complete_idempotent(idem, decision, response, 201)
+    return response
+
+
+@router.post("/plan-drafts:generate", response_model=PlanDraftResponse, status_code=201)
+async def generate_plan_draft(
+    body: PlanDraftGenerateRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> PlanDraftResponse:
+    idem, decision = await begin_idempotent(
+        session,
+        user.id,
+        idempotency_key,
+        "POST /training/plan-drafts:generate",
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, PlanDraftResponse, 201):
+        return replayed
+    try:
+        response = _draft_response(
+            await _service(session).create_suggested_draft(
+                user_id=user.id,
+                source="generated",
+                name=body.name,
+                goal_type=body.goal_type,
+                days_per_week=body.days_per_week,
+                equipment=body.equipment,
+            )
+        )
+    except RuntimeError as exc:
+        _raise_training_error(exc)
+    await complete_idempotent(idem, decision, response, 201)
+    return response
+
+
 @router.get("/plan-drafts/{draft_id}", response_model=PlanDraftResponse)
 async def get_plan_draft(
     draft_id: UUID, user: CurrentUser, session: DbSession
@@ -168,6 +342,27 @@ async def update_plan_draft(
         return _draft_response(await _service(session).update_draft(user.id, draft_id, body))
     except RuntimeError as exc:
         _raise_training_error(exc)
+
+
+@router.delete(
+    "/plan-drafts/{draft_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_plan_draft(
+    draft_id: UUID,
+    expected_version: int,
+    user: CurrentUser,
+    session: DbSession,
+) -> Response:
+    try:
+        await _service(session).delete_draft(
+            user_id=user.id,
+            draft_id=draft_id,
+            expected_version=expected_version,
+        )
+    except RuntimeError as exc:
+        _raise_training_error(exc)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/plan-drafts/{draft_id}/validate", response_model=PlanValidationResponse)
@@ -234,6 +429,46 @@ async def get_active_plan(user: CurrentUser, session: DbSession) -> ActivePlanRe
     )
 
 
+@router.get("/plans", response_model=PlanVersionListResponse)
+async def list_plans(
+    user: CurrentUser,
+    session: DbSession,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> PlanVersionListResponse:
+    items, total = await SqlAlchemyTrainingRepository(session).list_latest_plans(
+        user_id=user.id,
+        page=page,
+        page_size=page_size,
+    )
+    return PlanVersionListResponse(
+        list=[_plan_version_response(item) for item in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+        has_more=page * page_size < total,
+    )
+
+
+@router.get("/plans/{plan_id}", response_model=PlanVersionItemResponse)
+async def get_plan(
+    plan_id: UUID,
+    user: CurrentUser,
+    session: DbSession,
+) -> PlanVersionItemResponse:
+    item = await SqlAlchemyTrainingRepository(session).get_latest_plan(
+        user_id=user.id,
+        plan_id=plan_id,
+    )
+    if item is None:
+        raise ApiError(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="TRAINING_PLAN_NOT_FOUND",
+            message="Training plan not found",
+        )
+    return _plan_version_response(item)
+
+
 @router.get("/plans/{plan_id}/versions", response_model=PlanVersionListResponse)
 async def list_plan_versions(
     plan_id: UUID,
@@ -246,21 +481,105 @@ async def list_plan_versions(
         user.id, plan_id, page, page_size
     )
     return PlanVersionListResponse(
-        list=[
-            PlanVersionItemResponse(
-                id=item.id,
-                plan_id=item.plan_id,
-                name=item.name,
-                version=item.version,
-                weekly_frequency=item.weekly_frequency,
-                days=item.days,
-                activated_at=item.activated_at,
-                status=item.status,
-            )
-            for item in versions
-        ],
+        list=[_plan_version_response(item) for item in versions],
         total=total,
         page=page,
         page_size=page_size,
         has_more=page * page_size < total,
     )
+
+
+@router.get(
+    "/plans/{plan_id}/versions/{version}",
+    response_model=PlanVersionItemResponse,
+)
+async def get_plan_version(
+    plan_id: UUID,
+    version: int,
+    user: CurrentUser,
+    session: DbSession,
+) -> PlanVersionItemResponse:
+    item = await SqlAlchemyTrainingRepository(session).get_plan_version_for_user(
+        user_id=user.id,
+        plan_id=plan_id,
+        version=version,
+    )
+    if item is None:
+        raise ApiError(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="TRAINING_PLAN_VERSION_NOT_FOUND",
+            message="Training plan version not found",
+        )
+    return _plan_version_response(item)
+
+
+@router.post(
+    "/plans/{plan_id}/revision-drafts",
+    response_model=PlanDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_plan_revision_draft(
+    plan_id: UUID,
+    body: PlanRevisionDraftRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> PlanDraftResponse:
+    operation = f"POST /training/plans/{plan_id}/revision-drafts"
+    idem, decision = await begin_idempotent(
+        session,
+        user.id,
+        idempotency_key,
+        operation,
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, PlanDraftResponse, 201):
+        return replayed
+    try:
+        response = _draft_response(
+            await _service(session).create_revision_draft(
+                user_id=user.id,
+                plan_id=plan_id,
+                base_version=body.base_version,
+                name=body.name,
+            )
+        )
+    except RuntimeError as exc:
+        _raise_training_error(exc)
+    await complete_idempotent(idem, decision, response, 201)
+    return response
+
+
+@router.post(
+    "/plans/{plan_id}/archive-drafts",
+    response_model=ConfirmationSubmitResponse,
+)
+async def create_plan_archive_draft(
+    plan_id: UUID,
+    body: PlanArchiveDraftRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> ConfirmationSubmitResponse:
+    operation = f"POST /training/plans/{plan_id}/archive-drafts"
+    idem, decision = await begin_idempotent(
+        session,
+        user.id,
+        idempotency_key,
+        operation,
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, ConfirmationSubmitResponse, 200):
+        return replayed
+    try:
+        response = _confirmation_response(
+            await _service(session).create_archive_confirmation(
+                user_id=user.id,
+                plan_id=plan_id,
+                expected_version=body.expected_version,
+            )
+        )
+    except RuntimeError as exc:
+        _raise_training_error(exc)
+    await complete_idempotent(idem, decision, response, 200)
+    return response

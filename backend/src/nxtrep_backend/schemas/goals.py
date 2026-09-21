@@ -141,3 +141,8 @@ class GoalsAndConstraintsResponse(BaseModel):
     goal: GoalResponse
     constraints: ConstraintsResponse
     warnings: list[str]
+
+
+class GoalCheckResponse(BaseModel):
+    valid: bool
+    warnings: list[str]

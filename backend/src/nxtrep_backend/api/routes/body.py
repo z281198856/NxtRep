@@ -14,18 +14,25 @@ from nxtrep_backend.api.idempotency import (
     replay_response,
 )
 from nxtrep_backend.repositories.body import SqlAlchemyBodyRepository
+from nxtrep_backend.repositories.confirmation import SqlAlchemyConfirmationRepository
 from nxtrep_backend.schemas.body import (
+    BodyFatEstimateListResponse,
+    BodyFatEstimateResponse,
     BodyMeasurementCreateRequest,
+    BodyMeasurementDeleteRequest,
     BodyMeasurementListResponse,
     BodyMeasurementResponse,
     BodyMeasurementUpdateRequest,
     BodyTrendResponse,
+    ManualBodyFatRequest,
     NavyBodyFatRequest,
     NavyBodyFatResponse,
     PersonalRecordListResponse,
     PersonalRecordResponse,
     ProgressOverviewResponse,
+    ProgressSectionResponse,
 )
+from nxtrep_backend.schemas.confirmation import ConfirmationSubmitResponse
 from nxtrep_backend.services.body import BodyConflictError, BodyNotFoundError, BodyService
 
 body_router = APIRouter()
@@ -35,7 +42,10 @@ TrendWindow = Annotated[str, Query(pattern="^(raw|7d|14d)$")]
 
 
 def _service(session: DbSession) -> BodyService:
-    return BodyService(SqlAlchemyBodyRepository(session))
+    return BodyService(
+        SqlAlchemyBodyRepository(session),
+        SqlAlchemyConfirmationRepository(session),
+    )
 
 
 def _raise_body_error(exc: RuntimeError) -> None:
@@ -101,6 +111,22 @@ async def list_body_measurements(
     )
 
 
+@body_router.get("/measurements/{measurement_id}", response_model=BodyMeasurementResponse)
+async def get_body_measurement(
+    measurement_id: UUID,
+    user: CurrentUser,
+    session: DbSession,
+) -> BodyMeasurementResponse:
+    item = await SqlAlchemyBodyRepository(session).get_measurement(user.id, measurement_id)
+    if item is None:
+        raise ApiError(
+            status_code=404,
+            code="BODY_MEASUREMENT_NOT_FOUND",
+            message="Body measurement not found",
+        )
+    return _measurement_response(item)
+
+
 @body_router.patch("/measurements/{measurement_id}", response_model=BodyMeasurementResponse)
 async def update_body_measurement(
     measurement_id: UUID,
@@ -114,6 +140,34 @@ async def update_body_measurement(
         )
     except RuntimeError as exc:
         _raise_body_error(exc)
+
+
+@body_router.delete(
+    "/measurements/{measurement_id}",
+    response_model=ConfirmationSubmitResponse,
+)
+async def delete_body_measurement(
+    measurement_id: UUID,
+    body: BodyMeasurementDeleteRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> ConfirmationSubmitResponse:
+    try:
+        item = await _service(session).create_measurement_delete_confirmation(
+            user.id,
+            measurement_id,
+            body,
+        )
+    except RuntimeError as exc:
+        _raise_body_error(exc)
+    return ConfirmationSubmitResponse(
+        confirmation_id=item.id,
+        operation_type=item.operation_type,
+        status=item.status,
+        before=item.before,
+        after=item.after,
+        impact=item.impact,
+    )
 
 
 @body_router.post("/body-fat/navy", response_model=NavyBodyFatResponse)
@@ -149,6 +203,51 @@ async def calculate_navy_body_fat(
     return response
 
 
+@body_router.post(
+    "/body-fat/manual",
+    response_model=BodyFatEstimateResponse,
+    status_code=201,
+)
+async def save_manual_body_fat(
+    body: ManualBodyFatRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> BodyFatEstimateResponse:
+    idem, decision = await begin_idempotent(
+        session,
+        user.id,
+        idempotency_key,
+        "POST /body/body-fat/manual",
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, BodyFatEstimateResponse, 201):
+        return replayed
+    response = BodyFatEstimateResponse.model_validate(
+        await _service(session).save_manual_body_fat(user.id, body),
+        from_attributes=True,
+    )
+    await complete_idempotent(idem, decision, response, 201)
+    return response
+
+
+@body_router.get("/body-fat", response_model=BodyFatEstimateListResponse)
+async def list_body_fat(
+    user: CurrentUser,
+    session: DbSession,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> BodyFatEstimateListResponse:
+    items, total = await SqlAlchemyBodyRepository(session).list_body_fat(user.id, page, page_size)
+    return BodyFatEstimateListResponse(
+        list=[BodyFatEstimateResponse.model_validate(item, from_attributes=True) for item in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+        has_more=page * page_size < total,
+    )
+
+
 @progress_router.get("/overview", response_model=ProgressOverviewResponse)
 async def get_progress_overview(
     start_date: date, end_date: date, user: CurrentUser, session: DbSession
@@ -165,6 +264,7 @@ async def get_progress_overview(
 
 
 @progress_router.get("/body-trend", response_model=BodyTrendResponse)
+@progress_router.get("/body", response_model=BodyTrendResponse)
 async def get_body_trend(
     metric: BodyMetric,
     start_date: date,
@@ -181,6 +281,106 @@ async def get_body_trend(
         )
     points = await _service(session).body_trend(user.id, metric, start_date, end_date, window)
     return BodyTrendResponse(metric=metric, window=window, points=points)
+
+
+@progress_router.get("/training", response_model=ProgressSectionResponse)
+async def get_training_progress(
+    start_date: date,
+    end_date: date,
+    user: CurrentUser,
+    session: DbSession,
+) -> ProgressSectionResponse:
+    if start_date > end_date:
+        raise ApiError(
+            status_code=422,
+            code="INVALID_DATE_RANGE",
+            message="start_date must not exceed end_date",
+        )
+    overview = await _service(session).overview(user.id, start_date, end_date)
+    return ProgressSectionResponse(
+        start_date=start_date, end_date=end_date, data=overview["training"]
+    )
+
+
+@progress_router.get("/nutrition", response_model=ProgressSectionResponse)
+async def get_nutrition_progress(
+    start_date: date,
+    end_date: date,
+    user: CurrentUser,
+    session: DbSession,
+) -> ProgressSectionResponse:
+    if start_date > end_date:
+        raise ApiError(
+            status_code=422,
+            code="INVALID_DATE_RANGE",
+            message="start_date must not exceed end_date",
+        )
+    overview = await _service(session).overview(user.id, start_date, end_date)
+    return ProgressSectionResponse(
+        start_date=start_date,
+        end_date=end_date,
+        data=overview["nutrition"],
+    )
+
+
+@progress_router.get("/muscle-volume", response_model=ProgressSectionResponse)
+async def get_muscle_volume_progress(
+    start_date: date,
+    end_date: date,
+    user: CurrentUser,
+    session: DbSession,
+) -> ProgressSectionResponse:
+    if start_date > end_date:
+        raise ApiError(
+            status_code=422,
+            code="INVALID_DATE_RANGE",
+            message="start_date must not exceed end_date",
+        )
+    return ProgressSectionResponse(
+        start_date=start_date,
+        end_date=end_date,
+        data=await _service(session).muscle_volume(user.id, start_date, end_date),
+    )
+
+
+@progress_router.get("/recovery", response_model=ProgressSectionResponse)
+async def get_recovery_progress(
+    start_date: date,
+    end_date: date,
+    user: CurrentUser,
+    session: DbSession,
+) -> ProgressSectionResponse:
+    if start_date > end_date:
+        raise ApiError(
+            status_code=422,
+            code="INVALID_DATE_RANGE",
+            message="start_date must not exceed end_date",
+        )
+    return ProgressSectionResponse(
+        start_date=start_date,
+        end_date=end_date,
+        data=await _service(session).recovery(user.id, start_date, end_date),
+    )
+
+
+@progress_router.get("/correlations", response_model=ProgressSectionResponse)
+async def get_progress_correlations(
+    start_date: date,
+    end_date: date,
+    user: CurrentUser,
+    session: DbSession,
+) -> ProgressSectionResponse:
+    if start_date > end_date:
+        raise ApiError(
+            status_code=422,
+            code="INVALID_DATE_RANGE",
+            message="start_date must not exceed end_date",
+        )
+    return ProgressSectionResponse(
+        start_date=start_date,
+        end_date=end_date,
+        data=await _service(session).correlations(user.id, start_date, end_date),
+    )
 
 
 @progress_router.get("/prs", response_model=PersonalRecordListResponse)
@@ -213,4 +413,25 @@ async def list_personal_records(
         page=page,
         page_size=page_size,
         has_more=page * page_size < total,
+    )
+
+
+@progress_router.get("/prs/{record_id}", response_model=PersonalRecordResponse)
+async def get_personal_record(
+    record_id: UUID,
+    user: CurrentUser,
+    session: DbSession,
+) -> PersonalRecordResponse:
+    item = await SqlAlchemyBodyRepository(session).get_record(user.id, record_id)
+    if item is None:
+        raise ApiError(status_code=404, code="PERSONAL_RECORD_NOT_FOUND", message="PR not found")
+    return PersonalRecordResponse(
+        id=item.id,
+        exercise_id=item.exercise_id,
+        exercise_name=item.exercise_name_snapshot,
+        record_type=item.record_type,
+        value=item.value,
+        occurred_at=item.occurred_at,
+        workout_id=item.workout_id,
+        set_id=item.set_id,
     )

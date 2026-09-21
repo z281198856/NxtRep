@@ -1,3 +1,7 @@
+import pytest
+from pydantic import SecretStr, ValidationError
+
+from nxtrep_backend.core.config import Settings
 from nxtrep_backend.core.security import hash_password, verify_password
 
 
@@ -24,3 +28,20 @@ def test_verify_password_rejects_wrong_password() -> None:
 
     assert verify_password("wrong_password", password_hash) is False
     assert verify_password("wrong_password", "invalid-hash") is False
+
+
+def test_production_configuration_rejects_insecure_defaults() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, environment="production")
+
+
+def test_production_configuration_accepts_explicit_secure_values() -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        debug=False,
+        jwt_secret=SecretStr("production-secret-" * 3),
+        database_url="postgresql+asyncpg://app:strong-password@db:5432/nxtrep",
+        cors_origins=["https://app.example.com"],
+    )
+    assert settings.environment == "production"

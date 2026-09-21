@@ -94,7 +94,7 @@ class TrainingPlanVersion(IdMixin, TimestampMixin, Base):
     __tablename__ = "training_plan_versions"
     __table_args__ = (
         CheckConstraint("version >= 1", name="version_positive"),
-        CheckConstraint("status IN ('active', 'superseded')", name="status"),
+        CheckConstraint("status IN ('active', 'superseded', 'archived')", name="status"),
         UniqueConstraint("plan_id", "version", name="uq_training_plan_versions_plan_version"),
         Index(
             "uq_training_plan_versions_one_active_user",
@@ -123,9 +123,7 @@ class CalendarEvent(IdMixin, TimestampMixin, Base):
     __tablename__ = "calendar_events"
     __table_args__ = (
         CheckConstraint("status IN ('planned', 'completed', 'missed', 'skipped')", name="status"),
-        CheckConstraint(
-            "estimated_minutes BETWEEN 1 AND 300", name="estimated_minutes_range"
-        ),
+        CheckConstraint("estimated_minutes BETWEEN 1 AND 300", name="estimated_minutes_range"),
         Index("ix_calendar_events_user_date", "user_id", "scheduled_date"),
     )
 
@@ -157,7 +155,10 @@ class CalendarEvent(IdMixin, TimestampMixin, Base):
 class CalendarRescheduleDraft(IdMixin, TimestampMixin, Base):
     __tablename__ = "calendar_reschedule_drafts"
     __table_args__ = (
-        CheckConstraint("strategy IN ('shift', 'merge', 'skip')", name="strategy"),
+        CheckConstraint(
+            "strategy IN ('shift', 'merge', 'skip', 'compression', 'substitution')",
+            name="strategy",
+        ),
         CheckConstraint("status IN ('editing', 'submitted')", name="status"),
         CheckConstraint("version >= 1", name="version_positive"),
     )

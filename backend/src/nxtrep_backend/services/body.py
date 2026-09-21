@@ -1,14 +1,24 @@
 import math
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 
 from nxtrep_backend.core.timezones import CHINA_TIMEZONE
-from nxtrep_backend.db.models import BodyFatEstimate, BodyMeasurement, BodyMeasurementRevision
+from nxtrep_backend.db.models import (
+    BodyFatEstimate,
+    BodyMeasurement,
+    BodyMeasurementRevision,
+    Confirmation,
+)
 from nxtrep_backend.repositories.body import SqlAlchemyBodyRepository
+from nxtrep_backend.repositories.confirmation import (
+    SqlAlchemyConfirmationRepository,
+)
 from nxtrep_backend.schemas.body import (
     BodyMeasurementCreateRequest,
+    BodyMeasurementDeleteRequest,
     BodyMeasurementUpdateRequest,
+    ManualBodyFatRequest,
     NavyBodyFatRequest,
 )
 
@@ -24,14 +34,64 @@ class BodyConflictError(RuntimeError):
 
 
 class BodyService:
-    def __init__(self, repository: SqlAlchemyBodyRepository) -> None:
+    def __init__(
+        self,
+        repository: SqlAlchemyBodyRepository,
+        confirmations: SqlAlchemyConfirmationRepository | None = None,
+    ) -> None:
         self.repository = repository
+        self.confirmations = confirmations
+
+    async def list_personal_records(
+        self,
+        *,
+        user_id: UUID,
+        exercise_id: UUID | None = None,
+        record_type: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ):
+        if page < 1:
+            raise ValueError("page must be at least 1")
+        if not 1 <= page_size <= 100:
+            raise ValueError("page_size must be between 1 and 100")
+        return await self.repository.list_records(
+            user_id,
+            exercise_id,
+            record_type,
+            page,
+            page_size,
+        )
 
     async def create_measurement(
         self, user_id: UUID, body: BodyMeasurementCreateRequest
     ) -> BodyMeasurement:
         return await self.repository.add_measurement(
             BodyMeasurement(user_id=user_id, **body.model_dump())
+        )
+
+    async def propose_measurement(
+        self,
+        *,
+        user_id: UUID,
+        body: BodyMeasurementCreateRequest,
+    ) -> Confirmation:
+        """Create a confirmation without writing the measurement yet."""
+        if self.confirmations is None:
+            raise RuntimeError("Confirmation repository is required")
+        supplied = {
+            key: value for key, value in body.model_dump(mode="json").items() if value is not None
+        }
+        return await self.confirmations.add_confirmation(
+            Confirmation(
+                user_id=user_id,
+                operation_type="body_measurement_create",
+                before=None,
+                after={"measurement": body.model_dump(mode="json")},
+                reason="用户请求记录身体测量数据",
+                impact=f"确认后新增身体测量记录：{supplied}",
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
+            )
         )
 
     async def update_measurement(
@@ -72,6 +132,48 @@ class BodyService:
         )
         return item
 
+    async def create_measurement_delete_confirmation(
+        self,
+        user_id: UUID,
+        item_id: UUID,
+        body: BodyMeasurementDeleteRequest,
+    ) -> Confirmation:
+        if self.confirmations is None:
+            raise RuntimeError("Confirmation repository is required")
+        item = await self.repository.get_measurement(user_id, item_id)
+        if item is None:
+            raise BodyNotFoundError("Body measurement not found")
+        if item.version != body.expected_version:
+            raise BodyConflictError("Body measurement was modified", item.version)
+        return await self.confirmations.add_confirmation(
+            Confirmation(
+                user_id=user_id,
+                operation_type="body_measurement_delete",
+                before=self._snapshot(item),
+                after={
+                    "measurement_id": str(item.id),
+                    "expected_version": item.version,
+                },
+                reason=body.reason,
+                impact="确认后该测量从趋势与概览统计中移除，修订历史保留",
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
+            )
+        )
+
+    async def delete_measurement(
+        self,
+        user_id: UUID,
+        item_id: UUID,
+        expected_version: int,
+    ) -> dict:
+        item = await self.repository.get_measurement(user_id, item_id, lock=True)
+        if item is None or item.version != expected_version:
+            raise BodyConflictError("Body measurement changed before approval")
+        item.deleted_at = datetime.now(UTC)
+        item.version += 1
+        await self.repository.session.flush()
+        return {"resource_id": str(item.id), "resource_version": item.version}
+
     async def navy_body_fat(self, user_id: UUID, body: NavyBodyFatRequest) -> dict:
         inches = Decimal("0.3937007874")
         height = float(body.height_cm * inches)
@@ -107,15 +209,46 @@ class BodyService:
             )
         return result
 
+    async def save_manual_body_fat(
+        self,
+        user_id: UUID,
+        body: ManualBodyFatRequest,
+    ) -> BodyFatEstimate:
+        lower = body.range_min_percent or body.value_percent
+        upper = body.range_max_percent or body.value_percent
+        item = BodyFatEstimate(
+            user_id=user_id,
+            calculated_at=body.calculated_at,
+            method=body.method,
+            inputs={"notes": body.notes} if body.notes else {},
+            value_percent=body.value_percent,
+            range_min_percent=lower,
+            range_max_percent=upper,
+            confidence=body.confidence,
+        )
+        await self.repository.add_body_fat(item)
+        return item
+
     async def overview(self, user_id: UUID, start_date: date, end_date: date) -> dict:
-        workouts, entries, measurements, records, calendar_events = (
-            await self.repository.progress_rows(
-            user_id, start_date, end_date
-        )
-        )
+        (
+            workouts,
+            entries,
+            measurements,
+            records,
+            calendar_events,
+        ) = await self.repository.progress_rows(user_id, start_date, end_date)
         completed = [item for item in workouts if item.status == "completed"]
         total_minutes = sum(
-            int((item.ended_at - item.started_at).total_seconds() / 60)
+            max(
+                0,
+                int(
+                    (
+                        (item.ended_at - item.started_at).total_seconds()
+                        - int(getattr(item, "total_paused_seconds", 0) or 0)
+                    )
+                    / 60
+                ),
+            )
             for item in completed
             if item.ended_at
         )
@@ -127,9 +260,7 @@ class BodyService:
             )
         weighted = [item.weight_kg for item in measurements if item.weight_kg is not None]
         due_events = [
-            item
-            for item in calendar_events
-            if item.scheduled_date <= min(end_date, date.today())
+            item for item in calendar_events if item.scheduled_date <= min(end_date, date.today())
         ]
         completion = (
             Decimal(sum(item.status == "completed" for item in due_events))
@@ -140,9 +271,7 @@ class BodyService:
             else Decimal("0")
         )
         total_days = max((end_date - start_date).days + 1, 1)
-        completeness = min(
-            Decimal(len(kcal_by_day)) / Decimal(total_days), Decimal("1")
-        )
+        completeness = min(Decimal(len(kcal_by_day)) / Decimal(total_days), Decimal("1"))
         smoothed_change = None
         if len(weighted) >= 2:
             window = min(7, max(1, len(weighted) // 2))
@@ -158,10 +287,9 @@ class BodyService:
             },
             "nutrition": {
                 "average_kcal": str(
-                    (
-                        sum(kcal_by_day.values(), Decimal("0"))
-                        / Decimal(len(kcal_by_day))
-                    ).quantize(Decimal("0.01"))
+                    (sum(kcal_by_day.values(), Decimal("0")) / Decimal(len(kcal_by_day))).quantize(
+                        Decimal("0.01")
+                    )
                     if kcal_by_day
                     else Decimal("0.00")
                 ),
@@ -182,9 +310,7 @@ class BodyService:
             measurements = await self.repository.measurements_in_range(
                 user_id, start_date, end_date
             )
-            values = [
-                (item.calculated_at.date(), item.value_percent) for item in estimates
-            ] + [
+            values = [(item.calculated_at.date(), item.value_percent) for item in estimates] + [
                 (item.measured_at.date(), item.body_fat_percent)
                 for item in measurements
                 if item.body_fat_percent is not None
@@ -204,14 +330,87 @@ class BodyService:
         size = {"raw": 1, "7d": 7, "14d": 14}[window]
         points = []
         for day, raw in values:
-            recent = [
-                value
-                for recent_day, value in values
-                if 0 <= (day - recent_day).days < size
-            ]
+            recent = [value for recent_day, value in values if 0 <= (day - recent_day).days < size]
             smooth = sum(recent, Decimal("0")) / Decimal(len(recent))
             points.append({"date": day, "raw_value": raw, "smoothed_value": smooth})
         return points
+
+    async def muscle_volume(self, user_id: UUID, start_date: date, end_date: date) -> dict:
+        rows = await self.repository.muscle_volume_rows(user_id, start_date, end_date)
+        grouped: dict[str, dict] = {}
+        for muscle, role, weight, reps in rows:
+            value = Decimal(str(weight)) * Decimal(reps)
+            weighted_value = value if role == "primary" else value * Decimal("0.5")
+            bucket = grouped.setdefault(
+                muscle,
+                {"muscle": muscle, "volume_kg": Decimal("0"), "set_count": 0},
+            )
+            bucket["volume_kg"] += weighted_value
+            bucket["set_count"] += 1
+        distribution = sorted(
+            (
+                {
+                    **item,
+                    "volume_kg": str(item["volume_kg"].quantize(Decimal("0.01"))),
+                }
+                for item in grouped.values()
+            ),
+            key=lambda item: Decimal(item["volume_kg"]),
+            reverse=True,
+        )
+        return {"distribution": distribution, "method": "secondary muscles weighted at 50%"}
+
+    async def recovery(self, user_id: UUID, start_date: date, end_date: date) -> dict:
+        workouts, _, _, _, _ = await self.repository.progress_rows(user_id, start_date, end_date)
+        points = []
+        for item in sorted(workouts, key=lambda row: row.started_at):
+            sleep = item.pre_check.get("sleep_quality")
+            energy = item.pre_check.get("energy")
+            fatigue = item.fatigue
+            inputs = [value for value in (sleep, energy) if value is not None]
+            if fatigue is not None:
+                inputs.append(6 - fatigue)
+            score = Decimal(sum(inputs)) / Decimal(len(inputs)) * Decimal("20") if inputs else None
+            points.append(
+                {
+                    "date": item.started_at.astimezone(CHINA_TIMEZONE).date().isoformat(),
+                    "score": str(score.quantize(Decimal("0.1"))) if score is not None else None,
+                    "sleep_quality": sleep,
+                    "energy": energy,
+                    "fatigue": fatigue,
+                    "pain_flags": len(item.pain),
+                }
+            )
+        return {"points": points, "scale": "0-100", "data_points": len(points)}
+
+    async def correlations(self, user_id: UUID, start_date: date, end_date: date) -> dict:
+        workouts, entries, measurements, _, _ = await self.repository.progress_rows(
+            user_id, start_date, end_date
+        )
+        recorded_days = {item.eaten_at.astimezone(CHINA_TIMEZONE).date() for item in entries}
+        weighted = [item.weight_kg for item in measurements if item.weight_kg is not None]
+        possible = []
+        if len(weighted) >= 2 and len(workouts) >= 2:
+            possible.append(
+                {
+                    "variables": ["completed_workouts", "weight_change"],
+                    "observation": (
+                        f"{sum(item.status == 'completed' for item in workouts)} "
+                        "completed workouts; "
+                        f"weight changed by {weighted[-1] - weighted[0]} kg"
+                    ),
+                    "causal": False,
+                }
+            )
+        return {
+            "possible_relationships": possible,
+            "sample_sizes": {
+                "workouts": len(workouts),
+                "nutrition_days": len(recorded_days),
+                "body_measurements": len(measurements),
+            },
+            "warning": "Observational associations do not establish causation.",
+        }
 
     @staticmethod
     def _snapshot(item: BodyMeasurement) -> dict:

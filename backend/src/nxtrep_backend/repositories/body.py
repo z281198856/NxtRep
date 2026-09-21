@@ -9,9 +9,12 @@ from nxtrep_backend.db.models import (
     BodyMeasurement,
     BodyMeasurementRevision,
     CalendarEvent,
+    ExerciseMuscle,
     NutritionEntry,
     PersonalRecord,
     Workout,
+    WorkoutExercise,
+    WorkoutSet,
 )
 
 
@@ -28,7 +31,9 @@ class SqlAlchemyBodyRepository:
         self, user_id: UUID, measurement_id: UUID, *, lock: bool = False
     ) -> BodyMeasurement | None:
         statement = select(BodyMeasurement).where(
-            BodyMeasurement.id == measurement_id, BodyMeasurement.user_id == user_id
+            BodyMeasurement.id == measurement_id,
+            BodyMeasurement.user_id == user_id,
+            BodyMeasurement.deleted_at.is_(None),
         )
         if lock:
             statement = statement.with_for_update()
@@ -42,7 +47,10 @@ class SqlAlchemyBodyRepository:
         page: int,
         page_size: int,
     ) -> tuple[list[BodyMeasurement], int]:
-        conditions = [BodyMeasurement.user_id == user_id]
+        conditions = [
+            BodyMeasurement.user_id == user_id,
+            BodyMeasurement.deleted_at.is_(None),
+        ]
         if start_date:
             conditions.append(func.date(BodyMeasurement.measured_at) >= start_date)
         if end_date:
@@ -75,6 +83,27 @@ class SqlAlchemyBodyRepository:
         self.session.add(estimate)
         await self.session.flush()
 
+    async def list_body_fat(
+        self,
+        user_id: UUID,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[BodyFatEstimate], int]:
+        condition = BodyFatEstimate.user_id == user_id
+        total = await self.session.scalar(
+            select(func.count()).select_from(BodyFatEstimate).where(condition)
+        )
+        items = list(
+            await self.session.scalars(
+                select(BodyFatEstimate)
+                .where(condition)
+                .order_by(BodyFatEstimate.calculated_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        return items, int(total or 0)
+
     async def body_fat_in_range(
         self, user_id: UUID, start_date: date, end_date: date
     ) -> list[BodyFatEstimate]:
@@ -104,6 +133,7 @@ class SqlAlchemyBodyRepository:
             await self.session.scalars(
                 select(NutritionEntry).where(
                     NutritionEntry.user_id == user_id,
+                    NutritionEntry.deleted_at.is_(None),
                     func.date(NutritionEntry.eaten_at) >= start_date,
                     func.date(NutritionEntry.eaten_at) <= end_date,
                 )
@@ -156,3 +186,43 @@ class SqlAlchemyBodyRepository:
             )
         )
         return items, int(total or 0)
+
+    async def get_record(self, user_id: UUID, record_id: UUID) -> PersonalRecord | None:
+        return await self.session.scalar(
+            select(PersonalRecord).where(
+                PersonalRecord.id == record_id,
+                PersonalRecord.user_id == user_id,
+            )
+        )
+
+    async def muscle_volume_rows(
+        self, user_id: UUID, start_date: date, end_date: date
+    ) -> list[tuple[str, str, object, int]]:
+        return list(
+            (
+                await self.session.execute(
+                    select(
+                        ExerciseMuscle.muscle_code,
+                        ExerciseMuscle.role,
+                        WorkoutSet.weight_kg,
+                        WorkoutSet.reps,
+                    )
+                    .join(
+                        WorkoutExercise,
+                        WorkoutExercise.exercise_id == ExerciseMuscle.exercise_id,
+                    )
+                    .join(Workout, Workout.id == WorkoutExercise.workout_id)
+                    .join(
+                        WorkoutSet,
+                        WorkoutSet.workout_exercise_id == WorkoutExercise.id,
+                    )
+                    .where(
+                        Workout.user_id == user_id,
+                        Workout.status == "completed",
+                        WorkoutSet.voided_at.is_(None),
+                        func.date(Workout.started_at) >= start_date,
+                        func.date(Workout.started_at) <= end_date,
+                    )
+                )
+            ).all()
+        )

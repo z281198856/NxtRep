@@ -23,14 +23,18 @@ from nxtrep_backend.db.base import Base, IdMixin, TimestampMixin
 class Workout(IdMixin, TimestampMixin, Base):
     __tablename__ = "workouts"
     __table_args__ = (
-        CheckConstraint("status IN ('in_progress', 'completed', 'interrupted')", name="status"),
+        CheckConstraint(
+            "status IN ('in_progress', 'paused', 'completed', 'interrupted')",
+            name="status",
+        ),
+        CheckConstraint("total_paused_seconds >= 0", name="total_paused_seconds_non_negative"),
         CheckConstraint("version >= 1", name="version_positive"),
         Index("ix_workouts_user_started_at", "user_id", "started_at"),
         Index(
             "uq_workouts_one_active_user",
             "user_id",
             unique=True,
-            postgresql_where=text("status = 'in_progress'"),
+            postgresql_where=text("status IN ('in_progress', 'paused')"),
         ),
     )
 
@@ -44,6 +48,10 @@ class Workout(IdMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="in_progress")
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    total_paused_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     pre_check: Mapped[dict] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
@@ -109,6 +117,8 @@ class WorkoutSet(IdMixin, TimestampMixin, Base):
     )
     notes: Mapped[str | None] = mapped_column(String(1000))
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    void_reason: Mapped[str | None] = mapped_column(String(1000))
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1")
     )

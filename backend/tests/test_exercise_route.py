@@ -740,7 +740,7 @@ def test_exercise_update_is_registered_in_openapi(client: TestClient) -> None:
     assert "patch" in schema["paths"]["/api/v1/exercises/{exercise_id}"]
 
 
-def test_delete_custom_exercise_returns_json_null(
+def test_delete_custom_exercise_returns_no_content(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -754,8 +754,8 @@ def test_delete_custom_exercise_returns_json_null(
         params={"expected_version": 2},
     )
 
-    assert response.status_code == 200
-    assert response.json() is None
+    assert response.status_code == 204
+    assert response.content == b""
     delete_exercise.assert_awaited_once_with(
         user_id=user.id,
         exercise_id=exercise_id,

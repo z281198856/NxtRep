@@ -13,6 +13,37 @@ from nxtrep_backend.services.profile import (
 
 
 @pytest.mark.asyncio
+async def test_get_profile_returns_owned_profile() -> None:
+    user_id = uuid4()
+    profile = Profile(
+        user_id=user_id,
+        display_name="思琪",
+        version=1,
+    )
+    repository = MagicMock(spec=SqlAlchemyProfileRepository)
+    repository.get_by_user_id = AsyncMock(return_value=profile)
+    service = ProfileService(repository)
+
+    result = await service.get_profile(user_id=user_id)
+
+    assert result is profile
+    repository.get_by_user_id.assert_awaited_once_with(user_id)
+
+
+@pytest.mark.asyncio
+async def test_get_profile_rejects_missing_profile() -> None:
+    user_id = uuid4()
+    repository = MagicMock(spec=SqlAlchemyProfileRepository)
+    repository.get_by_user_id = AsyncMock(return_value=None)
+    service = ProfileService(repository)
+
+    with pytest.raises(ProfileNotFoundError, match="Profile not found"):
+        await service.get_profile(user_id=user_id)
+
+    repository.get_by_user_id.assert_awaited_once_with(user_id)
+
+
+@pytest.mark.asyncio
 async def test_update_profile_changes_supplied_fields_and_increments_version() -> None:
     user_id = uuid4()
     profile = Profile(

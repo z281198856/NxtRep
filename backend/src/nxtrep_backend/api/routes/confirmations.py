@@ -72,6 +72,22 @@ async def list_confirmations(
     )
 
 
+@router.get("/{confirmation_id}", response_model=ConfirmationListItem)
+async def get_confirmation(
+    confirmation_id: UUID,
+    user: CurrentUser,
+    session: DbSession,
+) -> ConfirmationListItem:
+    try:
+        item = await _database_service(session).get(
+            user_id=user.id,
+            confirmation_id=confirmation_id,
+        )
+    except RuntimeError as exc:
+        _raise_database_error(exc)
+    return ConfirmationListItem.model_validate(item, from_attributes=True)
+
+
 @router.post("/{confirmation_id}/approve", response_model=ConfirmationDecisionResponse)
 async def approve_confirmation(
     confirmation_id: UUID,
@@ -109,6 +125,25 @@ async def reject_confirmation(
         return _decision_response(
             await _database_service(session).reject(
                 user.id, confirmation_id, body.expected_version, body.reason
+            )
+        )
+    except RuntimeError as exc:
+        _raise_database_error(exc)
+
+
+@router.post("/{confirmation_id}/cancel", response_model=ConfirmationDecisionResponse)
+async def cancel_confirmation(
+    confirmation_id: UUID,
+    body: ConfirmationApproveRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> ConfirmationDecisionResponse:
+    try:
+        return _decision_response(
+            await _database_service(session).cancel(
+                user.id,
+                confirmation_id,
+                body.expected_version,
             )
         )
     except RuntimeError as exc:

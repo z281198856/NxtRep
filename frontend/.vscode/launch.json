@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "NxtRep - Pixel 8",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "debug",
+      "deviceId": "emulator-5554",
+      "toolArgs": [
+        "--dart-define=API_BASE_URL=http://10.0.2.2:8000/api/v1"
+      ],
+      "env": {
+        "ANDROID_HOME": "C:\\Android\\Sdk",
+        "ANDROID_SDK_ROOT": "C:\\Android\\Sdk",
+        "PUB_CACHE": "D:\\develop\\pub-cache",
+        "HTTP_PROXY": "http://127.0.0.1:10808",
+        "HTTPS_PROXY": "http://127.0.0.1:10808",
+        "NO_PROXY": "localhost,127.0.0.1,::1",
+        "GRADLE_OPTS": "-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=10808 -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=10808"
+      }
+    }
+  ]
+}

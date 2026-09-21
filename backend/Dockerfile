@@ -1,0 +1,26 @@
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src
+
+WORKDIR /app
+
+RUN groupadd --system nxtrep \
+    && useradd --system --gid nxtrep --home-dir /app --shell /usr/sbin/nologin nxtrep
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY alembic.ini ./
+COPY migrations ./migrations
+
+RUN pip install --no-cache-dir .
+
+USER nxtrep
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=3)"
+
+CMD ["uvicorn", "nxtrep_backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

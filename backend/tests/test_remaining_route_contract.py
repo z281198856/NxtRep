@@ -90,7 +90,16 @@ def test_documented_idempotent_commands_require_header() -> None:
         assert header["required"] is True
 
 
-def test_agent_route_was_not_extended_by_remaining_domain_work() -> None:
+def test_agent_routes_include_chat_conversation_and_run_management() -> None:
     schema = app.openapi()
     agent_paths = {path for path in schema["paths"] if "/agent/" in path}
-    assert agent_paths == {"/api/v1/agent/chat"}
+    assert agent_paths == {
+        "/api/v1/agent/chat",
+        "/api/v1/agent/chat/stream",
+        "/api/v1/agent/conversations",
+        "/api/v1/agent/conversations/{conversation_id}",
+        "/api/v1/agent/conversations/{conversation_id}/messages",
+        "/api/v1/agent/runs/{run_id}",
+        "/api/v1/agent/runs/{run_id}:cancel",
+        "/api/v1/agent/tool-runs",
+    }

@@ -4,7 +4,11 @@
 .ruff_cache/
 .uv-cache/
 .venv/
+.local/
 __pycache__/
 *.py[cod]
 *.db
+**/asset_fixtures.local.json
+**/rag_agent.local.json
 .postgresql.log
+/data/knowledge_sources/raw/

@@ -1,4 +1,6 @@
-from typing import Annotated, Self
+from datetime import datetime
+from decimal import Decimal
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
 from pydantic import (
@@ -215,3 +217,71 @@ class ExerciseUpdateRequest(BaseModel):
                 raise ValueError("A muscle cannot be both primary and secondary")
 
         return self
+
+
+class ExerciseHistorySetResponse(BaseModel):
+    set_index: int
+    weight_kg: Decimal
+    reps: int
+    rir: int | None
+    rpe: Decimal | None
+    completed_at: datetime
+
+
+class ExerciseHistoryItemResponse(BaseModel):
+    workout_id: UUID
+    started_at: datetime
+    status: str
+    name_snapshot: str
+    sets: list[ExerciseHistorySetResponse]
+
+
+class ExerciseHistoryResponse(BaseModel):
+    exercise_id: UUID
+    history: list[ExerciseHistoryItemResponse]
+
+
+class ExerciseClassificationDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+
+
+class ExerciseClassificationDraftResponse(BaseModel):
+    exercise_id: UUID
+    expected_version: int
+    suggested_movement_pattern: str | None
+    suggested_difficulty: str | None
+    suggested_primary_muscles: list[str]
+    suggested_secondary_muscles: list[str]
+    confidence: Decimal
+    requires_review: bool = True
+
+
+class ExerciseMediaResponse(BaseModel):
+    id: UUID
+    exercise_id: UUID
+    media_type: str
+    view_angle: str | None
+    alt_text: str | None
+    sort_order: int
+    download_url: str
+    expires_at: datetime
+
+
+class ExerciseContentFeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    feedback_type: Literal["instruction", "classification", "media", "safety", "other"]
+    message: str = Field(min_length=1, max_length=2000)
+    context: dict = Field(default_factory=dict)
+
+
+class ExerciseContentFeedbackResponse(BaseModel):
+    id: UUID
+    exercise_id: UUID
+    feedback_type: str
+    message: str
+    context: dict
+    status: str
+    created_at: datetime

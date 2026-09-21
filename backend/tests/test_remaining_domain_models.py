@@ -86,7 +86,5 @@ def test_plan_and_target_have_single_active_partial_indexes() -> None:
 
 
 def test_calendar_actual_workout_has_database_foreign_key() -> None:
-    targets = {
-        key.target_fullname for key in Base.metadata.tables["calendar_events"].foreign_keys
-    }
+    targets = {key.target_fullname for key in Base.metadata.tables["calendar_events"].foreign_keys}
     assert "workouts.id" in targets

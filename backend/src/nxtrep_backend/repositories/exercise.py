@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nxtrep_backend.db.models import (
     Exercise,
     ExerciseAlias,
+    ExerciseContentFeedback,
+    ExerciseMedia,
     ExerciseMuscle,
     ExerciseSubstitution,
 )
@@ -51,6 +53,27 @@ class ExerciseUpdateState:
 class SqlAlchemyExercisesRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def add_feedback(self, item: ExerciseContentFeedback) -> ExerciseContentFeedback:
+        self._session.add(item)
+        await self._session.flush()
+        return item
+
+    async def get_media_for_user(
+        self,
+        *,
+        user_id: UUID,
+        media_id: UUID,
+    ) -> ExerciseMedia | None:
+        return await self._session.scalar(
+            select(ExerciseMedia)
+            .join(Exercise, Exercise.id == ExerciseMedia.exercise_id)
+            .where(
+                ExerciseMedia.id == media_id,
+                Exercise.deleted_at.is_(None),
+                or_(Exercise.owner_user_id.is_(None), Exercise.owner_user_id == user_id),
+            )
+        )
 
     async def list_exercises(
         self,

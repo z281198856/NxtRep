@@ -79,3 +79,17 @@ class ProfileService:
         profile.version += 1
 
         return profile
+
+    async def get_profile(
+        self,
+        *,
+        user_id: UUID,
+    ) -> Profile:
+        profile = await self._repository.get_by_user_id(
+            user_id,
+        )
+
+        if profile is None:
+            raise ProfileNotFoundError("Profile not found")
+
+        return profile

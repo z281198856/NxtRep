@@ -8,9 +8,15 @@ from sqlalchemy.ext.asyncio import (
 
 from nxtrep_backend.core.config import get_settings
 
+settings = get_settings()
+
 engine = create_async_engine(
-    get_settings().database_url,
+    settings.database_url,
     pool_pre_ping=True,
+    pool_size=settings.database_pool_size,
+    max_overflow=settings.database_max_overflow,
+    pool_timeout=settings.database_pool_timeout_seconds,
+    pool_recycle=settings.database_pool_recycle_seconds,
 )
 
 SessionFactory = async_sessionmaker(
@@ -21,5 +27,10 @@ SessionFactory = async_sessionmaker(
 
 
 async def get_db_session() -> AsyncIterator[AsyncSession]:
-    async with SessionFactory.begin() as session:
-        yield session
+    async with SessionFactory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise

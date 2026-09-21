@@ -33,6 +33,24 @@ class Food(IdMixin, TimestampMixin, Base):
     brand: Mapped[str | None] = mapped_column(String(120))
     region: Mapped[str | None] = mapped_column(String(40), index=True)
     state: Mapped[str | None] = mapped_column(String(30), index=True)
+    barcode: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FoodAlias(IdMixin, TimestampMixin, Base):
+    __tablename__ = "food_aliases"
+    __table_args__ = (
+        UniqueConstraint("food_id", "alias", name="uq_food_aliases_food_alias"),
+        Index("ix_food_aliases_alias", "alias"),
+    )
+
+    food_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("foods.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    alias: Mapped[str] = mapped_column(String(160), nullable=False)
 
 
 class FoodVersion(IdMixin, TimestampMixin, Base):
@@ -82,6 +100,7 @@ class NutritionEntry(IdMixin, TimestampMixin, Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
     notes: Mapped[str | None] = mapped_column(String(2000))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1")
     )
@@ -96,6 +115,42 @@ class NutritionEntryRevision(IdMixin, TimestampMixin, Base):
     old_values: Mapped[dict] = mapped_column(JSONB, nullable=False)
     new_values: Mapped[dict] = mapped_column(JSONB, nullable=False)
     reason: Mapped[str] = mapped_column(String(1000), nullable=False)
+
+
+class NutritionEntryDraft(IdMixin, TimestampMixin, Base):
+    __tablename__ = "nutrition_entry_drafts"
+    __table_args__ = (
+        CheckConstraint("status IN ('editing', 'submitted')", name="status"),
+        CheckConstraint("version >= 1", name="version_positive"),
+        Index("ix_nutrition_entry_drafts_user_status", "user_id", "status"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    original_text: Mapped[str | None] = mapped_column(String(4000))
+    meal_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    eaten_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    items: Mapped[list[dict]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    totals: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    missing_items: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    questions: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    is_flexible_meal: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    notes: Mapped[str | None] = mapped_column(String(2000))
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="editing", server_default="editing"
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
 
 class NutritionTargetDraft(IdMixin, TimestampMixin, Base):
@@ -158,3 +213,46 @@ class NutritionTargetVersion(IdMixin, TimestampMixin, Base):
     values: Mapped[dict] = mapped_column(JSONB, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+class FlexibleMeal(IdMixin, TimestampMixin, Base):
+    __tablename__ = "flexible_meals"
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="version_positive"),
+        UniqueConstraint("user_id", "scheduled_date", name="uq_flexible_meals_user_date"),
+        Index("ix_flexible_meals_user_date", "user_id", "scheduled_date"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    scheduled_date: Mapped[date] = mapped_column(Date, nullable=False)
+    label: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="自由餐", server_default="自由餐"
+    )
+    notes: Mapped[str | None] = mapped_column(String(1000))
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+
+
+class Recipe(IdMixin, TimestampMixin, Base):
+    __tablename__ = "recipes"
+    __table_args__ = (
+        CheckConstraint("servings > 0", name="servings_positive"),
+        CheckConstraint("version >= 1", name="version_positive"),
+        Index("ix_recipes_user_name", "user_id", "name"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    servings: Mapped[Decimal] = mapped_column(Numeric(8, 2), nullable=False)
+    items: Mapped[list[dict]] = mapped_column(JSONB, nullable=False)
+    totals: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    notes: Mapped[str | None] = mapped_column(String(2000))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )

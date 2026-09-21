@@ -67,6 +67,7 @@ def test_login_returns_token_pair(
         access_token="access-token",
         refresh_token="r" * 32,
         expires_in=900,
+        refresh_expires_in=2_592_000,
         user=user,
     )
 
@@ -81,12 +82,15 @@ def test_login_returns_token_pair(
         "refresh_token": "r" * 32,
         "token_type": "bearer",
         "expires_in": 900,
+        "refresh_expires_in": 2_592_000,
         "user": {
             "id": str(user.id),
             "username": "zengsiqi",
             "password_setup_required": False,
         },
     }
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
     login.assert_awaited_once_with(
         username="zengsiqi",
         password="correct-password",

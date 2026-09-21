@@ -60,6 +60,7 @@ class BodyMeasurement(IdMixin, TimestampMixin, Base):
     source: Mapped[str] = mapped_column(String(30), nullable=False)
     conditions: Mapped[str | None] = mapped_column(String(500))
     notes: Mapped[str | None] = mapped_column(String(2000))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1")
     )

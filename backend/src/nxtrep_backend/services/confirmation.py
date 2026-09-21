@@ -63,6 +63,17 @@ class DatabaseConfirmationService:
     async def list(self, user_id: UUID, status: str | None, page: int, page_size: int):
         return await self.repository.list_confirmations(user_id, status, page, page_size)
 
+    async def get(
+        self,
+        *,
+        user_id: UUID,
+        confirmation_id: UUID,
+    ) -> Confirmation:
+        item = await self.repository.get_confirmation(user_id, confirmation_id)
+        if item is None:
+            raise DatabaseConfirmationNotFoundError("Confirmation not found")
+        return item
+
     async def approve(
         self, user_id: UUID, confirmation_id: UUID, expected_version: int
     ) -> Confirmation:
@@ -102,6 +113,23 @@ class DatabaseConfirmationService:
         await self.repository.session.flush()
         return item
 
+    async def cancel(
+        self,
+        user_id: UUID,
+        confirmation_id: UUID,
+        expected_version: int,
+    ) -> Confirmation:
+        item = await self.repository.get_confirmation(user_id, confirmation_id, lock=True)
+        self._check_pending(item, expected_version)
+        if item is None:
+            raise DatabaseConfirmationNotFoundError("Confirmation not found")
+        item.status = "cancelled"
+        item.rejection_reason = "cancelled_by_user"
+        item.executed_at = datetime.now(UTC)
+        item.version += 1
+        await self.repository.session.flush()
+        return item
+
     async def _execute(self, item: Confirmation) -> dict:
         session = self.repository.session
         if item.operation_type == "training_plan_activate":
@@ -114,6 +142,15 @@ class DatabaseConfirmationService:
                 UUID(item.after["base_plan_version_id"])
                 if item.after.get("base_plan_version_id")
                 else None,
+            )
+        if item.operation_type == "training_plan_archive":
+            from nxtrep_backend.services.training import TrainingService
+
+            return await TrainingService(SqlAlchemyTrainingRepository(session)).archive_plan(
+                user_id=item.user_id,
+                plan_id=UUID(item.after["plan_id"]),
+                version_id=UUID(item.after["version_id"]),
+                version=int(item.after["version"]),
             )
         if item.operation_type == "calendar_reschedule":
             from nxtrep_backend.services.training import TrainingService
@@ -132,6 +169,86 @@ class DatabaseConfirmationService:
                 if item.after.get("base_target_version_id")
                 else None,
             )
+        if item.operation_type == "nutrition_entry_create":
+            from nxtrep_backend.schemas.nutrition import NutritionEntryCreateRequest
+            from nxtrep_backend.services.nutrition import NutritionService
+
+            entry = await NutritionService(SqlAlchemyNutritionRepository(session)).create_entry(
+                item.user_id,
+                NutritionEntryCreateRequest.model_validate(item.after["entry"]),
+            )
+            return {"resource_id": str(entry.id), "resource_version": entry.version}
+        if item.operation_type == "nutrition_entry_delete":
+            from nxtrep_backend.services.nutrition import NutritionService
+
+            return await NutritionService(SqlAlchemyNutritionRepository(session)).delete_entry(
+                item.user_id,
+                UUID(item.after["entry_id"]),
+                int(item.after["expected_version"]),
+            )
+        if item.operation_type == "body_measurement_create":
+            from nxtrep_backend.repositories.body import SqlAlchemyBodyRepository
+            from nxtrep_backend.schemas.body import BodyMeasurementCreateRequest
+            from nxtrep_backend.services.body import BodyService
+
+            measurement = await BodyService(SqlAlchemyBodyRepository(session)).create_measurement(
+                item.user_id,
+                BodyMeasurementCreateRequest.model_validate(item.after["measurement"]),
+            )
+            return {
+                "resource_id": str(measurement.id),
+                "resource_version": measurement.version,
+            }
+        if item.operation_type == "body_measurement_delete":
+            from nxtrep_backend.repositories.body import SqlAlchemyBodyRepository
+            from nxtrep_backend.services.body import BodyService
+
+            return await BodyService(SqlAlchemyBodyRepository(session)).delete_measurement(
+                item.user_id,
+                UUID(item.after["measurement_id"]),
+                int(item.after["expected_version"]),
+            )
+        if item.operation_type == "memory_create":
+            from nxtrep_backend.repositories.memory import SqlAlchemyMemoryRepository
+            from nxtrep_backend.services.memory import MemoryService
+
+            memory = await MemoryService(SqlAlchemyMemoryRepository(session)).create(
+                user_id=item.user_id,
+                category=item.after["category"],
+                content=item.after["content"],
+            )
+            return {
+                "resource_id": str(memory.id),
+                "resource_version": memory.version,
+            }
+        if item.operation_type == "memory_update":
+            from nxtrep_backend.repositories.memory import SqlAlchemyMemoryRepository
+            from nxtrep_backend.services.memory import MemoryService
+
+            memory = await MemoryService(SqlAlchemyMemoryRepository(session)).update(
+                user_id=item.user_id,
+                memory_id=UUID(item.after["memory_id"]),
+                expected_version=int(item.after["expected_version"]),
+                category=item.after["category"],
+                content=item.after["content"],
+            )
+            return {
+                "resource_id": str(memory.id),
+                "resource_version": memory.version,
+            }
+        if item.operation_type == "memory_delete":
+            from nxtrep_backend.repositories.memory import SqlAlchemyMemoryRepository
+            from nxtrep_backend.services.memory import MemoryService
+
+            memory = await MemoryService(SqlAlchemyMemoryRepository(session)).delete(
+                user_id=item.user_id,
+                memory_id=UUID(item.after["memory_id"]),
+                expected_version=int(item.after["expected_version"]),
+            )
+            return {
+                "resource_id": str(memory.id),
+                "resource_version": memory.version,
+            }
         if item.operation_type == "training_progression_apply":
             from nxtrep_backend.services.workout import WorkoutService
 

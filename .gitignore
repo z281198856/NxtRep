@@ -1,0 +1,6 @@
+# Local runtime and diagnostic artifacts
+/tmp/
+/backend/tmp/
+
+# Generated frame-by-frame UI captures; keep final QA screenshots.
+/frontend/artifacts/screenshots/nxtrep-stream-*/

@@ -18,9 +18,80 @@ from nxtrep_backend.services.account import (
     InvalidCredentialsError,
     InvalidRefreshTokenError,
     InvalidSetupTokenError,
+    PasswordReuseError,
     PasswordSetupRequiredError,
+    RefreshSessionNotFoundError,
     UsernameAlreadyExistsError,
 )
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_matching_refresh_session_idempotently() -> None:
+    token = "l" * 64
+    refresh_session = RefreshSession(
+        user_id=uuid4(),
+        token_hash=hash_opaque_token(token),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    repository = MagicMock(spec=SqlAlchemyUserRepository)
+    repository.get_active_refresh_session_by_token_hash = AsyncMock(
+        return_value=refresh_session
+    )
+
+    await AccountService(repository, make_settings()).logout(
+        refresh_token=token
+    )
+
+    assert refresh_session.revoked_at is not None
+    assert refresh_session.last_used_at is not None
+
+
+@pytest.mark.asyncio
+async def test_change_password_revokes_old_sessions_and_issues_new_pair() -> None:
+    user = make_login_ready_user(password="current-password")
+    repository = MagicMock(spec=SqlAlchemyUserRepository)
+    repository.get_by_id = AsyncMock(return_value=user)
+    repository.revoke_active_refresh_sessions = AsyncMock()
+    repository.add_refresh_session = AsyncMock()
+    settings = make_settings()
+
+    result = await AccountService(repository, settings).change_password(
+        user_id=user.id,
+        current_password="current-password",
+        new_password="different-password",
+        device_name="Windows",
+    )
+
+    assert verify_password("different-password", user.credential.password_hash)
+    repository.revoke_active_refresh_sessions.assert_awaited_once()
+    repository.add_refresh_session.assert_awaited_once()
+    assert decode_access_token(result.access_token, settings) == user.id
+
+
+@pytest.mark.asyncio
+async def test_change_password_rejects_password_reuse() -> None:
+    user = make_login_ready_user(password="current-password")
+    repository = MagicMock(spec=SqlAlchemyUserRepository)
+    repository.get_by_id = AsyncMock(return_value=user)
+
+    with pytest.raises(PasswordReuseError):
+        await AccountService(repository, make_settings()).change_password(
+            user_id=user.id,
+            current_password="current-password",
+            new_password="current-password",
+        )
+
+
+@pytest.mark.asyncio
+async def test_revoke_session_rejects_unknown_or_foreign_session() -> None:
+    repository = MagicMock(spec=SqlAlchemyUserRepository)
+    repository.get_active_refresh_session_by_id = AsyncMock(return_value=None)
+
+    with pytest.raises(RefreshSessionNotFoundError):
+        await AccountService(repository, make_settings()).revoke_session(
+            user_id=uuid4(),
+            session_id=uuid4(),
+        )
 
 
 def make_settings() -> Settings:

@@ -1,27 +1,32 @@
-from uuid import UUID
-
 from langchain.agents import create_agent
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from nxtrep_backend.agents.prompts import SYSTEM_PROMPT
-from nxtrep_backend.agents.tools import build_read_tools
+from nxtrep_backend.agents.tools import AgentToolContext, ToolGroup, build_tools
 from nxtrep_backend.core.config import Settings
+from nxtrep_backend.providers.models import build_text_model
 
 
-def build_agent(settings: Settings, user_id: UUID):
-    if settings.openai_api_key is None:
-        raise ValueError("NXTREP_OPENAI_API_KEY is not configured")
+def build_chat_model(settings: Settings) -> BaseChatModel:
+    """Backward-compatible Agent entrypoint delegated to the model gateway."""
+    return build_text_model(settings)
 
-    model = ChatOpenAI(
-        model=settings.openai_model,
-        api_key=settings.openai_api_key.get_secret_value(),
-        temperature=0.2,
-        timeout=45,
-        max_retries=2,
-    )
+
+def build_agent(
+    settings: Settings,
+    *,
+    tool_context: AgentToolContext | None = None,
+    tool_groups: frozenset[ToolGroup] | None = None,
+    model: BaseChatModel | None = None,
+):
+    if tool_context is None and tool_groups is not None:
+        raise ValueError("tool_context is required when tool_groups are provided")
+
+    tools = build_tools(tool_context, groups=tool_groups) if tool_context is not None else []
+
     return create_agent(
-        model=model,
-        tools=build_read_tools(user_id),
+        model=model or build_chat_model(settings),
+        tools=tools,
         system_prompt=SYSTEM_PROMPT,
         name="nxtrep_coach",
     )

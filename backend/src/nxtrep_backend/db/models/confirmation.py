@@ -14,7 +14,8 @@ class Confirmation(IdMixin, TimestampMixin, Base):
     __tablename__ = "confirmations"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'succeeded', 'rejected', 'failed', 'expired')", name="status"
+            "status IN ('pending', 'succeeded', 'rejected', 'cancelled', 'failed', 'expired')",
+            name="status",
         ),
         CheckConstraint("version >= 1", name="version_positive"),
         Index("ix_confirmations_user_status", "user_id", "status"),

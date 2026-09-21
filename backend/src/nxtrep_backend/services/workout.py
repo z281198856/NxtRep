@@ -3,6 +3,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
+from nxtrep_backend.core.timezones import CHINA_TIMEZONE
 from nxtrep_backend.db.models import (
     Confirmation,
     PersonalRecord,
@@ -18,11 +19,20 @@ from nxtrep_backend.repositories.training import SqlAlchemyTrainingRepository
 from nxtrep_backend.repositories.workout import SqlAlchemyWorkoutRepository, WorkoutAggregate
 from nxtrep_backend.schemas.workout import (
     ProgressionDraftCreateRequest,
+    WorkoutAbandonRequest,
     WorkoutCreateRequest,
+    WorkoutExerciseAddRequest,
     WorkoutExerciseReplaceRequest,
+    WorkoutExerciseSkipRequest,
     WorkoutFinishRequest,
+    WorkoutHistoryItem,
+    WorkoutHistoryResponse,
+    WorkoutPauseRequest,
+    WorkoutPreCheckUpdateRequest,
+    WorkoutResumeRequest,
     WorkoutSetCreateRequest,
     WorkoutSetUpdateRequest,
+    WorkoutSetVoidRequest,
 )
 
 
@@ -47,8 +57,19 @@ def set_payload(item: WorkoutSet) -> dict:
         "tags": item.tags,
         "notes": item.notes,
         "completed_at": item.completed_at,
+        "voided_at": item.voided_at,
+        "void_reason": item.void_reason,
         "version": item.version,
     }
+
+
+def workout_duration_seconds(workout: Workout, at: datetime | None = None) -> int:
+    """Return elapsed training time, excluding completed and current pauses."""
+    end = workout.ended_at or at or datetime.now(UTC)
+    paused_seconds = int(workout.total_paused_seconds or 0)
+    if workout.status == "paused" and workout.paused_at is not None:
+        paused_seconds += max(0, int((end - workout.paused_at).total_seconds()))
+    return max(0, int((end - workout.started_at).total_seconds()) - paused_seconds)
 
 
 class WorkoutService:
@@ -135,6 +156,176 @@ class WorkoutService:
             raise WorkoutNotFoundError("No active workout")
         return await self.get_aggregate(user_id, workout.id)
 
+    async def update_pre_check(
+        self,
+        user_id: UUID,
+        workout_id: UUID,
+        body: WorkoutPreCheckUpdateRequest,
+    ) -> WorkoutAggregate:
+        workout = await self.repository.get_workout(user_id, workout_id, lock=True)
+        if workout is None:
+            raise WorkoutNotFoundError("Workout not found")
+        if workout.status != "in_progress" or workout.version != body.expected_version:
+            raise WorkoutConflictError("Workout was modified or finished", workout.version)
+        workout.pre_check = body.model_dump(exclude={"expected_version"}, mode="json")
+        workout.version += 1
+        await self.repository.session.flush()
+        return await self.get_aggregate(user_id, workout_id)
+
+    async def add_exercise(
+        self,
+        user_id: UUID,
+        workout_id: UUID,
+        body: WorkoutExerciseAddRequest,
+    ) -> WorkoutAggregate:
+        workout = await self.repository.get_workout(user_id, workout_id, lock=True)
+        if workout is None:
+            raise WorkoutNotFoundError("Workout not found")
+        if workout.status != "in_progress" or workout.version != body.expected_workout_version:
+            raise WorkoutConflictError("Workout was modified or finished", workout.version)
+        exercise = await self.repository.get_exercise(user_id, body.exercise_id)
+        if exercise is None:
+            raise WorkoutNotFoundError("Exercise not found")
+        aggregate = await self.get_aggregate(user_id, workout_id)
+        order_no = max((item.order_no for item in aggregate.exercises), default=0) + 1
+        await self.repository.add_workout_exercise(
+            WorkoutExercise(
+                workout_id=workout_id,
+                exercise_id=exercise.id,
+                original_exercise_id=exercise.id,
+                name_snapshot=exercise.name_zh,
+                target_snapshot={
+                    "sets": body.target_sets,
+                    "rep_min": body.rep_min,
+                    "rep_max": body.rep_max,
+                    "target_load_kg": (
+                        str(body.target_load_kg) if body.target_load_kg is not None else None
+                    ),
+                    "target_rir": body.target_rir,
+                    "rest_seconds": body.rest_seconds,
+                },
+                order_no=order_no,
+            )
+        )
+        workout.version += 1
+        await self.repository.session.flush()
+        return await self.get_aggregate(user_id, workout_id)
+
+    async def skip_exercise(
+        self,
+        user_id: UUID,
+        workout_id: UUID,
+        item_id: UUID,
+        body: WorkoutExerciseSkipRequest,
+    ) -> WorkoutAggregate:
+        workout = await self.repository.get_workout(user_id, workout_id, lock=True)
+        if workout is None:
+            raise WorkoutNotFoundError("Workout not found")
+        if workout.status != "in_progress" or workout.version != body.expected_workout_version:
+            raise WorkoutConflictError("Workout was modified or finished", workout.version)
+        item = await self.repository.get_workout_exercise(workout_id, item_id, lock=True)
+        if item is None:
+            raise WorkoutNotFoundError("Workout exercise not found")
+        target = dict(item.target_snapshot)
+        target["skipped"] = True
+        target["skip_reason"] = body.reason
+        target["skipped_at"] = datetime.now(UTC).isoformat()
+        item.target_snapshot = target
+        workout.version += 1
+        await self.repository.session.flush()
+        return await self.get_aggregate(user_id, workout_id)
+
+    async def pause_workout(
+        self,
+        user_id: UUID,
+        workout_id: UUID,
+        body: WorkoutPauseRequest,
+    ) -> WorkoutAggregate:
+        workout = await self.repository.get_workout(user_id, workout_id, lock=True)
+        if workout is None:
+            raise WorkoutNotFoundError("Workout not found")
+        if workout.status != "in_progress" or workout.version != body.expected_version:
+            raise WorkoutConflictError("Workout was modified or finished", workout.version)
+        paused_at = body.paused_at or datetime.now(UTC)
+        if paused_at < workout.started_at:
+            raise WorkoutConflictError("paused_at cannot precede started_at", workout.version)
+        workout.status = "paused"
+        workout.paused_at = paused_at
+        workout.version += 1
+        await self.repository.session.flush()
+        return await self.get_aggregate(user_id, workout_id)
+
+    async def resume_workout(
+        self,
+        user_id: UUID,
+        workout_id: UUID,
+        body: WorkoutResumeRequest,
+    ) -> WorkoutAggregate:
+        workout = await self.repository.get_workout(user_id, workout_id, lock=True)
+        if workout is None:
+            raise WorkoutNotFoundError("Workout not found")
+        if workout.status != "paused" or workout.version != body.expected_version:
+            raise WorkoutConflictError("Workout was modified or is not paused", workout.version)
+        resumed_at = body.resumed_at or datetime.now(UTC)
+        if workout.paused_at is None or resumed_at < workout.paused_at:
+            raise WorkoutConflictError("resumed_at cannot precede paused_at", workout.version)
+        workout.total_paused_seconds = int(workout.total_paused_seconds or 0) + int(
+            (resumed_at - workout.paused_at).total_seconds()
+        )
+        workout.paused_at = None
+        workout.status = "in_progress"
+        workout.version += 1
+        await self.repository.session.flush()
+        return await self.get_aggregate(user_id, workout_id)
+
+    async def abandon_workout(
+        self,
+        user_id: UUID,
+        workout_id: UUID,
+        body: WorkoutAbandonRequest,
+    ) -> WorkoutAggregate:
+        workout = await self.repository.get_workout(user_id, workout_id, lock=True)
+        if workout is None:
+            raise WorkoutNotFoundError("Workout not found")
+        if (
+            workout.status not in {"in_progress", "paused"}
+            or workout.version != body.expected_version
+        ):
+            raise WorkoutConflictError("Workout was modified or finished", workout.version)
+        if body.ended_at < workout.started_at:
+            raise WorkoutConflictError("ended_at cannot precede started_at", workout.version)
+        workout.ended_at = body.ended_at
+        self._close_pause(workout, body.ended_at)
+        workout.status = "interrupted"
+        workout.interruption_reason = body.reason
+        workout.version += 1
+        if workout.calendar_event_id:
+            event = await self.training.get_calendar_event(
+                user_id, workout.calendar_event_id, lock=True
+            )
+            if event is not None and event.status == "planned":
+                event.status = "missed"
+        await self.repository.session.flush()
+        return await self.get_aggregate(user_id, workout_id)
+
+    async def list_exercise_history(
+        self,
+        *,
+        user_id: UUID,
+        exercise_id: UUID,
+        limit: int = 10,
+    ):
+        if not 1 <= limit <= 20:
+            raise ValueError("limit must be between 1 and 20")
+        exercise = await self.repository.get_exercise(user_id, exercise_id)
+        if exercise is None:
+            raise WorkoutNotFoundError("Exercise not found")
+        return await self.repository.list_exercise_history(
+            user_id=user_id,
+            exercise_id=exercise_id,
+            limit=limit,
+        )
+
     async def create_set(
         self, user_id: UUID, workout_id: UUID, body: WorkoutSetCreateRequest
     ) -> WorkoutSet:
@@ -179,6 +370,8 @@ class WorkoutService:
         item = await self.repository.get_set(workout_id, set_id, lock=True)
         if item is None:
             raise WorkoutNotFoundError("Workout set not found")
+        if item.voided_at is not None:
+            raise WorkoutConflictError("Workout set is voided", item.version)
         if item.version != body.expected_version:
             raise WorkoutConflictError("Workout set was modified", item.version)
         fields = body.model_fields_set - {"reason", "expected_version"}
@@ -197,6 +390,79 @@ class WorkoutService:
         )
         return item
 
+    async def void_set(
+        self,
+        user_id: UUID,
+        workout_id: UUID,
+        set_id: UUID,
+        body: WorkoutSetVoidRequest,
+    ) -> WorkoutSet:
+        workout = await self.repository.get_workout(user_id, workout_id, lock=True)
+        if workout is None:
+            raise WorkoutNotFoundError("Workout not found")
+        item = await self.repository.get_set(workout_id, set_id, lock=True)
+        if item is None:
+            raise WorkoutNotFoundError("Workout set not found")
+        if item.version != body.expected_version:
+            raise WorkoutConflictError("Workout set was modified", item.version)
+        if item.voided_at is not None:
+            return item
+        item.voided_at = datetime.now(UTC)
+        item.void_reason = body.reason
+        item.version += 1
+        workout.version += 1
+        await self.repository.add_set_revision(
+            WorkoutSetRevision(
+                set_id=item.id,
+                old_values={"voided_at": None, "void_reason": None},
+                new_values={
+                    "voided_at": item.voided_at.isoformat(),
+                    "void_reason": item.void_reason,
+                },
+                reason=body.reason,
+            )
+        )
+        await self.repository.session.flush()
+        return item
+
+    async def get_summary(self, user_id: UUID, workout_id: UUID) -> dict:
+        aggregate = await self.get_aggregate(user_id, workout_id)
+        workout = aggregate.workout
+        sets = [item for rows in aggregate.sets_by_exercise.values() for item in rows]
+        target_sets = sum(
+            int(item.target_snapshot.get("sets", 0))
+            for item in aggregate.exercises
+            if not item.target_snapshot.get("skipped")
+        )
+        working_sets = [item for item in sets if "warmup" not in item.tags]
+        adherence = (
+            min(Decimal(len(working_sets)) / Decimal(target_sets), Decimal("1"))
+            if target_sets
+            else Decimal("0")
+        )
+        records = await self.repository.list_records(workout_id)
+        return {
+            "workout_id": workout.id,
+            "status": workout.status,
+            "started_at": workout.started_at,
+            "ended_at": workout.ended_at,
+            "duration_seconds": workout_duration_seconds(workout),
+            "completed_sets": len(sets),
+            "total_volume_kg": sum((item.weight_kg * item.reps for item in sets), Decimal("0")),
+            "prs": [
+                {
+                    "id": str(item.id),
+                    "exercise_id": str(item.exercise_id) if item.exercise_id else None,
+                    "record_type": item.record_type,
+                    "value": str(item.value),
+                    "set_id": str(item.set_id),
+                }
+                for item in records
+            ],
+            "pain_flags": workout.pain,
+            "plan_adherence": adherence.quantize(Decimal("0.01")),
+        }
+
     async def replace_exercise(
         self,
         user_id: UUID,
@@ -207,7 +473,10 @@ class WorkoutService:
         workout = await self.repository.get_workout(user_id, workout_id, lock=True)
         if workout is None:
             raise WorkoutNotFoundError("Workout not found")
-        if workout.version != body.expected_workout_version:
+        if (
+            workout.status != "in_progress"
+            or workout.version != body.expected_workout_version
+        ):
             raise WorkoutConflictError("Workout was modified", workout.version)
         item = await self.repository.get_workout_exercise(workout_id, item_id, lock=True)
         replacement = await self.repository.get_exercise(user_id, body.replacement_exercise_id)
@@ -237,11 +506,15 @@ class WorkoutService:
         workout = await self.repository.get_workout(user_id, workout_id, lock=True)
         if workout is None:
             raise WorkoutNotFoundError("Workout not found")
-        if workout.status != "in_progress" or workout.version != body.expected_version:
+        if (
+            workout.status not in {"in_progress", "paused"}
+            or workout.version != body.expected_version
+        ):
             raise WorkoutConflictError("Workout was modified or finished", workout.version)
         if body.ended_at < workout.started_at:
             raise WorkoutConflictError("ended_at cannot precede started_at", workout.version)
         workout.ended_at = body.ended_at
+        self._close_pause(workout, body.ended_at)
         workout.status = "interrupted" if body.interruption_reason else "completed"
         workout.overall_difficulty = body.overall_difficulty
         workout.fatigue = body.fatigue
@@ -273,9 +546,7 @@ class WorkoutService:
             }
             for record_type, candidate in candidates.items():
                 value = (
-                    candidate.weight_kg
-                    if record_type == "max_weight"
-                    else Decimal(candidate.reps)
+                    candidate.weight_kg if record_type == "max_weight" else Decimal(candidate.reps)
                 )
                 previous = await self.repository.best_record(
                     user_id, exercise.exercise_id, record_type
@@ -303,7 +574,7 @@ class WorkoutService:
         await self.repository.session.flush()
         return {
             "workout_id": workout.id,
-            "duration_seconds": int((body.ended_at - workout.started_at).total_seconds()),
+            "duration_seconds": workout_duration_seconds(workout),
             "completed_sets": len(sets),
             "total_volume_kg": total_volume,
             "prs": [
@@ -322,7 +593,7 @@ class WorkoutService:
         self, user_id: UUID, workout_id: UUID, body: ProgressionDraftCreateRequest
     ) -> ProgressionDraft:
         aggregate = await self.get_aggregate(user_id, workout_id)
-        if aggregate.workout.status == "in_progress":
+        if aggregate.workout.status in {"in_progress", "paused"}:
             raise WorkoutConflictError("Finish the workout before requesting progression")
         selected = set(body.exercise_ids or [])
         suggestions: list[dict] = []
@@ -457,11 +728,84 @@ class WorkoutService:
         await self.training.session.flush()
         return {"resource_id": str(current.plan_id), "resource_version": version.version}
 
+    async def list_history(
+        self,
+        *,
+        user_id: UUID,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        status: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> WorkoutHistoryResponse:
+        if start_date and end_date and start_date > end_date:
+            raise ValueError("start_date must not exceed end_date")
+
+        if page < 1:
+            raise ValueError("page must be at least 1")
+
+        if not 1 <= page_size <= 100:
+            raise ValueError("page_size must be between 1 and 100")
+
+        workouts, total = await self.repository.list_workouts(
+            user_id,
+            start_date,
+            end_date,
+            status,
+            page,
+            page_size,
+        )
+
+        items = []
+
+        for workout in workouts:
+            sets = await self.repository.list_sets(workout.id)
+
+            total_volume = sum(
+                (workout_set.weight_kg * workout_set.reps for workout_set in sets),
+                Decimal("0"),
+            )
+
+            items.append(
+                WorkoutHistoryItem(
+                    id=workout.id,
+                    date=workout.started_at.astimezone(CHINA_TIMEZONE).date(),
+                    status=workout.status,
+                    duration_seconds=(
+                        workout_duration_seconds(workout)
+                        if workout.ended_at is not None
+                        else None
+                    ),
+                    completed_sets=len(sets),
+                    total_volume_kg=total_volume,
+                    pr_count=(await self.repository.count_records(workout.id)),
+                )
+            )
+
+        return WorkoutHistoryResponse(
+            list=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            has_more=page * page_size < total,
+        )
+
     @staticmethod
     def _find_day(version: TrainingPlanVersion | None, plan_day_id: UUID | None) -> dict | None:
         if version is None or plan_day_id is None:
             return None
         return next((day for day in version.days if str(day.get("id")) == str(plan_day_id)), None)
+
+    @staticmethod
+    def _close_pause(workout: Workout, ended_at: datetime) -> None:
+        if workout.status != "paused":
+            return
+        if workout.paused_at is None or ended_at < workout.paused_at:
+            raise WorkoutConflictError("ended_at cannot precede paused_at", workout.version)
+        workout.total_paused_seconds = int(workout.total_paused_seconds or 0) + int(
+            (ended_at - workout.paused_at).total_seconds()
+        )
+        workout.paused_at = None
 
     @staticmethod
     def _json_values(values: dict) -> dict:

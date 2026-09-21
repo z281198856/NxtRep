@@ -61,6 +61,25 @@ class PlanDraftFromTemplateRequest(StrictModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
 
 
+class PlanDraftParseTextRequest(StrictModel):
+    text: str = Field(min_length=1, max_length=10_000)
+    template_id: UUID | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class PlanDraftParseImageRequest(StrictModel):
+    image_asset_id: UUID
+    template_id: UUID | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class PlanDraftGenerateRequest(StrictModel):
+    goal_type: str | None = Field(default=None, max_length=40)
+    days_per_week: int | None = Field(default=None, ge=1, le=7)
+    equipment: str | None = Field(default=None, max_length=40)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
 class PlanDraftUpdateRequest(StrictModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     weekly_frequency: int | None = Field(default=None, ge=1, le=7)
@@ -78,6 +97,11 @@ class TrainingTemplateResponse(BaseModel):
     goal_types: list[str]
     days_per_week: int
     duration_minutes: int
+
+
+class TrainingTemplateDetailResponse(TrainingTemplateResponse):
+    equipment: list[str]
+    days: list[dict]
 
 
 class PlanDraftResponse(BaseModel):
@@ -120,6 +144,15 @@ class PlanVersionListResponse(BaseModel):
     has_more: bool
 
 
+class PlanRevisionDraftRequest(StrictModel):
+    base_version: int = Field(ge=1)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class PlanArchiveDraftRequest(StrictModel):
+    expected_version: int = Field(ge=1)
+
+
 class CalendarEventResponse(BaseModel):
     id: UUID
     scheduled_date: date
@@ -128,6 +161,18 @@ class CalendarEventResponse(BaseModel):
     title: str
     estimated_minutes: int
     actual_workout_id: UUID | None
+
+
+class CalendarEventDetailResponse(CalendarEventResponse):
+    plan_version_id: UUID | None
+    content_snapshot: dict | None
+
+
+class CalendarEventCreateRequest(StrictModel):
+    scheduled_date: date
+    title: str = Field(min_length=1, max_length=120)
+    estimated_minutes: int = Field(ge=1, le=300)
+    exercises: list[PlanExerciseInput] = Field(default_factory=list, max_length=50)
 
 
 class RescheduleDraftCreateRequest(StrictModel):
@@ -152,3 +197,16 @@ class RescheduleDraftResponse(BaseModel):
     volume_change_percent: Decimal
     warnings: list[str]
     version: int
+
+
+class CompressionDraftCreateRequest(StrictModel):
+    event_id: UUID
+    target_minutes: Literal[15, 30, 45]
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class SubstitutionDraftCreateRequest(StrictModel):
+    event_id: UUID
+    exercise_id: UUID
+    replacement_exercise_id: UUID
+    reason: str = Field(min_length=1, max_length=1000)
