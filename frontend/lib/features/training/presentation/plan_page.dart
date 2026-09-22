@@ -11,10 +11,12 @@ class PlanPage extends StatefulWidget {
     super.key,
     required this.controller,
     required this.onAskCoach,
+    required this.onOpenExerciseLibrary,
   });
 
   final PlanController controller;
   final Future<void> Function(String prompt) onAskCoach;
+  final VoidCallback onOpenExerciseLibrary;
 
   @override
   State<PlanPage> createState() => _PlanPageState();
@@ -177,6 +179,49 @@ class _PlanPageState extends State<PlanPage> {
                       event: event,
                       onCreate: () => _askForPlan('适合当前条件的'),
                     ),
+                  const SizedBox(height: 24),
+                  AppSurface(
+                    onTap: widget.onOpenExerciseLibrary,
+                    padding: const EdgeInsets.all(17),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            color: AppColors.indigoSoft,
+                            borderRadius: BorderRadius.circular(17),
+                          ),
+                          child: const Icon(
+                            Icons.accessibility_new_rounded,
+                            color: AppColors.indigo,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '动作库',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                '查看动作步骤、替代动作和历史训练',
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(color: AppColors.muted),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.chevron_right_rounded,
+                          color: AppColors.muted,
+                        ),
+                      ],
+                    ),
+                  ),
                   const SizedBox(height: 28),
                   const SectionTitle(title: '选择训练方式'),
                   const SizedBox(height: 6),

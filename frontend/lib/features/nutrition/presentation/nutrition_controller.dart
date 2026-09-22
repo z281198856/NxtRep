@@ -10,7 +10,9 @@ class NutritionController extends ChangeNotifier {
   final NutritionRepository _repository;
 
   DailyNutritionSummary? summary;
+  WeeklyNutritionSummary? weeklySummary;
   List<NutritionEntry> entries = const [];
+  List<FrequentFood> frequentFoods = const [];
   bool loading = false;
   bool submitting = false;
   String? errorMessage;
@@ -22,12 +24,21 @@ class NutritionController extends ChangeNotifier {
     notifyListeners();
     try {
       final today = DateTime.now();
+      final weekStart = DateTime(
+        today.year,
+        today.month,
+        today.day,
+      ).subtract(Duration(days: today.weekday - 1));
       final values = await Future.wait<Object>([
         _repository.getDailySummary(today),
         _repository.listEntries(today),
+        _repository.getWeeklySummary(weekStart),
+        _repository.listFrequentFoods(),
       ]);
       summary = values[0] as DailyNutritionSummary;
       entries = values[1] as List<NutritionEntry>;
+      weeklySummary = values[2] as WeeklyNutritionSummary;
+      frequentFoods = values[3] as List<FrequentFood>;
     } on ApiException catch (error) {
       errorMessage = error.message;
     } finally {
@@ -37,12 +48,50 @@ class NutritionController extends ChangeNotifier {
   }
 
   Future<bool> add(ManualNutritionInput input) async {
+    return _runMutation(() => _repository.createManualEntry(input));
+  }
+
+  Future<bool> addFood(FoodServingInput input) async {
+    return _runMutation(() => _repository.createFoodEntry(input));
+  }
+
+  Future<bool> editEntry(
+    NutritionEntry entry,
+    NutritionEntryEditInput input,
+  ) async {
+    return _runMutation(() => _repository.updateEntry(entry, input));
+  }
+
+  Future<bool> deleteEntry(NutritionEntry entry) async {
+    return _runMutation(() => _repository.deleteEntry(entry));
+  }
+
+  Future<FoodSearchResult> searchFoods(String keyword) =>
+      _repository.searchFoods(keyword);
+
+  Future<FoodItem?> createCustomFood(CustomFoodInput input) async {
+    if (submitting) return null;
+    submitting = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      return await _repository.createCustomFood(input);
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      return null;
+    } finally {
+      submitting = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> _runMutation(Future<Object?> Function() operation) async {
     if (submitting) return false;
     submitting = true;
     errorMessage = null;
     notifyListeners();
     try {
-      await _repository.createManualEntry(input);
+      await operation();
       await refresh();
       return true;
     } on ApiException catch (error) {

@@ -6,6 +6,8 @@ import '../../agent/data/agent_repository.dart';
 import '../../agent/presentation/agent_controller.dart';
 import '../../agent/presentation/agent_page.dart';
 import '../../auth/presentation/session_controller.dart';
+import '../../exercises/data/exercise_repository.dart';
+import '../../exercises/presentation/exercise_library_page.dart';
 import '../../nutrition/data/nutrition_repository.dart';
 import '../../nutrition/presentation/nutrition_controller.dart';
 import '../../nutrition/presentation/nutrition_page.dart';
@@ -43,6 +45,7 @@ class _HomeShellState extends State<HomeShell> {
   late final BodyProgressController _bodyProgressController;
   late final PlanController _planController;
   late final ProfileController _profileController;
+  late final ExerciseRepository _exerciseRepository;
 
   @override
   void initState() {
@@ -72,6 +75,9 @@ class _HomeShellState extends State<HomeShell> {
     );
     _profileController = ProfileController(
       ProfileRepository(widget.controller.authRepository.apiClient),
+    );
+    _exerciseRepository = ExerciseRepository(
+      widget.controller.authRepository.apiClient,
     );
   }
 
@@ -112,6 +118,12 @@ class _HomeShellState extends State<HomeShell> {
       ),
       PlanPage(
         controller: _planController,
+        onOpenExerciseLibrary: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                ExerciseLibraryPage(repository: _exerciseRepository),
+          ),
+        ),
         onAskCoach: (prompt) async {
           _selectTab(3);
           await _agentController.send(prompt);
