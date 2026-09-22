@@ -250,5 +250,8 @@ String muscleLabel(String value) => switch (value) {
   'calves' => '小腿',
   'core' => '核心',
   'forearms' => '前臂',
+  'trapezius' => '斜方肌',
+  'hip_flexors' => '髋屈肌',
+  'adductors' => '内收肌',
   _ => value,
 };

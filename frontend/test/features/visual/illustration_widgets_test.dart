@@ -28,6 +28,22 @@ void main() {
       ExerciseMotionKind.verticalPush,
     );
     expect(exerciseMotionKind('平板支撑', 'core'), ExerciseMotionKind.core);
+    expect(
+      exerciseMotionKind('哑铃侧平举', 'shoulder_abduction'),
+      ExerciseMotionKind.lateralRaise,
+    );
+    expect(
+      exerciseMotionKind('绳索夹胸', 'chest_fly'),
+      ExerciseMotionKind.chestFly,
+    );
+    expect(
+      exerciseMotionKind('绳索三头下压', 'elbow_extension'),
+      ExerciseMotionKind.elbowExtension,
+    );
+    expect(
+      exerciseMotionKind('绳索臀部后踢', 'hip_extension'),
+      ExerciseMotionKind.hipExtension,
+    );
   });
 
   testWidgets('food line art exposes an accessible image description', (
@@ -71,6 +87,8 @@ void main() {
 
     expect(find.text('动态解剖示意'), findsOneWidget);
     expect(find.text('主要发力'), findsOneWidget);
+    expect(find.text('主练：股四头肌、臀肌'), findsOneWidget);
+    expect(find.text('绿色箭头看方向'), findsOneWidget);
     expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 300));
 

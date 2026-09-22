@@ -23,9 +23,35 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> {
   final _search = TextEditingController();
   Timer? _debounce;
   List<FoodItem> _items = const [];
+  FoodVisualCategory? _category;
   bool _loading = false;
   bool _searched = false;
   String? _error;
+
+  static const _categories = <FoodVisualCategory?, String>{
+    null: '全部',
+    FoodVisualCategory.protein: '蛋白质',
+    FoodVisualCategory.grain: '主食',
+    FoodVisualCategory.vegetable: '蔬菜',
+    FoodVisualCategory.fruit: '水果',
+    FoodVisualCategory.dairy: '乳品',
+    FoodVisualCategory.beverage: '饮品',
+    FoodVisualCategory.snack: '加餐',
+  };
+
+  List<FoodItem> get _visibleItems => _category == null
+      ? _items
+      : _items
+            .where(
+              (item) => foodVisualCategory(item.name, item.brand) == _category,
+            )
+            .toList(growable: false);
+
+  @override
+  void initState() {
+    super.initState();
+    _runSearch();
+  }
 
   @override
   void dispose() {
@@ -36,20 +62,11 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> {
 
   void _onChanged(String value) {
     _debounce?.cancel();
-    if (value.trim().isEmpty) {
-      setState(() {
-        _items = const [];
-        _searched = false;
-        _error = null;
-      });
-      return;
-    }
     _debounce = Timer(const Duration(milliseconds: 350), _runSearch);
   }
 
   Future<void> _runSearch() async {
     final keyword = _search.text.trim();
-    if (keyword.isEmpty) return;
     setState(() {
       _loading = true;
       _searched = true;
@@ -104,7 +121,6 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> {
         children: [
           TextField(
             controller: _search,
-            autofocus: true,
             onChanged: _onChanged,
             onSubmitted: (_) => _runSearch(),
             textInputAction: TextInputAction.search,
@@ -120,7 +136,33 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       ),
                     )
-                  : null,
+                  : _search.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: '清空',
+                      onPressed: () {
+                        _search.clear();
+                        _runSearch();
+                      },
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final option in _categories.entries) ...[
+                  if (option.key != _categories.keys.first)
+                    const SizedBox(width: 8),
+                  ChoiceChip(
+                    label: Text(option.value),
+                    selected: _category == option.key,
+                    onSelected: (_) => setState(() => _category = option.key),
+                  ),
+                ],
+              ],
             ),
           ),
           const SizedBox(height: 18),
@@ -142,25 +184,28 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> {
           const SizedBox(height: 18),
           if (_error case final message?)
             AppErrorCard(message: message)
-          else if (!_searched)
-            const AppEmptyState(
-              icon: Icons.manage_search_rounded,
-              title: '搜索食品营养数据',
-              message: '选择食品后填写实际份量，就能自动计算本次摄入。',
-            )
-          else if (!_loading && _items.isEmpty)
+          else if (!_loading && _visibleItems.isEmpty)
             AppEmptyState(
               icon: Icons.no_food_rounded,
-              title: '没有找到食品',
-              message: '可以换个名称搜索，或创建自己的营养数据。',
+              title: _searched ? '没有找到食品' : '食品库正在准备中',
+              message: '可以换个名称或分类，也可以创建自己的营养数据。',
               action: FilledButton.icon(
                 onPressed: _createCustomFood,
                 icon: const Icon(Icons.add_rounded),
                 label: const Text('添加自定义食品'),
               ),
             )
-          else
-            ..._items.map(
+          else ...[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text(
+                _search.text.trim().isEmpty
+                    ? '常用食品 · ${_visibleItems.length} 项'
+                    : '搜索结果 · ${_visibleItems.length} 项',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            ..._visibleItems.map(
               (food) => Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: _FoodTile(
@@ -169,6 +214,7 @@ class _FoodLibraryPageState extends State<FoodLibraryPage> {
                 ),
               ),
             ),
+          ],
         ],
       ),
     );

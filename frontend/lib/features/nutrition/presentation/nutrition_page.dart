@@ -147,6 +147,38 @@ class _NutritionPageState extends State<NutritionPage> {
                   const SizedBox(height: 12),
                   AppErrorCard(message: message),
                 ],
+                const SizedBox(height: 20),
+                AppSurface(
+                  onTap: widget.controller.submitting ? null : _openFoods,
+                  padding: const EdgeInsets.all(18),
+                  child: Row(
+                    children: [
+                      const FoodLineArt(name: '鸡胸肉和米饭', size: 68),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '浏览食品库',
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              '按蛋白质、主食、蔬菜和水果分类查找',
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(color: AppColors.muted),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(
+                        Icons.arrow_forward_rounded,
+                        color: AppColors.primary,
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 24),
                 SectionTitle(
                   title: '快速记录',

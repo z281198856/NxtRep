@@ -44,6 +44,8 @@ FoodVisualCategory foodVisualCategory(String name, [String? brand]) {
     '肉',
     '豆腐',
     '豆干',
+    '豆浆',
+    '毛豆',
     'protein',
     'chicken',
     'beef',
@@ -127,6 +129,8 @@ FoodVisualCategory foodVisualCategory(String name, [String? brand]) {
   if (containsAny(const [
     '饼干',
     '巧克力',
+    '杏仁',
+    '坚果',
     '蛋糕',
     '薯片',
     '零食',

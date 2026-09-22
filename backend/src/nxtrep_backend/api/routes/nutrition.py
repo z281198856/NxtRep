@@ -189,7 +189,7 @@ def _recipe_response(item) -> RecipeResponse:
 async def search_foods(
     user: CurrentUser,
     session: DbSession,
-    keyword: str = Query(min_length=1, max_length=160),
+    keyword: str = Query(default="", max_length=160),
     region: str | None = None,
     state: str | None = None,
     page: int = Query(1, ge=1),

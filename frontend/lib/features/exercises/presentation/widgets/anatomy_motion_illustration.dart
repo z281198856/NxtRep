@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/app_widgets.dart';
+import '../../domain/exercise_models.dart' show muscleLabel;
 
 enum ExerciseMotionKind {
   squat,
@@ -14,6 +15,12 @@ enum ExerciseMotionKind {
   verticalPush,
   verticalPull,
   curl,
+  elbowExtension,
+  lateralRaise,
+  chestFly,
+  hipExtension,
+  hipAbduction,
+  rotation,
   core,
   generic,
 }
@@ -28,6 +35,24 @@ ExerciseMotionKind exerciseMotionKind(String name, String? movementPattern) {
   }
   if (has(const ['弓步', '箭步', 'lunge', 'split_squat'])) {
     return ExerciseMotionKind.lunge;
+  }
+  if (has(const ['侧平举', 'shoulder_abduction', 'lateral_raise'])) {
+    return ExerciseMotionKind.lateralRaise;
+  }
+  if (has(const ['飞鸟', '夹胸', 'chest_fly', 'horizontal_adduction'])) {
+    return ExerciseMotionKind.chestFly;
+  }
+  if (has(const ['臂屈伸', '三头下压', 'elbow_extension', 'pushdown'])) {
+    return ExerciseMotionKind.elbowExtension;
+  }
+  if (has(const ['后踢', 'hip_extension', 'kickback'])) {
+    return ExerciseMotionKind.hipExtension;
+  }
+  if (has(const ['髋外展', '侧抬腿', 'hip_abduction'])) {
+    return ExerciseMotionKind.hipAbduction;
+  }
+  if (has(const ['伐木', '转体', 'rotation', 'wood_chop'])) {
+    return ExerciseMotionKind.rotation;
   }
   if (has(const ['推举', '肩推', 'overhead_press', 'vertical_push'])) {
     return ExerciseMotionKind.verticalPush;
@@ -56,7 +81,7 @@ ExerciseMotionKind exerciseMotionKind(String name, String? movementPattern) {
   ])) {
     return ExerciseMotionKind.horizontalPush;
   }
-  if (has(const ['弯举', '臂屈伸', 'curl', 'extension'])) {
+  if (has(const ['弯举', 'curl'])) {
     return ExerciseMotionKind.curl;
   }
   if (has(const ['平板', '卷腹', '核心', 'plank', 'crunch', 'core'])) {
@@ -191,36 +216,122 @@ class _AnatomyMotionIllustrationState extends State<AnatomyMotionIllustration>
           ),
           Semantics(
             image: true,
-            label: '${widget.name}动态解剖示意，红色显示主练肌群，黄色显示辅助肌群',
+            label: '${widget.name}动态解剖示意，红色显示主练肌群，黄色显示辅助肌群，绿色箭头显示动作方向',
             child: SizedBox(
-              height: 250,
+              height: 300,
               child: AnimatedBuilder(
                 animation: _controller,
-                builder: (context, _) => CustomPaint(
-                  painter: _AnatomyMotionPainter(
-                    progress: Curves.easeInOut.transform(_controller.value),
-                    kind: _kind,
-                    equipment: widget.equipment,
-                    primaryMuscles: widget.primaryMuscles,
-                    secondaryMuscles: widget.secondaryMuscles,
-                  ),
-                ),
+                builder: (context, _) {
+                  final progress = Curves.easeInOut.transform(
+                    _controller.value,
+                  );
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              AppColors.indigoSoft.withValues(alpha: 0.55),
+                              AppColors.surface,
+                            ],
+                          ),
+                        ),
+                      ),
+                      CustomPaint(
+                        painter: _AnatomyMotionPainter(
+                          progress: progress,
+                          kind: _kind,
+                          equipment: widget.equipment,
+                          primaryMuscles: widget.primaryMuscles,
+                          secondaryMuscles: widget.secondaryMuscles,
+                        ),
+                      ),
+                      Positioned(
+                        left: 14,
+                        top: 12,
+                        child: _StagePill(
+                          icon: progress < 0.48
+                              ? Icons.accessibility_new_rounded
+                              : Icons.local_fire_department_rounded,
+                          label: progress < 0.48 ? '起始位' : '发力位',
+                        ),
+                      ),
+                      const Positioned(
+                        right: 14,
+                        top: 12,
+                        child: _StagePill(
+                          icon: Icons.arrow_forward_rounded,
+                          label: '绿色箭头看方向',
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(18, 5, 18, 17),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _LegendDot(color: AppColors.primary, label: '主要发力'),
-                const SizedBox(width: 16),
-                const _LegendDot(color: AppColors.amber, label: '辅助发力'),
-                const Spacer(),
-                Text('动作轨迹示意', style: Theme.of(context).textTheme.labelMedium),
+                const Row(
+                  children: [
+                    _LegendDot(color: AppColors.primary, label: '主要发力'),
+                    SizedBox(width: 16),
+                    _LegendDot(color: AppColors.amber, label: '辅助稳定'),
+                    SizedBox(width: 16),
+                    _LegendDot(color: AppColors.mint, label: '动作方向'),
+                  ],
+                ),
+                const SizedBox(height: 9),
+                Text(
+                  '主练：${widget.primaryMuscles.map(muscleLabel).join('、')}',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                if (widget.secondaryMuscles.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    '辅助：${widget.secondaryMuscles.map(muscleLabel).join('、')}',
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                ],
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _StagePill extends StatelessWidget {
+  const _StagePill({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppColors.surface.withValues(alpha: 0.9),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: AppColors.mint),
+            const SizedBox(width: 5),
+            Text(label, style: Theme.of(context).textTheme.labelSmall),
+          ],
+        ),
       ),
     );
   }
@@ -279,40 +390,62 @@ class _AnatomyMotionPainter extends CustomPainter {
       ..scale(actualScale);
 
     final guide = Paint()
-      ..color = AppColors.line.withValues(alpha: 0.75)
+      ..color = AppColors.line.withValues(alpha: 0.55)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
-    canvas.drawOval(const Rect.fromLTWH(18, 136, 114, 8), guide);
-    canvas.drawLine(const Offset(75, 10), const Offset(75, 140), guide);
+      ..strokeWidth = 0.8;
+    for (final y in const [35.0, 70.0, 105.0]) {
+      canvas.drawLine(Offset(16, y), Offset(134, y), guide);
+    }
+    canvas.drawOval(const Rect.fromLTWH(15, 136, 120, 8), guide);
 
     final pose = _poseAt(kind, progress);
-    _drawMuscles(canvas, pose, secondaryMuscles, AppColors.amber, 7);
-    _drawMuscles(canvas, pose, primaryMuscles, AppColors.primary, 9);
+    _drawBody(canvas, _poseAt(kind, 0), ghost: true);
     _drawBody(canvas, pose);
+    _drawMuscles(canvas, pose, secondaryMuscles, AppColors.amber, 6.5);
+    _drawMuscles(canvas, pose, primaryMuscles, AppColors.primary, 8.5);
     _drawEquipment(canvas, pose, equipment, kind);
     _drawMotionGuide(canvas, pose, kind, progress);
     canvas.restore();
   }
 
-  void _drawBody(Canvas canvas, _Pose pose) {
-    final bone = Paint()
-      ..color = AppColors.ink.withValues(alpha: 0.78)
+  void _drawBody(Canvas canvas, _Pose pose, {bool ghost = false}) {
+    final alpha = ghost ? 0.14 : 1.0;
+    final bodyFill = Paint()
+      ..color = const Color(0xFFE7EBF2).withValues(alpha: alpha)
+      ..style = PaintingStyle.fill;
+    final limbFill = Paint()
+      ..color = const Color(0xFFD9DFE9).withValues(alpha: alpha)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.4
+      ..strokeWidth = 7.5
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
-    final joint = Paint()
-      ..color = AppColors.surface
-      ..style = PaintingStyle.fill;
-    final jointLine = Paint()
-      ..color = AppColors.ink.withValues(alpha: 0.72)
+    final outline = Paint()
+      ..color = AppColors.ink.withValues(alpha: ghost ? 0.12 : 0.72)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.7;
+      ..strokeWidth = 1.35
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
 
-    canvas.drawCircle(pose.head, 9, bone);
-    canvas.drawLine(pose.neck, pose.hipCenter, bone);
-    canvas.drawLine(pose.leftShoulder, pose.rightShoulder, bone);
-    canvas.drawLine(pose.leftHip, pose.rightHip, bone);
+    final torso = Path()
+      ..moveTo(pose.leftShoulder.dx, pose.leftShoulder.dy)
+      ..quadraticBezierTo(
+        pose.neck.dx,
+        pose.neck.dy + 2,
+        pose.rightShoulder.dx,
+        pose.rightShoulder.dy,
+      )
+      ..lineTo(pose.rightHip.dx, pose.rightHip.dy)
+      ..quadraticBezierTo(
+        pose.hipCenter.dx,
+        pose.hipCenter.dy + 5,
+        pose.leftHip.dx,
+        pose.leftHip.dy,
+      )
+      ..close();
+    canvas
+      ..drawPath(torso, bodyFill)
+      ..drawPath(torso, outline);
+
     for (final segment in [
       (pose.leftShoulder, pose.leftElbow),
       (pose.leftElbow, pose.leftHand),
@@ -323,8 +456,19 @@ class _AnatomyMotionPainter extends CustomPainter {
       (pose.rightHip, pose.rightKnee),
       (pose.rightKnee, pose.rightAnkle),
     ]) {
-      canvas.drawLine(segment.$1, segment.$2, bone);
+      canvas
+        ..drawLine(segment.$1, segment.$2, limbFill)
+        ..drawLine(segment.$1, segment.$2, outline);
     }
+    canvas
+      ..drawLine(pose.head.translate(0, 8), pose.neck, limbFill)
+      ..drawLine(pose.head.translate(0, 8), pose.neck, outline)
+      ..drawCircle(pose.head, 9.5, bodyFill)
+      ..drawCircle(pose.head, 9.5, outline);
+
+    final joint = Paint()
+      ..color = AppColors.surface.withValues(alpha: ghost ? 0.3 : 0.96)
+      ..style = PaintingStyle.fill;
     for (final point in [
       pose.leftShoulder,
       pose.rightShoulder,
@@ -336,8 +480,22 @@ class _AnatomyMotionPainter extends CustomPainter {
       pose.rightKnee,
     ]) {
       canvas
-        ..drawCircle(point, 3.2, joint)
-        ..drawCircle(point, 3.2, jointLine);
+        ..drawCircle(point, 2.7, joint)
+        ..drawCircle(point, 2.7, outline);
+    }
+    if (!ghost) {
+      final face = Paint()
+        ..color = AppColors.ink.withValues(alpha: 0.48)
+        ..strokeWidth = 1
+        ..strokeCap = StrokeCap.round;
+      canvas
+        ..drawCircle(pose.head.translate(-3, -1), 0.8, face)
+        ..drawCircle(pose.head.translate(3, -1), 0.8, face)
+        ..drawLine(
+          pose.head.translate(-2.5, 3),
+          pose.head.translate(2.5, 3),
+          face,
+        );
     }
   }
 
@@ -350,28 +508,50 @@ class _AnatomyMotionPainter extends CustomPainter {
   ) {
     if (muscles.isEmpty) return;
     final paint = Paint()
-      ..color = color.withValues(alpha: 0.8)
+      ..color = color.withValues(alpha: 0.88)
       ..style = PaintingStyle.stroke
       ..strokeWidth = width
       ..strokeCap = StrokeCap.round;
     final fill = Paint()
-      ..color = color.withValues(alpha: 0.38)
+      ..color = color.withValues(alpha: 0.68)
       ..style = PaintingStyle.fill;
     bool has(Iterable<String> names) => muscles.any(names.contains);
 
     if (has(const ['chest', 'pectorals'])) {
-      canvas.drawOval(
-        Rect.fromCenter(center: pose.chest, width: 24, height: 13),
-        fill,
-      );
+      canvas
+        ..drawOval(
+          Rect.fromCenter(
+            center: pose.chest.translate(-6, -3),
+            width: 11,
+            height: 11,
+          ),
+          fill,
+        )
+        ..drawOval(
+          Rect.fromCenter(
+            center: pose.chest.translate(6, -3),
+            width: 11,
+            height: 11,
+          ),
+          fill,
+        );
     }
     if (has(const ['back', 'lats', 'latissimus'])) {
-      canvas.drawLine(pose.neck, pose.hipCenter, paint);
+      final back = Path()
+        ..moveTo(pose.leftShoulder.dx + 2, pose.leftShoulder.dy + 4)
+        ..lineTo(pose.rightShoulder.dx - 2, pose.rightShoulder.dy + 4)
+        ..lineTo(pose.rightHip.dx, pose.rightHip.dy - 5)
+        ..lineTo(pose.leftHip.dx, pose.leftHip.dy - 5)
+        ..close();
+      canvas.drawPath(back, fill);
     }
-    if (has(const ['shoulders', 'deltoids'])) {
+    if (has(const ['shoulders', 'deltoids', 'trapezius'])) {
       canvas
         ..drawCircle(pose.leftShoulder, width * 0.65, fill)
         ..drawCircle(pose.rightShoulder, width * 0.65, fill);
+      if (has(const ['trapezius'])) {
+        canvas.drawLine(pose.neck, pose.chest.translate(0, 5), paint);
+      }
     }
     if (has(const ['biceps', 'triceps', 'arms'])) {
       canvas
@@ -384,19 +564,24 @@ class _AnatomyMotionPainter extends CustomPainter {
         ..drawLine(pose.rightElbow, pose.rightHand, paint);
     }
     if (has(const ['core', 'abs', 'abdominals'])) {
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromCenter(center: pose.core, width: 14, height: 24),
-          const Radius.circular(6),
-        ),
-        fill,
-      );
+      for (final y in [-7.0, 0.0, 7.0]) {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromCenter(
+              center: pose.core.translate(0, y),
+              width: 14,
+              height: 5.5,
+            ),
+            const Radius.circular(2.5),
+          ),
+          fill,
+        );
+      }
     }
-    if (has(const ['gluteus', 'glutes'])) {
-      canvas.drawOval(
-        Rect.fromCenter(center: pose.hipCenter, width: 22, height: 14),
-        fill,
-      );
+    if (has(const ['gluteus', 'glutes', 'hip_flexors'])) {
+      canvas
+        ..drawCircle(pose.leftHip, width * 0.58, fill)
+        ..drawCircle(pose.rightHip, width * 0.58, fill);
     }
     if (has(const ['quadriceps', 'hamstrings', 'adductors'])) {
       canvas
@@ -448,9 +633,28 @@ class _AnatomyMotionPainter extends CustomPainter {
         );
       }
     } else if (equipment == 'cable' || equipment == 'machine') {
-      canvas.drawLine(const Offset(127, 18), const Offset(127, 132), line);
-      canvas.drawCircle(const Offset(127, 22), 4, line);
-      canvas.drawLine(const Offset(127, 22), pose.rightHand, line);
+      void drawTower(double x, Offset hand) {
+        canvas
+          ..drawLine(Offset(x, 18), Offset(x, 134), line)
+          ..drawLine(Offset(x - 7, 134), Offset(x + 7, 134), line)
+          ..drawCircle(Offset(x, 23), 4, line)
+          ..drawRRect(
+            RRect.fromRectAndRadius(
+              Rect.fromLTWH(x - 4, 92, 8, 28),
+              const Radius.circular(2),
+            ),
+            line,
+          )
+          ..drawLine(Offset(x, 23), hand, line)
+          ..drawLine(hand.translate(-3, 0), hand.translate(3, 0), line);
+      }
+
+      if (kind == ExerciseMotionKind.chestFly) {
+        drawTower(14, pose.leftHand);
+        drawTower(136, pose.rightHand);
+      } else {
+        drawTower(136, pose.rightHand);
+      }
     }
   }
 
@@ -461,30 +665,47 @@ class _AnatomyMotionPainter extends CustomPainter {
     double progress,
   ) {
     final guide = Paint()
-      ..color = AppColors.mint.withValues(alpha: 0.75)
+      ..color = AppColors.mint.withValues(alpha: 0.9)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
+      ..strokeWidth = 2.2
       ..strokeCap = StrokeCap.round;
     final marker = Paint()
       ..color = AppColors.mint
       ..style = PaintingStyle.fill;
-    final target = switch (kind) {
-      ExerciseMotionKind.squat || ExerciseMotionKind.lunge => pose.hipCenter,
-      ExerciseMotionKind.hinge || ExerciseMotionKind.core => pose.chest,
-      _ => Offset(
-        (pose.leftHand.dx + pose.rightHand.dx) / 2,
-        (pose.leftHand.dy + pose.rightHand.dy) / 2,
-      ),
-    };
-    canvas.drawCircle(target, 2.2 + progress * 1.6, marker);
-    canvas.drawArc(
-      Rect.fromCircle(center: target, radius: 8 + progress * 3),
-      -1.2,
-      1.8,
-      false,
-      guide,
-    );
+    final start = _motionPoint(_poseAt(kind, 0), kind);
+    final end = _motionPoint(_poseAt(kind, 1), kind);
+    final target = Offset.lerp(start, end, progress)!;
+    canvas
+      ..drawLine(start, end, guide)
+      ..drawCircle(target, 3.2, marker);
+
+    final direction = end - start;
+    if (direction.distance > 2) {
+      final unit = direction / direction.distance;
+      final perpendicular = Offset(-unit.dy, unit.dx);
+      final arrowTip = end;
+      final arrowBase = end - unit * 8;
+      canvas
+        ..drawLine(arrowTip, arrowBase + perpendicular * 4, guide)
+        ..drawLine(arrowTip, arrowBase - perpendicular * 4, guide);
+    }
   }
+
+  Offset _motionPoint(_Pose pose, ExerciseMotionKind kind) => switch (kind) {
+    ExerciseMotionKind.squat || ExerciseMotionKind.lunge => pose.hipCenter,
+    ExerciseMotionKind.hinge || ExerciseMotionKind.core => pose.chest,
+    ExerciseMotionKind.hipExtension ||
+    ExerciseMotionKind.hipAbduction => pose.rightAnkle,
+    ExerciseMotionKind.horizontalPush ||
+    ExerciseMotionKind.horizontalPull ||
+    ExerciseMotionKind.lateralRaise ||
+    ExerciseMotionKind.chestFly ||
+    ExerciseMotionKind.rotation => pose.rightHand,
+    _ => Offset(
+      (pose.leftHand.dx + pose.rightHand.dx) / 2,
+      (pose.leftHand.dy + pose.rightHand.dy) / 2,
+    ),
+  };
 
   @override
   bool shouldRepaint(covariant _AnatomyMotionPainter oldDelegate) =>
@@ -629,10 +850,10 @@ _Pose _poseAt(ExerciseMotionKind kind, double progress) {
       neck: Offset(75, 29),
       leftShoulder: Offset(60, 39),
       rightShoulder: Offset(90, 39),
-      leftElbow: Offset(42, 47),
-      rightElbow: Offset(108, 47),
-      leftHand: Offset(22, 47),
-      rightHand: Offset(128, 47),
+      leftElbow: Offset(53, 48),
+      rightElbow: Offset(97, 48),
+      leftHand: Offset(69, 43),
+      rightHand: Offset(81, 43),
       leftHip: Offset(67, 78),
       rightHip: Offset(83, 78),
       leftKnee: Offset(66, 108),
@@ -677,10 +898,10 @@ _Pose _poseAt(ExerciseMotionKind kind, double progress) {
       neck: Offset(75, 31),
       leftShoulder: Offset(60, 41),
       rightShoulder: Offset(90, 41),
-      leftElbow: Offset(43, 38),
-      rightElbow: Offset(107, 38),
-      leftHand: Offset(59, 22),
-      rightHand: Offset(91, 22),
+      leftElbow: Offset(45, 43),
+      rightElbow: Offset(105, 43),
+      leftHand: Offset(61, 47),
+      rightHand: Offset(89, 47),
       leftHip: Offset(67, 78),
       rightHip: Offset(83, 78),
       leftKnee: Offset(66, 108),
@@ -704,6 +925,102 @@ _Pose _poseAt(ExerciseMotionKind kind, double progress) {
       leftAnkle: Offset(64, 138),
       rightAnkle: Offset(86, 138),
     ),
+    ExerciseMotionKind.elbowExtension => const _Pose(
+      head: Offset(75, 15),
+      neck: Offset(75, 29),
+      leftShoulder: Offset(60, 39),
+      rightShoulder: Offset(90, 39),
+      leftElbow: Offset(56, 63),
+      rightElbow: Offset(94, 63),
+      leftHand: Offset(55, 89),
+      rightHand: Offset(95, 89),
+      leftHip: Offset(67, 78),
+      rightHip: Offset(83, 78),
+      leftKnee: Offset(66, 108),
+      rightKnee: Offset(84, 108),
+      leftAnkle: Offset(64, 138),
+      rightAnkle: Offset(86, 138),
+    ),
+    ExerciseMotionKind.lateralRaise => const _Pose(
+      head: Offset(75, 15),
+      neck: Offset(75, 29),
+      leftShoulder: Offset(60, 39),
+      rightShoulder: Offset(90, 39),
+      leftElbow: Offset(39, 42),
+      rightElbow: Offset(111, 42),
+      leftHand: Offset(18, 43),
+      rightHand: Offset(132, 43),
+      leftHip: Offset(67, 78),
+      rightHip: Offset(83, 78),
+      leftKnee: Offset(66, 108),
+      rightKnee: Offset(84, 108),
+      leftAnkle: Offset(64, 138),
+      rightAnkle: Offset(86, 138),
+    ),
+    ExerciseMotionKind.chestFly => const _Pose(
+      head: Offset(75, 15),
+      neck: Offset(75, 29),
+      leftShoulder: Offset(60, 39),
+      rightShoulder: Offset(90, 39),
+      leftElbow: Offset(56, 48),
+      rightElbow: Offset(94, 48),
+      leftHand: Offset(70, 48),
+      rightHand: Offset(80, 48),
+      leftHip: Offset(67, 78),
+      rightHip: Offset(83, 78),
+      leftKnee: Offset(66, 108),
+      rightKnee: Offset(84, 108),
+      leftAnkle: Offset(64, 138),
+      rightAnkle: Offset(86, 138),
+    ),
+    ExerciseMotionKind.hipExtension => const _Pose(
+      head: Offset(75, 15),
+      neck: Offset(75, 29),
+      leftShoulder: Offset(60, 39),
+      rightShoulder: Offset(90, 39),
+      leftElbow: Offset(55, 64),
+      rightElbow: Offset(104, 55),
+      leftHand: Offset(53, 86),
+      rightHand: Offset(123, 46),
+      leftHip: Offset(67, 78),
+      rightHip: Offset(83, 78),
+      leftKnee: Offset(66, 108),
+      rightKnee: Offset(102, 108),
+      leftAnkle: Offset(64, 138),
+      rightAnkle: Offset(121, 130),
+    ),
+    ExerciseMotionKind.hipAbduction => const _Pose(
+      head: Offset(75, 15),
+      neck: Offset(75, 29),
+      leftShoulder: Offset(60, 39),
+      rightShoulder: Offset(90, 39),
+      leftElbow: Offset(55, 64),
+      rightElbow: Offset(104, 55),
+      leftHand: Offset(53, 86),
+      rightHand: Offset(123, 46),
+      leftHip: Offset(67, 78),
+      rightHip: Offset(83, 78),
+      leftKnee: Offset(66, 108),
+      rightKnee: Offset(108, 105),
+      leftAnkle: Offset(64, 138),
+      rightAnkle: Offset(131, 129),
+    ),
+    ExerciseMotionKind.rotation => const _Pose(
+      head: Offset(71, 18),
+      neck: Offset(72, 31),
+      leftShoulder: Offset(57, 43),
+      rightShoulder: Offset(87, 38),
+      leftElbow: Offset(50, 68),
+      rightElbow: Offset(67, 70),
+      leftHand: Offset(44, 91),
+      rightHand: Offset(55, 94),
+      leftHip: Offset(66, 79),
+      rightHip: Offset(84, 79),
+      leftKnee: Offset(65, 108),
+      rightKnee: Offset(85, 108),
+      leftAnkle: Offset(63, 138),
+      rightAnkle: Offset(87, 138),
+    ),
     ExerciseMotionKind.core => const _Pose(
       head: Offset(91, 29),
       neck: Offset(84, 39),
@@ -722,10 +1039,94 @@ _Pose _poseAt(ExerciseMotionKind kind, double progress) {
     ),
     ExerciseMotionKind.generic => _neutralPose,
   };
+  final start = switch (kind) {
+    ExerciseMotionKind.horizontalPush ||
+    ExerciseMotionKind.chestFly => const _Pose(
+      head: Offset(75, 15),
+      neck: Offset(75, 29),
+      leftShoulder: Offset(60, 39),
+      rightShoulder: Offset(90, 39),
+      leftElbow: Offset(41, 47),
+      rightElbow: Offset(109, 47),
+      leftHand: Offset(21, 47),
+      rightHand: Offset(129, 47),
+      leftHip: Offset(67, 78),
+      rightHip: Offset(83, 78),
+      leftKnee: Offset(66, 108),
+      rightKnee: Offset(84, 108),
+      leftAnkle: Offset(64, 138),
+      rightAnkle: Offset(86, 138),
+    ),
+    ExerciseMotionKind.verticalPush => const _Pose(
+      head: Offset(75, 18),
+      neck: Offset(75, 31),
+      leftShoulder: Offset(60, 41),
+      rightShoulder: Offset(90, 41),
+      leftElbow: Offset(48, 56),
+      rightElbow: Offset(102, 56),
+      leftHand: Offset(59, 48),
+      rightHand: Offset(91, 48),
+      leftHip: Offset(67, 78),
+      rightHip: Offset(83, 78),
+      leftKnee: Offset(66, 108),
+      rightKnee: Offset(84, 108),
+      leftAnkle: Offset(64, 138),
+      rightAnkle: Offset(86, 138),
+    ),
+    ExerciseMotionKind.verticalPull => const _Pose(
+      head: Offset(75, 18),
+      neck: Offset(75, 31),
+      leftShoulder: Offset(60, 41),
+      rightShoulder: Offset(90, 41),
+      leftElbow: Offset(58, 22),
+      rightElbow: Offset(92, 22),
+      leftHand: Offset(62, 5),
+      rightHand: Offset(88, 5),
+      leftHip: Offset(67, 78),
+      rightHip: Offset(83, 78),
+      leftKnee: Offset(66, 108),
+      rightKnee: Offset(84, 108),
+      leftAnkle: Offset(64, 138),
+      rightAnkle: Offset(86, 138),
+    ),
+    ExerciseMotionKind.elbowExtension => const _Pose(
+      head: Offset(75, 15),
+      neck: Offset(75, 29),
+      leftShoulder: Offset(60, 39),
+      rightShoulder: Offset(90, 39),
+      leftElbow: Offset(56, 63),
+      rightElbow: Offset(94, 63),
+      leftHand: Offset(63, 46),
+      rightHand: Offset(87, 46),
+      leftHip: Offset(67, 78),
+      rightHip: Offset(83, 78),
+      leftKnee: Offset(66, 108),
+      rightKnee: Offset(84, 108),
+      leftAnkle: Offset(64, 138),
+      rightAnkle: Offset(86, 138),
+    ),
+    ExerciseMotionKind.rotation => const _Pose(
+      head: Offset(79, 17),
+      neck: Offset(78, 30),
+      leftShoulder: Offset(63, 38),
+      rightShoulder: Offset(93, 43),
+      leftElbow: Offset(84, 34),
+      rightElbow: Offset(104, 44),
+      leftHand: Offset(99, 31),
+      rightHand: Offset(113, 39),
+      leftHip: Offset(66, 79),
+      rightHip: Offset(84, 79),
+      leftKnee: Offset(65, 108),
+      rightKnee: Offset(85, 108),
+      leftAnkle: Offset(63, 138),
+      rightAnkle: Offset(87, 138),
+    ),
+    _ => _neutralPose,
+  };
   final breathing = kind == ExerciseMotionKind.generic
       ? (0.03 * progress)
       : 0.0;
-  final pose = _Pose.lerp(_neutralPose, target, progress);
+  final pose = _Pose.lerp(start, target, progress);
   if (breathing == 0) return pose;
   return _Pose(
     head: pose.head,
@@ -760,6 +1161,12 @@ String _motionCaption(ExerciseMotionKind kind) => switch (kind) {
   ExerciseMotionKind.verticalPush => '观察手臂垂直推举轨迹',
   ExerciseMotionKind.verticalPull => '观察肩胛下沉与肘部下拉',
   ExerciseMotionKind.curl => '观察肘关节屈伸轨迹',
+  ExerciseMotionKind.elbowExtension => '观察肘部固定与前臂伸展',
+  ExerciseMotionKind.lateralRaise => '观察手臂向两侧抬起轨迹',
+  ExerciseMotionKind.chestFly => '观察双臂环抱式合拢轨迹',
+  ExerciseMotionKind.hipExtension => '观察髋部伸展与臀肌收缩',
+  ExerciseMotionKind.hipAbduction => '观察腿部向外打开轨迹',
+  ExerciseMotionKind.rotation => '观察躯干与髋部协同旋转',
   ExerciseMotionKind.core => '观察躯干稳定与屈曲轨迹',
   ExerciseMotionKind.generic => '观察关节轨迹与主要发力区域',
 };

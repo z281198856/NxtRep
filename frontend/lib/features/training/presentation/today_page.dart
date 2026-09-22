@@ -104,8 +104,8 @@ class _TodayPageState extends State<TodayPage> {
                       ),
                       QuickActionCard(
                         icon: Icons.restaurant_menu_rounded,
-                        label: '饮食记录',
-                        subtitle: '补充今天摄入',
+                        label: '食品与饮食',
+                        subtitle: '食品库、营养记录',
                         tint: AppColors.amber,
                         onTap: widget.onOpenNutrition,
                       ),
