@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../domain/nutrition_models.dart';
 import 'nutrition_controller.dart';
+import 'widgets/food_line_art.dart';
 
 class FoodLibraryPage extends StatefulWidget {
   const FoodLibraryPage({super.key, required this.controller});
@@ -187,15 +188,7 @@ class _FoodTile extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Row(
         children: [
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              color: AppColors.mintSoft,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: const Icon(Icons.restaurant_rounded, color: AppColors.mint),
-          ),
+          FoodLineArt(name: food.name, brand: food.brand, size: 48),
           const SizedBox(width: 13),
           Expanded(
             child: Column(

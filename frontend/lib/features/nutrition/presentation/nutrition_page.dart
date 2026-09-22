@@ -6,6 +6,7 @@ import '../../../core/widgets/app_widgets.dart';
 import '../domain/nutrition_models.dart';
 import 'food_library_page.dart';
 import 'nutrition_controller.dart';
+import 'widgets/food_line_art.dart';
 
 class NutritionPage extends StatefulWidget {
   const NutritionPage({super.key, required this.controller});
@@ -440,10 +441,10 @@ class _FrequentFoodCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Icon(
-                  Icons.history_rounded,
-                  size: 18,
-                  color: AppColors.mint,
+                FoodLineArt(
+                  name: item.food.name,
+                  brand: item.food.brand,
+                  size: 34,
                 ),
                 const Spacer(),
                 Text(
@@ -566,17 +567,11 @@ class _EntryTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
-            Container(
-              width: 43,
-              height: 43,
-              decoration: BoxDecoration(
-                color: AppColors.amberSoft,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: const Icon(
-                Icons.restaurant_rounded,
-                color: AppColors.amber,
-              ),
+            FoodLineArt(
+              name: entry.items.isEmpty
+                  ? entry.displayName
+                  : entry.items.first.name,
+              size: 45,
             ),
             const SizedBox(width: 13),
             Expanded(
@@ -701,16 +696,33 @@ class _FoodServingSheetState extends State<_FoodServingSheet> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  widget.food.name,
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  '基准 ${widget.food.basisAmountG.toStringAsFixed(0)} g · '
-                  '${widget.food.kcal.toStringAsFixed(0)} kcal',
-                  style: Theme.of(context).textTheme.bodyMedium
-                      ?.copyWith(color: AppColors.muted),
+                Row(
+                  children: [
+                    FoodLineArt(
+                      name: widget.food.name,
+                      brand: widget.food.brand,
+                      size: 62,
+                    ),
+                    const SizedBox(width: 13),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.food.name,
+                            style: Theme.of(context).textTheme.headlineSmall,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '基准 ${widget.food.basisAmountG.toStringAsFixed(0)} g · '
+                            '${widget.food.kcal.toStringAsFixed(0)} kcal',
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(color: AppColors.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 18),
                 DropdownButtonFormField<String>(

@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../data/exercise_repository.dart';
 import '../domain/exercise_models.dart';
+import 'widgets/anatomy_motion_illustration.dart';
 
 class ExerciseLibraryPage extends StatefulWidget {
   const ExerciseLibraryPage({super.key, required this.repository});
@@ -432,6 +433,14 @@ class _ExerciseDetailPageState extends State<ExerciseDetailPage> {
               AppErrorCard(message: message)
             else if (detail != null) ...[
               _ExerciseOverview(detail: detail),
+              const SizedBox(height: 16),
+              AnatomyMotionIllustration(
+                name: detail.name,
+                movementPattern: detail.movementPattern,
+                equipment: detail.equipment,
+                primaryMuscles: detail.primaryMuscles,
+                secondaryMuscles: detail.secondaryMuscles,
+              ),
               if (detail.instructions.isNotEmpty) ...[
                 const SizedBox(height: 24),
                 _InstructionSection(
