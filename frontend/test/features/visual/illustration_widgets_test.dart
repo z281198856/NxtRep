@@ -21,13 +21,13 @@ void main() {
     expect(exerciseMotionKind('罗马尼亚硬拉', 'hinge'), ExerciseMotionKind.hinge);
     expect(
       exerciseMotionKind('坐姿划船', 'horizontal_pull'),
-      ExerciseMotionKind.horizontalPull,
+      ExerciseMotionKind.seatedRow,
     );
     expect(
       exerciseMotionKind('哑铃推举', 'vertical_push'),
       ExerciseMotionKind.verticalPush,
     );
-    expect(exerciseMotionKind('平板支撑', 'core'), ExerciseMotionKind.core);
+    expect(exerciseMotionKind('平板支撑', 'core'), ExerciseMotionKind.plank);
     expect(
       exerciseMotionKind('哑铃侧平举', 'shoulder_abduction'),
       ExerciseMotionKind.lateralRaise,
@@ -60,6 +60,29 @@ void main() {
     );
   });
 
+  test('maps high-risk catalog exercises to dedicated motion families', () {
+    final expected = <(String, String), ExerciseMotionKind>{
+      ('哑铃平板卧推', 'horizontal_push'): ExerciseMotionKind.benchPress,
+      ('单臂哑铃划船', 'horizontal_pull'): ExerciseMotionKind.singleArmRow,
+      ('绳索坐姿划船', 'horizontal_pull'): ExerciseMotionKind.seatedRow,
+      ('绳索面拉', 'horizontal_pull'): ExerciseMotionKind.facePull,
+      ('绳索直臂下压', 'vertical_pull'): ExerciseMotionKind.straightArmPulldown,
+      ('引体向上', 'vertical_pull'): ExerciseMotionKind.pullUp,
+      ('绳索过顶臂屈伸', 'elbow_extension'): ExerciseMotionKind.overheadExtension,
+      ('绳索侧平举', 'shoulder_abduction'): ExerciseMotionKind.singleArmLateralRaise,
+      ('绳索上斜夹胸', 'chest_fly'): ExerciseMotionKind.lowToHighFly,
+      ('标准俯卧撑', 'horizontal_push'): ExerciseMotionKind.pushUp,
+      ('平板支撑', 'core'): ExerciseMotionKind.plank,
+      ('臀桥', 'hip_extension'): ExerciseMotionKind.gluteBridge,
+      ('跪姿绳索卷腹', 'core'): ExerciseMotionKind.kneelingCrunch,
+    };
+
+    for (final MapEntry(key: (name, pattern), value: kind)
+        in expected.entries) {
+      expect(exerciseMotionKind(name, pattern), kind, reason: name);
+    }
+  });
+
   test('fly motion guides point in the anatomical working direction', () {
     final lateralRaise = anatomyLateralRaiseMotionPath();
     expect(lateralRaise.leftEnd.dx, lessThan(lateralRaise.leftStart.dx));
@@ -74,6 +97,38 @@ void main() {
     final reverseFly = anatomyFlyMotionPath(ExerciseMotionKind.reverseFly);
     expect(reverseFly.leftEnd.dx, lessThan(reverseFly.leftStart.dx));
     expect(reverseFly.rightEnd.dx, greaterThan(reverseFly.rightStart.dx));
+  });
+
+  test('dedicated cable motion guides follow their working directions', () {
+    final facePull = anatomyBilateralMotionPath(ExerciseMotionKind.facePull);
+    expect(facePull.leftEnd.dx, lessThan(facePull.leftStart.dx));
+    expect(facePull.rightEnd.dx, greaterThan(facePull.rightStart.dx));
+
+    final singleArmRow = anatomyBilateralMotionPath(
+      ExerciseMotionKind.singleArmRow,
+    );
+    expect(singleArmRow.leftEnd, singleArmRow.leftStart);
+    expect(singleArmRow.rightEnd.dy, lessThan(singleArmRow.rightStart.dy));
+
+    final pulldown = anatomyBilateralMotionPath(
+      ExerciseMotionKind.straightArmPulldown,
+    );
+    expect(pulldown.leftEnd.dy, greaterThan(pulldown.leftStart.dy));
+    expect(pulldown.rightEnd.dy, greaterThan(pulldown.rightStart.dy));
+
+    final overhead = anatomyBilateralMotionPath(
+      ExerciseMotionKind.overheadExtension,
+    );
+    expect(overhead.leftEnd.dy, lessThan(overhead.leftStart.dy));
+    expect(overhead.rightEnd.dy, lessThan(overhead.rightStart.dy));
+
+    final lowToHigh = anatomyBilateralMotionPath(
+      ExerciseMotionKind.lowToHighFly,
+    );
+    expect(lowToHigh.leftEnd.dx, greaterThan(lowToHigh.leftStart.dx));
+    expect(lowToHigh.leftEnd.dy, lessThan(lowToHigh.leftStart.dy));
+    expect(lowToHigh.rightEnd.dx, lessThan(lowToHigh.rightStart.dx));
+    expect(lowToHigh.rightEnd.dy, lessThan(lowToHigh.rightStart.dy));
   });
 
   test('motion cycle only presents the forward working phase', () {
@@ -186,6 +241,41 @@ void main() {
 
     expect(find.text('双手从大腿两侧向外抬至肩高'), findsOneWidget);
     expect(find.text('箭头从腿侧向外上方'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('bodyweight motions use exercise-specific side-view guidance', (
+    tester,
+  ) async {
+    Future<void> pumpMotion(String name, String pattern) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: Scaffold(
+            body: AnatomyMotionIllustration(
+              name: name,
+              movementPattern: pattern,
+              equipment: 'bodyweight',
+              primaryMuscles: const ['core'],
+              secondaryMuscles: const ['shoulders'],
+            ),
+          ),
+        ),
+      );
+    }
+
+    await pumpMotion('标准俯卧撑', 'horizontal_push');
+    expect(find.text('侧视：身体保持直线并推离地面'), findsOneWidget);
+    expect(find.text('箭头指向推起方向'), findsOneWidget);
+
+    await pumpMotion('平板支撑', 'core');
+    expect(find.text('侧视：持续收紧核心，避免塌腰或抬髋'), findsOneWidget);
+    expect(find.text('绿线检查身体是否平直'), findsOneWidget);
+
+    await pumpMotion('臀桥', 'hip_extension');
+    expect(find.text('侧视：脚掌踩稳，夹臀将髋部抬起'), findsOneWidget);
+    expect(find.text('箭头指向抬髋方向'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
   });
