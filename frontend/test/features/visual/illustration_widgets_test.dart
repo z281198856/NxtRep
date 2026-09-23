@@ -32,6 +32,8 @@ void main() {
       exerciseMotionKind('哑铃侧平举', 'shoulder_abduction'),
       ExerciseMotionKind.lateralRaise,
     );
+    expect(exerciseMotionKind('肩部飞鸟', null), ExerciseMotionKind.lateralRaise);
+    expect(exerciseMotionKind('站姿哑铃飞鸟', null), ExerciseMotionKind.lateralRaise);
     expect(
       exerciseMotionKind('绳索夹胸', 'chest_fly'),
       ExerciseMotionKind.chestFly,
@@ -59,6 +61,12 @@ void main() {
   });
 
   test('fly motion guides point in the anatomical working direction', () {
+    final lateralRaise = anatomyLateralRaiseMotionPath();
+    expect(lateralRaise.leftEnd.dx, lessThan(lateralRaise.leftStart.dx));
+    expect(lateralRaise.leftEnd.dy, lessThan(lateralRaise.leftStart.dy));
+    expect(lateralRaise.rightEnd.dx, greaterThan(lateralRaise.rightStart.dx));
+    expect(lateralRaise.rightEnd.dy, lessThan(lateralRaise.rightStart.dy));
+
     final chestFly = anatomyFlyMotionPath(ExerciseMotionKind.chestFly);
     expect(chestFly.leftEnd.dx, greaterThan(chestFly.leftStart.dx));
     expect(chestFly.rightEnd.dx, lessThan(chestFly.rightStart.dx));
@@ -154,6 +162,30 @@ void main() {
     await pumpFly('哑铃反向飞鸟', 'horizontal_pull');
     expect(find.text('双臂从胸前向两侧打开，后束发力'), findsOneWidget);
     expect(find.text('箭头向外打开'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('lateral raise clearly starts beside thighs and moves outward', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: const Scaffold(
+          body: AnatomyMotionIllustration(
+            name: '哑铃侧平举',
+            movementPattern: 'shoulder_abduction',
+            equipment: 'dumbbell',
+            primaryMuscles: ['shoulders'],
+            secondaryMuscles: ['trapezius'],
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('双手从大腿两侧向外抬至肩高'), findsOneWidget);
+    expect(find.text('箭头从腿侧向外上方'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
   });

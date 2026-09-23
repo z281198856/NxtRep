@@ -48,7 +48,14 @@ ExerciseMotionKind exerciseMotionKind(String name, String? movementPattern) {
   if (has(const ['弓步', '箭步', 'lunge', 'split_squat'])) {
     return ExerciseMotionKind.lunge;
   }
-  if (has(const ['侧平举', 'shoulder_abduction', 'lateral_raise'])) {
+  if (has(const [
+    '侧平举',
+    '肩部飞鸟',
+    '站姿飞鸟',
+    '站姿哑铃飞鸟',
+    'shoulder_abduction',
+    'lateral_raise',
+  ])) {
     return ExerciseMotionKind.lateralRaise;
   }
   if (has(const ['飞鸟', '夹胸', 'chest_fly', 'horizontal_adduction'])) {
@@ -714,6 +721,27 @@ class _AnatomyMotionPainter extends CustomPainter {
       ..color = AppColors.mint
       ..style = PaintingStyle.fill;
 
+    if (kind == ExerciseMotionKind.lateralRaise) {
+      final path = anatomyLateralRaiseMotionPath();
+      _drawStraightArrow(
+        canvas,
+        path.leftStart,
+        path.leftEnd,
+        progress,
+        guide,
+        marker,
+      );
+      _drawStraightArrow(
+        canvas,
+        path.rightStart,
+        path.rightEnd,
+        progress,
+        guide,
+        marker,
+      );
+      return;
+    }
+
     if (kind == ExerciseMotionKind.chestFly ||
         kind == ExerciseMotionKind.reverseFly) {
       final path = anatomyFlyMotionPath(kind);
@@ -738,21 +766,30 @@ class _AnatomyMotionPainter extends CustomPainter {
 
     final start = _motionPoint(_poseAt(kind, 0), kind);
     final end = _motionPoint(_poseAt(kind, 1), kind);
+    _drawStraightArrow(canvas, start, end, progress, guide, marker);
+  }
+
+  void _drawStraightArrow(
+    Canvas canvas,
+    Offset start,
+    Offset end,
+    double progress,
+    Paint guide,
+    Paint marker,
+  ) {
     final target = Offset.lerp(start, end, progress)!;
     canvas
       ..drawLine(start, end, guide)
       ..drawCircle(target, 3.2, marker);
 
     final direction = end - start;
-    if (direction.distance > 2) {
-      final unit = direction / direction.distance;
-      final perpendicular = Offset(-unit.dy, unit.dx);
-      final arrowTip = end;
-      final arrowBase = end - unit * 8;
-      canvas
-        ..drawLine(arrowTip, arrowBase + perpendicular * 4, guide)
-        ..drawLine(arrowTip, arrowBase - perpendicular * 4, guide);
-    }
+    if (direction.distance <= 2) return;
+    final unit = direction / direction.distance;
+    final perpendicular = Offset(-unit.dy, unit.dx);
+    final arrowBase = end - unit * 8;
+    canvas
+      ..drawLine(end, arrowBase + perpendicular * 4, guide)
+      ..drawLine(end, arrowBase - perpendicular * 4, guide);
   }
 
   void _drawCurvedArrow(
@@ -1287,12 +1324,7 @@ _Pose _poseAt(ExerciseMotionKind kind, double progress) {
   );
 }
 
-({
-  Offset leftStart,
-  Offset leftEnd,
-  Offset rightStart,
-  Offset rightEnd,
-})
+({Offset leftStart, Offset leftEnd, Offset rightStart, Offset rightEnd})
 anatomyFlyMotionPath(ExerciseMotionKind kind) {
   assert(
     kind == ExerciseMotionKind.chestFly ||
@@ -1308,15 +1340,24 @@ anatomyFlyMotionPath(ExerciseMotionKind kind) {
   );
 }
 
+({Offset leftStart, Offset leftEnd, Offset rightStart, Offset rightEnd})
+anatomyLateralRaiseMotionPath() {
+  final start = _poseAt(ExerciseMotionKind.lateralRaise, 0);
+  final end = _poseAt(ExerciseMotionKind.lateralRaise, 1);
+  return (
+    leftStart: start.leftHand,
+    leftEnd: end.leftHand,
+    rightStart: start.rightHand,
+    rightEnd: end.rightHand,
+  );
+}
+
 String _stageLabel(ExerciseMotionKind kind, double progress) {
   final isStart = progress < 0.48;
   return switch (kind) {
-    ExerciseMotionKind.chestFly => isStart
-        ? '两侧打开 · 起始'
-        : '向胸前夹合 · 发力',
-    ExerciseMotionKind.reverseFly => isStart
-        ? '胸前合拢 · 起始'
-        : '向两侧打开 · 发力',
+    ExerciseMotionKind.chestFly => isStart ? '两侧打开 · 起始' : '向胸前夹合 · 发力',
+    ExerciseMotionKind.reverseFly => isStart ? '胸前合拢 · 起始' : '向两侧打开 · 发力',
+    ExerciseMotionKind.lateralRaise => isStart ? '大腿两侧 · 起始' : '抬至肩高 · 发力',
     _ => isStart ? '起始位' : '发力位',
   };
 }
@@ -1324,27 +1365,28 @@ String _stageLabel(ExerciseMotionKind kind, double progress) {
 String _directionLabel(ExerciseMotionKind kind) => switch (kind) {
   ExerciseMotionKind.chestFly => '箭头向内夹合',
   ExerciseMotionKind.reverseFly => '箭头向外打开',
+  ExerciseMotionKind.lateralRaise => '箭头从腿侧向外上方',
   _ => '绿色箭头看方向',
 };
 
-String _motionCaption(ExerciseMotionKind kind, String equipment) => switch (kind) {
-  ExerciseMotionKind.squat => '观察髋、膝同步屈伸',
-  ExerciseMotionKind.hinge => '观察髋部后移与躯干前倾',
-  ExerciseMotionKind.lunge => '观察前后腿协同和重心下降',
-  ExerciseMotionKind.horizontalPush => '观察手臂水平推出轨迹',
-  ExerciseMotionKind.horizontalPull => '观察肘部向后收紧轨迹',
-  ExerciseMotionKind.verticalPush => '观察手臂垂直推举轨迹',
-  ExerciseMotionKind.verticalPull => '观察肩胛下沉与肘部下拉',
-  ExerciseMotionKind.curl => '观察肘关节屈伸轨迹',
-  ExerciseMotionKind.elbowExtension => '观察肘部固定与前臂伸展',
-  ExerciseMotionKind.lateralRaise => '观察手臂向两侧抬起轨迹',
-  ExerciseMotionKind.chestFly => equipment == 'dumbbell'
-      ? '俯视：双臂从两侧向胸部上方夹合'
-      : '双臂从两侧向胸前夹合',
-  ExerciseMotionKind.reverseFly => '双臂从胸前向两侧打开，后束发力',
-  ExerciseMotionKind.hipExtension => '观察髋部伸展与臀肌收缩',
-  ExerciseMotionKind.hipAbduction => '观察腿部向外打开轨迹',
-  ExerciseMotionKind.rotation => '观察躯干与髋部协同旋转',
-  ExerciseMotionKind.core => '观察躯干稳定与屈曲轨迹',
-  ExerciseMotionKind.generic => '观察关节轨迹与主要发力区域',
-};
+String _motionCaption(ExerciseMotionKind kind, String equipment) =>
+    switch (kind) {
+      ExerciseMotionKind.squat => '观察髋、膝同步屈伸',
+      ExerciseMotionKind.hinge => '观察髋部后移与躯干前倾',
+      ExerciseMotionKind.lunge => '观察前后腿协同和重心下降',
+      ExerciseMotionKind.horizontalPush => '观察手臂水平推出轨迹',
+      ExerciseMotionKind.horizontalPull => '观察肘部向后收紧轨迹',
+      ExerciseMotionKind.verticalPush => '观察手臂垂直推举轨迹',
+      ExerciseMotionKind.verticalPull => '观察肩胛下沉与肘部下拉',
+      ExerciseMotionKind.curl => '观察肘关节屈伸轨迹',
+      ExerciseMotionKind.elbowExtension => '观察肘部固定与前臂伸展',
+      ExerciseMotionKind.lateralRaise => '双手从大腿两侧向外抬至肩高',
+      ExerciseMotionKind.chestFly =>
+        equipment == 'dumbbell' ? '俯视：双臂从两侧向胸部上方夹合' : '双臂从两侧向胸前夹合',
+      ExerciseMotionKind.reverseFly => '双臂从胸前向两侧打开，后束发力',
+      ExerciseMotionKind.hipExtension => '观察髋部伸展与臀肌收缩',
+      ExerciseMotionKind.hipAbduction => '观察腿部向外打开轨迹',
+      ExerciseMotionKind.rotation => '观察躯干与髋部协同旋转',
+      ExerciseMotionKind.core => '观察躯干稳定与屈曲轨迹',
+      ExerciseMotionKind.generic => '观察关节轨迹与主要发力区域',
+    };
