@@ -18,6 +18,7 @@ enum ExerciseMotionKind {
   elbowExtension,
   lateralRaise,
   chestFly,
+  reverseFly,
   hipExtension,
   hipAbduction,
   rotation,
@@ -29,6 +30,17 @@ ExerciseMotionKind exerciseMotionKind(String name, String? movementPattern) {
   final value = '${name.toLowerCase()} ${movementPattern?.toLowerCase() ?? ''}';
   bool has(Iterable<String> words) => words.any(value.contains);
 
+  // Reverse fly must be resolved before generic "fly" and "hinge" matches.
+  // Its working direction is opening the arms, opposite to a chest fly.
+  if (has(const [
+    '反向飞鸟',
+    '后束飞鸟',
+    'reverse_fly',
+    'reverse fly',
+    'rear_delt_fly',
+  ])) {
+    return ExerciseMotionKind.reverseFly;
+  }
   if (has(const ['深蹲', 'squat'])) return ExerciseMotionKind.squat;
   if (has(const ['硬拉', '髋铰链', '俯身', 'deadlift', 'hinge'])) {
     return ExerciseMotionKind.hinge;
@@ -90,6 +102,13 @@ ExerciseMotionKind exerciseMotionKind(String name, String? movementPattern) {
   return ExerciseMotionKind.generic;
 }
 
+double anatomyMotionProgress(double cycleValue) {
+  final value = cycleValue.clamp(0.0, 1.0);
+  if (value <= 0.12) return 0;
+  if (value >= 0.78) return 1;
+  return Curves.easeInOut.transform((value - 0.12) / 0.66);
+}
+
 class AnatomyMotionIllustration extends StatefulWidget {
   const AnatomyMotionIllustration({
     super.key,
@@ -125,8 +144,8 @@ class _AnatomyMotionIllustrationState extends State<AnatomyMotionIllustration>
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat(reverse: true);
+      duration: const Duration(milliseconds: 2100),
+    )..repeat();
   }
 
   @override
@@ -140,7 +159,7 @@ class _AnatomyMotionIllustrationState extends State<AnatomyMotionIllustration>
         ..stop()
         ..value = 0.58;
     } else if (!_paused) {
-      _controller.repeat(reverse: true);
+      _controller.repeat();
     }
   }
 
@@ -156,7 +175,7 @@ class _AnatomyMotionIllustrationState extends State<AnatomyMotionIllustration>
     if (_paused) {
       _controller.stop();
     } else {
-      _controller.repeat(reverse: true);
+      _controller.repeat();
     }
   }
 
@@ -194,7 +213,7 @@ class _AnatomyMotionIllustrationState extends State<AnatomyMotionIllustration>
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       Text(
-                        _motionCaption(_kind),
+                        _motionCaption(_kind, widget.equipment),
                         style: Theme.of(context).textTheme.labelMedium,
                       ),
                     ],
@@ -222,9 +241,7 @@ class _AnatomyMotionIllustrationState extends State<AnatomyMotionIllustration>
               child: AnimatedBuilder(
                 animation: _controller,
                 builder: (context, _) {
-                  final progress = Curves.easeInOut.transform(
-                    _controller.value,
-                  );
+                  final progress = anatomyMotionProgress(_controller.value);
                   return Stack(
                     fit: StackFit.expand,
                     children: [
@@ -256,15 +273,15 @@ class _AnatomyMotionIllustrationState extends State<AnatomyMotionIllustration>
                           icon: progress < 0.48
                               ? Icons.accessibility_new_rounded
                               : Icons.local_fire_department_rounded,
-                          label: progress < 0.48 ? '起始位' : '发力位',
+                          label: _stageLabel(_kind, progress),
                         ),
                       ),
-                      const Positioned(
+                      Positioned(
                         right: 14,
                         top: 12,
                         child: _StagePill(
                           icon: Icons.arrow_forward_rounded,
-                          label: '绿色箭头看方向',
+                          label: _directionLabel(_kind),
                         ),
                       ),
                     ],
@@ -393,10 +410,16 @@ class _AnatomyMotionPainter extends CustomPainter {
       ..color = AppColors.line.withValues(alpha: 0.55)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 0.8;
-    for (final y in const [35.0, 70.0, 105.0]) {
-      canvas.drawLine(Offset(16, y), Offset(134, y), guide);
+    final isDumbbellChestFly =
+        kind == ExerciseMotionKind.chestFly && equipment == 'dumbbell';
+    if (isDumbbellChestFly) {
+      _drawBench(canvas);
+    } else {
+      for (final y in const [35.0, 70.0, 105.0]) {
+        canvas.drawLine(Offset(16, y), Offset(134, y), guide);
+      }
+      canvas.drawOval(const Rect.fromLTWH(15, 136, 120, 8), guide);
     }
-    canvas.drawOval(const Rect.fromLTWH(15, 136, 120, 8), guide);
 
     final pose = _poseAt(kind, progress);
     _drawBody(canvas, _poseAt(kind, 0), ghost: true);
@@ -406,6 +429,24 @@ class _AnatomyMotionPainter extends CustomPainter {
     _drawEquipment(canvas, pose, equipment, kind);
     _drawMotionGuide(canvas, pose, kind, progress);
     canvas.restore();
+  }
+
+  void _drawBench(Canvas canvas) {
+    final fill = Paint()
+      ..color = AppColors.indigoSoft.withValues(alpha: 0.72)
+      ..style = PaintingStyle.fill;
+    final outline = Paint()
+      ..color = AppColors.indigo.withValues(alpha: 0.55)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    final bench = RRect.fromRectAndRadius(
+      const Rect.fromLTWH(52, 2, 46, 142),
+      const Radius.circular(13),
+    );
+    canvas
+      ..drawRRect(bench, fill)
+      ..drawRRect(bench, outline)
+      ..drawLine(const Offset(56, 82), const Offset(94, 82), outline);
   }
 
   void _drawBody(Canvas canvas, _Pose pose, {bool ghost = false}) {
@@ -672,6 +713,29 @@ class _AnatomyMotionPainter extends CustomPainter {
     final marker = Paint()
       ..color = AppColors.mint
       ..style = PaintingStyle.fill;
+
+    if (kind == ExerciseMotionKind.chestFly ||
+        kind == ExerciseMotionKind.reverseFly) {
+      final path = anatomyFlyMotionPath(kind);
+      _drawCurvedArrow(
+        canvas,
+        path.leftStart,
+        path.leftEnd,
+        progress,
+        guide,
+        marker,
+      );
+      _drawCurvedArrow(
+        canvas,
+        path.rightStart,
+        path.rightEnd,
+        progress,
+        guide,
+        marker,
+      );
+      return;
+    }
+
     final start = _motionPoint(_poseAt(kind, 0), kind);
     final end = _motionPoint(_poseAt(kind, 1), kind);
     final target = Offset.lerp(start, end, progress)!;
@@ -691,6 +755,44 @@ class _AnatomyMotionPainter extends CustomPainter {
     }
   }
 
+  void _drawCurvedArrow(
+    Canvas canvas,
+    Offset start,
+    Offset end,
+    double progress,
+    Paint guide,
+    Paint marker,
+  ) {
+    final control = Offset(
+      (start.dx + end.dx) / 2,
+      (start.dy < end.dy ? start.dy : end.dy) - 12,
+    );
+    final path = Path()
+      ..moveTo(start.dx, start.dy)
+      ..quadraticBezierTo(control.dx, control.dy, end.dx, end.dy);
+    canvas.drawPath(path, guide);
+
+    final inverse = 1 - progress;
+    final target = Offset(
+      inverse * inverse * start.dx +
+          2 * inverse * progress * control.dx +
+          progress * progress * end.dx,
+      inverse * inverse * start.dy +
+          2 * inverse * progress * control.dy +
+          progress * progress * end.dy,
+    );
+    canvas.drawCircle(target, 3.2, marker);
+
+    final tangent = end - control;
+    if (tangent.distance <= 2) return;
+    final unit = tangent / tangent.distance;
+    final perpendicular = Offset(-unit.dy, unit.dx);
+    final arrowBase = end - unit * 8;
+    canvas
+      ..drawLine(end, arrowBase + perpendicular * 4, guide)
+      ..drawLine(end, arrowBase - perpendicular * 4, guide);
+  }
+
   Offset _motionPoint(_Pose pose, ExerciseMotionKind kind) => switch (kind) {
     ExerciseMotionKind.squat || ExerciseMotionKind.lunge => pose.hipCenter,
     ExerciseMotionKind.hinge || ExerciseMotionKind.core => pose.chest,
@@ -700,6 +802,7 @@ class _AnatomyMotionPainter extends CustomPainter {
     ExerciseMotionKind.horizontalPull ||
     ExerciseMotionKind.lateralRaise ||
     ExerciseMotionKind.chestFly ||
+    ExerciseMotionKind.reverseFly ||
     ExerciseMotionKind.rotation => pose.rightHand,
     _ => Offset(
       (pose.leftHand.dx + pose.rightHand.dx) / 2,
@@ -973,6 +1076,22 @@ _Pose _poseAt(ExerciseMotionKind kind, double progress) {
       leftAnkle: Offset(64, 138),
       rightAnkle: Offset(86, 138),
     ),
+    ExerciseMotionKind.reverseFly => const _Pose(
+      head: Offset(75, 15),
+      neck: Offset(75, 29),
+      leftShoulder: Offset(60, 39),
+      rightShoulder: Offset(90, 39),
+      leftElbow: Offset(39, 47),
+      rightElbow: Offset(111, 47),
+      leftHand: Offset(18, 48),
+      rightHand: Offset(132, 48),
+      leftHip: Offset(67, 78),
+      rightHip: Offset(83, 78),
+      leftKnee: Offset(66, 108),
+      rightKnee: Offset(84, 108),
+      leftAnkle: Offset(64, 138),
+      rightAnkle: Offset(86, 138),
+    ),
     ExerciseMotionKind.hipExtension => const _Pose(
       head: Offset(75, 15),
       neck: Offset(75, 29),
@@ -1050,6 +1169,22 @@ _Pose _poseAt(ExerciseMotionKind kind, double progress) {
       rightElbow: Offset(109, 47),
       leftHand: Offset(21, 47),
       rightHand: Offset(129, 47),
+      leftHip: Offset(67, 78),
+      rightHip: Offset(83, 78),
+      leftKnee: Offset(66, 108),
+      rightKnee: Offset(84, 108),
+      leftAnkle: Offset(64, 138),
+      rightAnkle: Offset(86, 138),
+    ),
+    ExerciseMotionKind.reverseFly => const _Pose(
+      head: Offset(75, 15),
+      neck: Offset(75, 29),
+      leftShoulder: Offset(60, 39),
+      rightShoulder: Offset(90, 39),
+      leftElbow: Offset(56, 48),
+      rightElbow: Offset(94, 48),
+      leftHand: Offset(70, 48),
+      rightHand: Offset(80, 48),
       leftHip: Offset(67, 78),
       rightHip: Offset(83, 78),
       leftKnee: Offset(66, 108),
@@ -1152,7 +1287,47 @@ _Pose _poseAt(ExerciseMotionKind kind, double progress) {
   );
 }
 
-String _motionCaption(ExerciseMotionKind kind) => switch (kind) {
+({
+  Offset leftStart,
+  Offset leftEnd,
+  Offset rightStart,
+  Offset rightEnd,
+})
+anatomyFlyMotionPath(ExerciseMotionKind kind) {
+  assert(
+    kind == ExerciseMotionKind.chestFly ||
+        kind == ExerciseMotionKind.reverseFly,
+  );
+  final start = _poseAt(kind, 0);
+  final end = _poseAt(kind, 1);
+  return (
+    leftStart: start.leftHand,
+    leftEnd: end.leftHand,
+    rightStart: start.rightHand,
+    rightEnd: end.rightHand,
+  );
+}
+
+String _stageLabel(ExerciseMotionKind kind, double progress) {
+  final isStart = progress < 0.48;
+  return switch (kind) {
+    ExerciseMotionKind.chestFly => isStart
+        ? '两侧打开 · 起始'
+        : '向胸前夹合 · 发力',
+    ExerciseMotionKind.reverseFly => isStart
+        ? '胸前合拢 · 起始'
+        : '向两侧打开 · 发力',
+    _ => isStart ? '起始位' : '发力位',
+  };
+}
+
+String _directionLabel(ExerciseMotionKind kind) => switch (kind) {
+  ExerciseMotionKind.chestFly => '箭头向内夹合',
+  ExerciseMotionKind.reverseFly => '箭头向外打开',
+  _ => '绿色箭头看方向',
+};
+
+String _motionCaption(ExerciseMotionKind kind, String equipment) => switch (kind) {
   ExerciseMotionKind.squat => '观察髋、膝同步屈伸',
   ExerciseMotionKind.hinge => '观察髋部后移与躯干前倾',
   ExerciseMotionKind.lunge => '观察前后腿协同和重心下降',
@@ -1163,7 +1338,10 @@ String _motionCaption(ExerciseMotionKind kind) => switch (kind) {
   ExerciseMotionKind.curl => '观察肘关节屈伸轨迹',
   ExerciseMotionKind.elbowExtension => '观察肘部固定与前臂伸展',
   ExerciseMotionKind.lateralRaise => '观察手臂向两侧抬起轨迹',
-  ExerciseMotionKind.chestFly => '观察双臂环抱式合拢轨迹',
+  ExerciseMotionKind.chestFly => equipment == 'dumbbell'
+      ? '俯视：双臂从两侧向胸部上方夹合'
+      : '双臂从两侧向胸前夹合',
+  ExerciseMotionKind.reverseFly => '双臂从胸前向两侧打开，后束发力',
   ExerciseMotionKind.hipExtension => '观察髋部伸展与臀肌收缩',
   ExerciseMotionKind.hipAbduction => '观察腿部向外打开轨迹',
   ExerciseMotionKind.rotation => '观察躯干与髋部协同旋转',
