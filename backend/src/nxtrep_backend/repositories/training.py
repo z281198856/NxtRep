@@ -50,6 +50,18 @@ class SqlAlchemyTrainingRepository:
             )
         )
 
+    async def template_exercise_names(self, exercise_ids: set[UUID]) -> dict[str, str]:
+        if not exercise_ids:
+            return {}
+        rows = await self.session.execute(
+            select(Exercise.id, Exercise.name_zh).where(
+                Exercise.id.in_(exercise_ids),
+                Exercise.deleted_at.is_(None),
+                Exercise.owner_user_id.is_(None),
+            )
+        )
+        return {str(exercise_id): name for exercise_id, name in rows}
+
     async def delete_draft(self, draft: TrainingPlanDraft) -> None:
         await self.session.delete(draft)
         await self.session.flush()

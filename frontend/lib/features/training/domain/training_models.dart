@@ -94,6 +94,23 @@ class TrainingTemplate {
   final List<String> equipment;
 }
 
+class TrainingTemplateDetail {
+  const TrainingTemplateDetail({required this.template, required this.days});
+
+  factory TrainingTemplateDetail.fromJson(Map<String, dynamic> json) =>
+      TrainingTemplateDetail(
+        template: TrainingTemplate.fromJson(json),
+        days: (json['days'] as List<dynamic>? ?? const [])
+            .map(
+              (item) => TrainingPlanDay.fromJson(item as Map<String, dynamic>),
+            )
+            .toList(growable: false),
+      );
+
+  final TrainingTemplate template;
+  final List<TrainingPlanDay> days;
+}
+
 class PlanDraft {
   const PlanDraft({
     required this.id,

@@ -130,13 +130,30 @@ async def get_template(
     user: CurrentUser,
     session: DbSession,
 ) -> TrainingTemplateDetailResponse:
-    item = await SqlAlchemyTrainingRepository(session).get_template(template_id)
+    repository = SqlAlchemyTrainingRepository(session)
+    item = await repository.get_template(template_id)
     if item is None:
         raise ApiError(
             status_code=status.HTTP_404_NOT_FOUND,
             code="TRAINING_TEMPLATE_NOT_FOUND",
             message="Training template not found",
         )
+    exercise_ids = {
+        UUID(exercise["exercise_id"])
+        for day in item.days
+        for exercise in day.get("exercises", [])
+    }
+    names = await repository.template_exercise_names(exercise_ids)
+    days = [
+        {
+            **day,
+            "exercises": [
+                {**exercise, "exercise_name": names.get(exercise["exercise_id"], "动作不可用")}
+                for exercise in day.get("exercises", [])
+            ],
+        }
+        for day in item.days
+    ]
     return TrainingTemplateDetailResponse(
         id=item.id,
         name=item.name,
@@ -144,7 +161,7 @@ async def get_template(
         days_per_week=item.days_per_week,
         duration_minutes=item.duration_minutes,
         equipment=item.equipment,
-        days=item.days,
+        days=days,
     )
 
 

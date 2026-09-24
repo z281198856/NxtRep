@@ -104,6 +104,14 @@ async def test_generate_validate_and_activate_equipment_plans_via_api(equipment)
                 assert all(
                     set(row["equipment"]) <= {equipment, "bodyweight"} for row in listed.json()
                 )
+                preview = await client.get(f"/api/v1/training/templates/{listed.json()[0]['id']}")
+                assert preview.status_code == 200, preview.text
+                assert preview.json()["days"]
+                assert all(
+                    item["exercise_name"] == exercises[item["exercise_id"]].name_zh
+                    for day in preview.json()["days"]
+                    for item in day["exercises"]
+                )
         finally:
             app.dependency_overrides.clear()
             app.dependency_overrides.update(previous_overrides)

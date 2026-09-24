@@ -5,6 +5,7 @@ import '../../../core/widgets/app_widgets.dart';
 import '../domain/training_models.dart';
 import 'custom_plan_page.dart';
 import 'plan_controller.dart';
+import 'template_catalog_page.dart';
 import 'workout_history_page.dart';
 
 class PlanPage extends StatefulWidget {
@@ -49,32 +50,23 @@ class _PlanPageState extends State<PlanPage> {
   Future<void> _askForPlan(String mode) =>
       widget.onAskCoach('请根据我的目标和每周训练频率，为我生成一份$mode训练计划草稿。');
 
-  Future<void> _activateTemplate(TrainingTemplate template) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('启用“${template.name}”？'),
-        content: Text(
-          '每周 ${template.daysPerWeek} 次，每次约 ${template.durationMinutes} 分钟。'
-          '确认后将生成未来四周的训练日历。',
+  Future<void> _openTemplateDetail(TrainingTemplate template) async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => TemplateDetailPage(
+          controller: widget.controller,
+          template: template,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('再看看'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('确认启用'),
-          ),
-        ],
       ),
     );
-    if (confirmed != true) return;
-    final activated = await widget.controller.activateTemplate(template);
-    if (!mounted || !activated) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('“${template.name}”已启用，训练日历已生成')));
+  }
+
+  Future<void> _openCatalog() async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => TemplateCatalogPage(controller: widget.controller),
+      ),
+    );
   }
 
   Future<void> _openHistory() => Navigator.of(context).push(
@@ -191,17 +183,19 @@ class _PlanPageState extends State<PlanPage> {
                   if (plan == null) ...[
                     const SizedBox(height: 28),
                     SectionTitle(
-                      title: '官方推荐计划',
+                      title: '按目标推荐',
                       action: TextButton(
                         onPressed: widget.controller.submitting
                             ? null
-                            : _openCustomPlan,
-                        child: const Text('按条件选计划'),
+                            : _openCatalog,
+                        child: Text(
+                          '全部 ${widget.controller.templates.length} 套',
+                        ),
                       ),
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '先看每周 3 天的常用安排，也可按目标、器械和频次选择。',
+                      '增肌塑形、减脂保肌与力量基础；点开可预览每一天的动作。',
                       style: Theme.of(context).textTheme.bodyMedium
                           ?.copyWith(color: AppColors.muted),
                     ),
@@ -223,13 +217,21 @@ class _PlanPageState extends State<PlanPage> {
                                 widget.controller.activatingTemplateId ==
                                 template.id,
                             enabled: !widget.controller.submitting,
-                            onTap: () => _activateTemplate(template),
+                            onTap: () => _openTemplateDetail(template),
                           ),
                         ),
                       ),
                   ] else ...[
                     const SizedBox(height: 16),
                     _ActivePlanOverview(plan: plan),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: _openCatalog,
+                      icon: const Icon(Icons.view_list_rounded),
+                      label: Text(
+                        '浏览全部 ${widget.controller.templates.length} 套计划',
+                      ),
+                    ),
                   ],
                   const SizedBox(height: 24),
                   _WeekStrip(
@@ -443,7 +445,13 @@ class _TemplatePlanCard extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2.4),
             )
           else
-            const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+            const Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.visibility_outlined, color: AppColors.primary),
+                Text('预览'),
+              ],
+            ),
         ],
       ),
     );

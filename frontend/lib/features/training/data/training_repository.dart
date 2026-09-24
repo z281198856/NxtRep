@@ -24,6 +24,14 @@ class TrainingRepository {
         .toList(growable: false);
   }
 
+  Future<TrainingTemplateDetail> getTemplateDetail(String id) async {
+    final json = expectJsonObject(
+      await _apiClient.get('/training/templates/$id'),
+      context: '训练计划详情接口',
+    );
+    return TrainingTemplateDetail.fromJson(json);
+  }
+
   Future<ActiveTrainingPlan> activateTemplate(TrainingTemplate template) async {
     final draft = PlanDraft.fromJson(
       expectJsonObject(
