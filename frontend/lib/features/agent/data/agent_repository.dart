@@ -18,6 +18,51 @@ class AgentRepository {
     return AgentConversation.fromJson(json);
   }
 
+  Future<List<AgentConversation>> listConversations({
+    String status = 'active',
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.get(
+        '/agent/conversations',
+        query: {'status': status, 'page': '1', 'page_size': '100'},
+      ),
+      context: 'AI 教练会话列表接口',
+    );
+    return (json['list'] as List<dynamic>? ?? const [])
+        .map(
+          (item) => AgentConversation.fromJson(
+            Map<String, dynamic>.from(item as Map),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<AgentConversation> updateConversation(
+    AgentConversation conversation, {
+    String? title,
+    String? status,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.patch(
+        '/agent/conversations/${conversation.id}',
+        body: {
+          'title': ?title?.trim(),
+          'status': ?status,
+          'expected_version': conversation.version,
+        },
+      ),
+      context: '更新 AI 教练会话接口',
+    );
+    return AgentConversation.fromJson(json);
+  }
+
+  Future<void> deleteConversation(AgentConversation conversation) => _apiClient
+      .delete(
+        '/agent/conversations/${conversation.id}',
+        body: {'expected_version': conversation.version},
+      )
+      .then((_) {});
+
   Future<List<AgentMessage>> listMessages(String conversationId) async {
     final json = expectJsonObject(
       await _apiClient.get(
@@ -60,4 +105,57 @@ class AgentRepository {
       body: {'expected_version': card.version, 'reason': '用户在移动端拒绝'},
     );
   }
+
+  Future<List<AgentMemory>> listMemories() async {
+    final json = expectJsonObject(
+      await _apiClient.get('/memories', query: const {'limit': '50'}),
+      context: 'AI 长期记忆列表接口',
+    );
+    return (json['list'] as List<dynamic>? ?? const [])
+        .map(
+          (item) =>
+              AgentMemory.fromJson(Map<String, dynamic>.from(item as Map)),
+        )
+        .toList(growable: false);
+  }
+
+  Future<AgentMemory> createMemory({
+    required String category,
+    required String content,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.post(
+        '/memories',
+        body: {'category': category, 'content': content.trim()},
+      ),
+      context: '新增 AI 长期记忆接口',
+    );
+    return AgentMemory.fromJson(json);
+  }
+
+  Future<AgentMemory> updateMemory(
+    AgentMemory memory, {
+    required String category,
+    required String content,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.patch(
+        '/memories/${memory.id}',
+        body: {
+          'category': category,
+          'content': content.trim(),
+          'expected_version': memory.version,
+        },
+      ),
+      context: '更新 AI 长期记忆接口',
+    );
+    return AgentMemory.fromJson(json);
+  }
+
+  Future<void> deleteMemory(AgentMemory memory) => _apiClient
+      .delete(
+        '/memories/${memory.id}',
+        body: {'expected_version': memory.version},
+      )
+      .then((_) {});
 }

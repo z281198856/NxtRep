@@ -9,6 +9,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../domain/agent_models.dart';
 import 'agent_controller.dart';
+import 'agent_management_page.dart';
 
 class AgentPage extends StatefulWidget {
   const AgentPage({super.key, required this.controller});
@@ -176,6 +177,12 @@ class _AgentPageState extends State<AgentPage> {
     );
   }
 
+  Future<void> _openManagement() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => AgentManagementPage(controller: widget.controller),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -185,7 +192,11 @@ class _AgentPageState extends State<AgentPage> {
           listenable: widget.controller,
           builder: (context, _) => Column(
             children: [
-              const _CoachHeader(),
+              _CoachHeader(
+                title: widget.controller.currentConversation?.title ?? 'AI 教练',
+                onManage: _openManagement,
+                onNewConversation: widget.controller.startNewConversation,
+              ),
               Expanded(
                 child: widget.controller.messages.isEmpty
                     ? _Welcome(onPrompt: _send)
@@ -266,7 +277,15 @@ class _AgentPageState extends State<AgentPage> {
 }
 
 class _CoachHeader extends StatelessWidget {
-  const _CoachHeader();
+  const _CoachHeader({
+    required this.title,
+    required this.onManage,
+    required this.onNewConversation,
+  });
+
+  final String title;
+  final VoidCallback onManage;
+  final VoidCallback onNewConversation;
 
   @override
   Widget build(BuildContext context) {
@@ -296,7 +315,12 @@ class _CoachHeader extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('AI 教练', style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 const SizedBox(height: 3),
                 Row(
                   children: [
@@ -317,6 +341,16 @@ class _CoachHeader extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+          IconButton(
+            tooltip: '新对话',
+            onPressed: onNewConversation,
+            icon: const Icon(Icons.add_comment_outlined),
+          ),
+          IconButton(
+            tooltip: '历史与记忆',
+            onPressed: onManage,
+            icon: const Icon(Icons.manage_search_rounded),
           ),
         ],
       ),

@@ -107,6 +107,7 @@ class _HomeShellState extends State<HomeShell> {
       TodayPage(
         username: widget.controller.account?.username ?? '',
         controller: _trainingController,
+        exerciseRepository: _exerciseRepository,
         onOpenPlan: () => _selectTab(1),
         onOpenProgress: () => _selectTab(2),
         onOpenAgent: () => _selectTab(3),

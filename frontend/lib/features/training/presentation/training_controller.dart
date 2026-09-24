@@ -36,9 +36,12 @@ class TrainingController extends ChangeNotifier {
     }
   }
 
-  Future<bool> start(CalendarEvent event) async {
+  Future<bool> start(
+    CalendarEvent event, {
+    PreWorkoutCheckInput? preCheck,
+  }) async {
     return _perform(() async {
-      activeWorkout = await _repository.startWorkout(event);
+      activeWorkout = await _repository.startWorkout(event, preCheck: preCheck);
     });
   }
 
@@ -57,6 +60,80 @@ class TrainingController extends ChangeNotifier {
         reps: reps,
       );
       activeWorkout = await _repository.getActiveWorkout();
+    });
+  }
+
+  Future<bool> updateSet({
+    required WorkoutSet set,
+    required double weightKg,
+    required int reps,
+  }) async {
+    final workout = activeWorkout;
+    if (workout == null) return false;
+    return _perform(() async {
+      await _repository.updateSet(
+        workout: workout,
+        set: set,
+        weightKg: weightKg,
+        reps: reps,
+      );
+      activeWorkout = await _repository.getActiveWorkout();
+    });
+  }
+
+  Future<bool> deleteSet(WorkoutSet set) async {
+    final workout = activeWorkout;
+    if (workout == null) return false;
+    return _perform(() async {
+      await _repository.deleteSet(workout: workout, set: set);
+      activeWorkout = await _repository.getActiveWorkout();
+    });
+  }
+
+  Future<bool> addExercise(String exerciseId) async {
+    final workout = activeWorkout;
+    if (workout == null) return false;
+    return _perform(() async {
+      activeWorkout = await _repository.addExercise(
+        workout: workout,
+        exerciseId: exerciseId,
+      );
+    });
+  }
+
+  Future<bool> replaceExercise(
+    WorkoutExercise exercise,
+    String replacementExerciseId,
+  ) async {
+    final workout = activeWorkout;
+    if (workout == null) return false;
+    return _perform(() async {
+      activeWorkout = await _repository.replaceExercise(
+        workout: workout,
+        exercise: exercise,
+        replacementExerciseId: replacementExerciseId,
+      );
+    });
+  }
+
+  Future<bool> skipExercise(WorkoutExercise exercise) async {
+    final workout = activeWorkout;
+    if (workout == null) return false;
+    return _perform(() async {
+      activeWorkout = await _repository.skipExercise(
+        workout: workout,
+        exercise: exercise,
+      );
+    });
+  }
+
+  Future<bool> abandon() async {
+    final workout = activeWorkout;
+    if (workout == null) return false;
+    return _perform(() async {
+      await _repository.abandonWorkout(workout);
+      activeWorkout = null;
+      await refresh();
     });
   }
 

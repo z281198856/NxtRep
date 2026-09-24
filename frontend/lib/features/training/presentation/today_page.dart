@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../exercises/data/exercise_repository.dart';
 import '../domain/training_models.dart';
 import 'training_controller.dart';
 import 'workout_page.dart';
@@ -11,6 +12,7 @@ class TodayPage extends StatefulWidget {
     super.key,
     required this.username,
     required this.controller,
+    required this.exerciseRepository,
     required this.onOpenNutrition,
     required this.onOpenPlan,
     required this.onOpenProgress,
@@ -19,6 +21,7 @@ class TodayPage extends StatefulWidget {
 
   final String username;
   final TrainingController controller;
+  final ExerciseRepository exerciseRepository;
   final VoidCallback onOpenNutrition;
   final VoidCallback onOpenPlan;
   final VoidCallback onOpenProgress;
@@ -26,6 +29,111 @@ class TodayPage extends StatefulWidget {
 
   @override
   State<TodayPage> createState() => _TodayPageState();
+}
+
+class _PreWorkoutCheckSheet extends StatefulWidget {
+  const _PreWorkoutCheckSheet({required this.defaultMinutes});
+
+  final int defaultMinutes;
+
+  @override
+  State<_PreWorkoutCheckSheet> createState() => _PreWorkoutCheckSheetState();
+}
+
+class _PreWorkoutCheckSheetState extends State<_PreWorkoutCheckSheet> {
+  int _sleep = 3;
+  int _energy = 3;
+  late int _minutes;
+
+  @override
+  void initState() {
+    super.initState();
+    _minutes = widget.defaultMinutes.clamp(15, 180);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 22),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('训练前状态', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 6),
+            const Text('告诉计划你今天的真实状态，后续调整会更准确。'),
+            const SizedBox(height: 18),
+            _CheckRating(
+              label: '睡眠质量',
+              value: _sleep,
+              onChanged: (value) => setState(() => _sleep = value),
+            ),
+            const SizedBox(height: 14),
+            _CheckRating(
+              label: '当前精力',
+              value: _energy,
+              onChanged: (value) => setState(() => _energy = value),
+            ),
+            const SizedBox(height: 14),
+            Text('可用时间：$_minutes 分钟'),
+            Slider(
+              value: _minutes.toDouble(),
+              min: 15,
+              max: 180,
+              divisions: 11,
+              label: '$_minutes 分钟',
+              onChanged: (value) => setState(() => _minutes = value.round()),
+            ),
+            const SizedBox(height: 8),
+            FilledButton(
+              onPressed: () => Navigator.pop(
+                context,
+                PreWorkoutCheckInput(
+                  sleepQuality: _sleep,
+                  energy: _energy,
+                  availableMinutes: _minutes,
+                ),
+              ),
+              child: const Text('开始训练'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CheckRating extends StatelessWidget {
+  const _CheckRating({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(width: 80, child: Text(label)),
+        for (var rating = 1; rating <= 5; rating++) ...[
+          Expanded(
+            child: ChoiceChip(
+              label: Text('$rating'),
+              selected: value == rating,
+              onSelected: (_) => onChanged(rating),
+            ),
+          ),
+          if (rating < 5) const SizedBox(width: 5),
+        ],
+      ],
+    );
+  }
 }
 
 class _TodayPageState extends State<TodayPage> {
@@ -38,13 +146,23 @@ class _TodayPageState extends State<TodayPage> {
   Future<void> _openWorkout() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => WorkoutPage(controller: widget.controller),
+        builder: (_) => WorkoutPage(
+          controller: widget.controller,
+          exerciseRepository: widget.exerciseRepository,
+        ),
       ),
     );
   }
 
   Future<void> _start(CalendarEvent event) async {
-    if (await widget.controller.start(event) && mounted) {
+    final preCheck = await showModalBottomSheet<PreWorkoutCheckInput>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) =>
+          _PreWorkoutCheckSheet(defaultMinutes: event.estimatedMinutes),
+    );
+    if (preCheck == null) return;
+    if (await widget.controller.start(event, preCheck: preCheck) && mounted) {
       await _openWorkout();
     }
   }

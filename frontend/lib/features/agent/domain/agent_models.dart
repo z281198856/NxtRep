@@ -1,15 +1,59 @@
 import 'dart:typed_data';
 
 class AgentConversation {
-  const AgentConversation({required this.id, required this.version});
+  const AgentConversation({
+    required this.id,
+    required this.version,
+    this.title,
+    this.status = 'active',
+    this.summary,
+    this.lastMessageAt,
+  });
 
   factory AgentConversation.fromJson(Map<String, dynamic> json) =>
       AgentConversation(
         id: json['id'] as String,
         version: json['version'] as int,
+        title: json['title'] as String?,
+        status: json['status'] as String? ?? 'active',
+        summary: json['summary'] as String?,
+        lastMessageAt: json['last_message_at'] == null
+            ? null
+            : DateTime.parse(json['last_message_at'] as String),
       );
 
   final String id;
+  final int version;
+  final String? title;
+  final String status;
+  final String? summary;
+  final DateTime? lastMessageAt;
+}
+
+class AgentMemory {
+  const AgentMemory({
+    required this.id,
+    required this.category,
+    required this.content,
+    required this.source,
+    required this.savedAt,
+    required this.version,
+  });
+
+  factory AgentMemory.fromJson(Map<String, dynamic> json) => AgentMemory(
+    id: json['id'] as String,
+    category: json['category'] as String,
+    content: json['content'] as String,
+    source: json['source'] as String,
+    savedAt: DateTime.parse(json['saved_at'] as String),
+    version: json['version'] as int,
+  );
+
+  final String id;
+  final String category;
+  final String content;
+  final String source;
+  final DateTime savedAt;
   final int version;
 }
 

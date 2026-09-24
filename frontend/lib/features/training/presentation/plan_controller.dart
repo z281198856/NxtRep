@@ -69,6 +69,119 @@ class PlanController extends ChangeNotifier {
     }
   }
 
+  Future<PlanDraft?> generatePlan({
+    required String goalType,
+    required int daysPerWeek,
+    required String equipment,
+    String? name,
+  }) => _loadDraft(
+    () => _repository.generatePlanDraft(
+      goalType: goalType,
+      daysPerWeek: daysPerWeek,
+      equipment: equipment,
+      name: name,
+    ),
+  );
+
+  Future<PlanDraft?> importPlanText(String text, {String? name}) =>
+      _loadDraft(() => _repository.parsePlanText(text: text, name: name));
+
+  Future<PlanDraft?> _loadDraft(Future<PlanDraft> Function() load) async {
+    if (submitting) return null;
+    submitting = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      return await load();
+    } on ApiException catch (error) {
+      errorMessage = _messageFor(error);
+      return null;
+    } finally {
+      submitting = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> activateDraft(PlanDraft draft) async {
+    if (submitting) return false;
+    submitting = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      activePlan = await _repository.activateDraft(draft);
+      await _refreshCalendar();
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = _messageFor(error);
+      return false;
+    } finally {
+      submitting = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> createCalendarEvent({
+    required DateTime date,
+    required String title,
+    required int estimatedMinutes,
+  }) => _calendarMutation(
+    () => _repository.createCalendarEvent(
+      date: date,
+      title: title,
+      estimatedMinutes: estimatedMinutes,
+    ),
+  );
+
+  Future<bool> rescheduleEvent({
+    required CalendarEvent event,
+    required String strategy,
+    DateTime? targetDate,
+  }) => _calendarMutation(
+    () => _repository.rescheduleEvent(
+      event: event,
+      strategy: strategy,
+      targetDate: targetDate,
+      reason: '用户在移动端调整训练日历',
+    ),
+  );
+
+  Future<bool> compressEvent(
+    CalendarEvent event, {
+    required int targetMinutes,
+  }) => _calendarMutation(
+    () => _repository.compressEvent(
+      event: event,
+      targetMinutes: targetMinutes,
+      reason: '用户可用训练时间发生变化',
+    ),
+  );
+
+  Future<bool> _calendarMutation(Future<Object?> Function() action) async {
+    if (submitting) return false;
+    submitting = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      await action();
+      await _refreshCalendar();
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = _messageFor(error);
+      return false;
+    } finally {
+      submitting = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _refreshCalendar() async {
+    final now = DateTime.now();
+    events = await _repository.getCalendar(
+      now,
+      now.add(const Duration(days: 13)),
+    );
+  }
+
   Future<Workout?> loadWorkout(String workoutId) async {
     if (detailLoading) return null;
     detailLoading = true;

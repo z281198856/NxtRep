@@ -3,13 +3,20 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../exercises/data/exercise_repository.dart';
+import '../../exercises/domain/exercise_models.dart';
 import '../domain/training_models.dart';
 import 'training_controller.dart';
 
 class WorkoutPage extends StatefulWidget {
-  const WorkoutPage({super.key, required this.controller});
+  const WorkoutPage({
+    super.key,
+    required this.controller,
+    required this.exerciseRepository,
+  });
 
   final TrainingController controller;
+  final ExerciseRepository exerciseRepository;
 
   @override
   State<WorkoutPage> createState() => _WorkoutPageState();
@@ -44,6 +51,107 @@ class _WorkoutPageState extends State<WorkoutPage> {
       weightKg: input.weightKg,
       reps: input.reps,
     );
+  }
+
+  Future<void> _editSet(WorkoutExercise exercise, WorkoutSet set) async {
+    final input = await showModalBottomSheet<_SetInput>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _SetEntrySheet(exercise: exercise, editingSet: set),
+    );
+    if (input == null) return;
+    await widget.controller.updateSet(
+      set: set,
+      weightKg: input.weightKg,
+      reps: input.reps,
+    );
+  }
+
+  Future<void> _deleteSet(WorkoutSet set) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除这一组？'),
+        content: const Text('删除后训练容量和完成组数会同步更新。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await widget.controller.deleteSet(set);
+  }
+
+  Future<ExerciseListItem?> _chooseExercise({String title = '选择动作'}) {
+    return showModalBottomSheet<ExerciseListItem>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _ExercisePickerSheet(
+        title: title,
+        repository: widget.exerciseRepository,
+      ),
+    );
+  }
+
+  Future<void> _addExercise() async {
+    final selected = await _chooseExercise(title: '临时添加动作');
+    if (selected != null) await widget.controller.addExercise(selected.id);
+  }
+
+  Future<void> _replaceExercise(WorkoutExercise exercise) async {
+    final selected = await _chooseExercise(title: '替换 ${exercise.name}');
+    if (selected != null) {
+      await widget.controller.replaceExercise(exercise, selected.id);
+    }
+  }
+
+  Future<void> _skipExercise(WorkoutExercise exercise) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('跳过 ${exercise.name}？'),
+        content: const Text('这次训练会保留跳过记录，之后仍可查看。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认跳过'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await widget.controller.skipExercise(exercise);
+  }
+
+  Future<void> _abandon() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('放弃本次训练？'),
+        content: const Text('已完成的训练组会保留，本次训练将标记为已放弃。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('继续训练'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认放弃'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (await widget.controller.abandon() && mounted) Navigator.pop(context);
   }
 
   Future<void> _finish() async {
@@ -116,6 +224,17 @@ class _WorkoutPageState extends State<WorkoutPage> {
                 onPressed: widget.controller.submitting ? null : _finish,
                 child: const Text('结束'),
               ),
+              PopupMenuButton<String>(
+                tooltip: '更多训练操作',
+                onSelected: (value) {
+                  if (value == 'add') _addExercise();
+                  if (value == 'abandon') _abandon();
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'add', child: Text('临时添加动作')),
+                  PopupMenuItem(value: 'abandon', child: Text('放弃本次训练')),
+                ],
+              ),
             ],
           ),
           body: ListView(
@@ -163,8 +282,20 @@ class _WorkoutPageState extends State<WorkoutPage> {
                     exercise: exercise,
                     submitting: widget.controller.submitting || paused,
                     onRecord: () => _recordSet(exercise),
+                    onEditSet: (set) => _editSet(exercise, set),
+                    onDeleteSet: _deleteSet,
+                    onReplace: () => _replaceExercise(exercise),
+                    onSkip: () => _skipExercise(exercise),
                   ),
                 ),
+              const SizedBox(height: 4),
+              OutlinedButton.icon(
+                onPressed: widget.controller.submitting || paused
+                    ? null
+                    : _addExercise,
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('临时添加动作'),
+              ),
             ],
           ),
         );
@@ -207,11 +338,19 @@ class _ExerciseCard extends StatelessWidget {
     required this.exercise,
     required this.submitting,
     required this.onRecord,
+    required this.onEditSet,
+    required this.onDeleteSet,
+    required this.onReplace,
+    required this.onSkip,
   });
 
   final WorkoutExercise exercise;
   final bool submitting;
   final VoidCallback onRecord;
+  final ValueChanged<WorkoutSet> onEditSet;
+  final ValueChanged<WorkoutSet> onDeleteSet;
+  final VoidCallback onReplace;
+  final VoidCallback onSkip;
 
   @override
   Widget build(BuildContext context) {
@@ -232,6 +371,18 @@ class _ExerciseCard extends StatelessWidget {
                   ),
                 ),
                 Text('${exercise.sets.length}/${exercise.targetSets} 组'),
+                PopupMenuButton<String>(
+                  tooltip: '动作操作',
+                  enabled: !submitting && !exercise.skipped,
+                  onSelected: (value) {
+                    if (value == 'replace') onReplace();
+                    if (value == 'skip') onSkip();
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'replace', child: Text('替换动作')),
+                    PopupMenuItem(value: 'skip', child: Text('跳过动作')),
+                  ],
+                ),
               ],
             ),
             const SizedBox(height: 4),
@@ -252,7 +403,20 @@ class _ExerciseCard extends StatelessWidget {
                       ),
                       Text('${set.reps} 次'),
                       const SizedBox(width: 8),
-                      const Icon(Icons.check_circle_rounded, size: 18),
+                      PopupMenuButton<String>(
+                        padding: EdgeInsets.zero,
+                        tooltip: '训练组操作',
+                        enabled: !submitting,
+                        onSelected: (value) {
+                          if (value == 'edit') onEditSet(set);
+                          if (value == 'delete') onDeleteSet(set);
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: 'edit', child: Text('修改')),
+                          PopupMenuItem(value: 'delete', child: Text('删除')),
+                        ],
+                        icon: const Icon(Icons.more_horiz_rounded, size: 20),
+                      ),
                     ],
                   ),
                 ),
@@ -411,9 +575,10 @@ class _SetInput {
 }
 
 class _SetEntrySheet extends StatefulWidget {
-  const _SetEntrySheet({required this.exercise});
+  const _SetEntrySheet({required this.exercise, this.editingSet});
 
   final WorkoutExercise exercise;
+  final WorkoutSet? editingSet;
 
   @override
   State<_SetEntrySheet> createState() => _SetEntrySheetState();
@@ -427,7 +592,7 @@ class _SetEntrySheetState extends State<_SetEntrySheet> {
   @override
   void initState() {
     super.initState();
-    final last = widget.exercise.sets.lastOrNull;
+    final last = widget.editingSet ?? widget.exercise.sets.lastOrNull;
     final initialWeight = last?.weightKg ?? widget.exercise.targetLoadKg;
     _weight = TextEditingController(text: initialWeight.toStringAsFixed(1));
     _reps = TextEditingController(
@@ -469,7 +634,9 @@ class _SetEntrySheetState extends State<_SetEntrySheet> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              '第 ${widget.exercise.sets.length + 1} 组 · ${widget.exercise.name}',
+              widget.editingSet == null
+                  ? '第 ${widget.exercise.sets.length + 1} 组 · ${widget.exercise.name}'
+                  : '修改第 ${widget.editingSet!.setIndex} 组 · ${widget.exercise.name}',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 20),
@@ -512,8 +679,99 @@ class _SetEntrySheetState extends State<_SetEntrySheet> {
               ],
             ),
             const SizedBox(height: 18),
-            FilledButton(onPressed: _submit, child: const Text('完成这一组')),
+            FilledButton(
+              onPressed: _submit,
+              child: Text(widget.editingSet == null ? '完成这一组' : '保存修改'),
+            ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ExercisePickerSheet extends StatefulWidget {
+  const _ExercisePickerSheet({required this.title, required this.repository});
+
+  final String title;
+  final ExerciseRepository repository;
+
+  @override
+  State<_ExercisePickerSheet> createState() => _ExercisePickerSheetState();
+}
+
+class _ExercisePickerSheetState extends State<_ExercisePickerSheet> {
+  late final Future<ExercisePageData> _future = widget.repository.list();
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.78,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(widget.title, style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 12),
+              TextField(
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search_rounded),
+                  hintText: '搜索动作名称、器械或肌群',
+                ),
+                onChanged: (value) => setState(() => _query = value.trim()),
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: FutureBuilder<ExercisePageData>(
+                  future: _future,
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) {
+                      if (snapshot.hasError) {
+                        return const Center(child: Text('动作库加载失败，请稍后重试'));
+                      }
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final keyword = _query.toLowerCase();
+                    final items = snapshot.data!.items
+                        .where((item) {
+                          if (keyword.isEmpty) return true;
+                          return item.name.toLowerCase().contains(keyword) ||
+                              item.equipment.toLowerCase().contains(keyword) ||
+                              item.primaryMuscles.any(
+                                (muscle) =>
+                                    muscle.toLowerCase().contains(keyword),
+                              );
+                        })
+                        .toList(growable: false);
+                    if (items.isEmpty) {
+                      return const Center(child: Text('没有找到匹配动作'));
+                    }
+                    return ListView.separated(
+                      itemCount: items.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(item.name),
+                          subtitle: Text(
+                            '${item.equipment} · ${item.primaryMuscles.join('、')}',
+                          ),
+                          trailing: const Icon(
+                            Icons.add_circle_outline_rounded,
+                          ),
+                          onTap: () => Navigator.pop(context, item),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

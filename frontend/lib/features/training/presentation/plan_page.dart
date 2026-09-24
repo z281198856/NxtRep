@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../domain/training_models.dart';
+import 'custom_plan_page.dart';
 import 'plan_controller.dart';
 import 'workout_history_page.dart';
 
@@ -82,6 +83,55 @@ class _PlanPageState extends State<PlanPage> {
     ),
   );
 
+  Future<void> _openCustomPlan() async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => CustomPlanPage(controller: widget.controller),
+      ),
+    );
+    if (changed == true) await widget.controller.refresh();
+  }
+
+  Future<void> _createCalendarEvent() async {
+    final input = await showModalBottomSheet<_CalendarEventInput>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _CreateCalendarEventSheet(date: _selectedDate),
+    );
+    if (input == null) return;
+    final saved = await widget.controller.createCalendarEvent(
+      date: _selectedDate,
+      title: input.title,
+      estimatedMinutes: input.minutes,
+    );
+    if (saved && mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('训练已加入日历')));
+    }
+  }
+
+  Future<void> _adjustEvent(CalendarEvent event) async {
+    final action = await showModalBottomSheet<_CalendarAdjustmentInput>(
+      context: context,
+      builder: (_) => _CalendarAdjustmentSheet(event: event),
+    );
+    if (action == null) return;
+    final saved = action.targetMinutes == null
+        ? await widget.controller.rescheduleEvent(
+            event: event,
+            strategy: action.strategy,
+            targetDate: action.targetDate,
+          )
+        : await widget.controller.compressEvent(
+            event,
+            targetMinutes: action.targetMinutes!,
+          );
+    if (saved && mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('训练日历已更新')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -114,6 +164,30 @@ class _PlanPageState extends State<PlanPage> {
                     const SizedBox(height: 14),
                   ],
                   _PlanSummaryCard(plan: plan),
+                  const SizedBox(height: 12),
+                  AppSurface(
+                    onTap: widget.controller.submitting
+                        ? null
+                        : _openCustomPlan,
+                    padding: const EdgeInsets.all(17),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.tune_rounded, color: AppColors.primary),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('自定义训练计划'),
+                              SizedBox(height: 3),
+                              Text('智能生成，或从文字训练表导入'),
+                            ],
+                          ),
+                        ),
+                        Icon(Icons.chevron_right_rounded),
+                      ],
+                    ),
+                  ),
                   if (plan == null) ...[
                     const SizedBox(height: 28),
                     const SectionTitle(title: '官方推荐计划'),
@@ -178,6 +252,10 @@ class _PlanPageState extends State<PlanPage> {
                     _DayPlanCard(
                       event: event,
                       onCreate: () => _askForPlan('适合当前条件的'),
+                      onCreateManual: _createCalendarEvent,
+                      onAdjust: event == null
+                          ? null
+                          : () => _adjustEvent(event),
                     ),
                   const SizedBox(height: 24),
                   AppSurface(
@@ -609,10 +687,17 @@ class _DayChip extends StatelessWidget {
 }
 
 class _DayPlanCard extends StatelessWidget {
-  const _DayPlanCard({required this.event, required this.onCreate});
+  const _DayPlanCard({
+    required this.event,
+    required this.onCreate,
+    required this.onCreateManual,
+    required this.onAdjust,
+  });
 
   final CalendarEvent? event;
   final VoidCallback onCreate;
+  final VoidCallback onCreateManual;
+  final VoidCallback? onAdjust;
 
   @override
   Widget build(BuildContext context) {
@@ -646,6 +731,11 @@ class _DayPlanCard extends StatelessWidget {
                   onPressed: onCreate,
                   icon: const Icon(Icons.auto_awesome_rounded),
                   label: const Text('让 AI 帮我安排'),
+                ),
+                TextButton.icon(
+                  onPressed: onCreateManual,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('手动加入日历'),
                 ),
               ],
             )
@@ -686,9 +776,193 @@ class _DayPlanCard extends StatelessWidget {
                     label: '已完成',
                     color: AppColors.mint,
                     icon: Icons.check_rounded,
+                  )
+                else
+                  IconButton(
+                    tooltip: '调整训练',
+                    onPressed: onAdjust,
+                    icon: const Icon(Icons.edit_calendar_outlined),
                   ),
               ],
             ),
+    );
+  }
+}
+
+class _CalendarEventInput {
+  const _CalendarEventInput({required this.title, required this.minutes});
+
+  final String title;
+  final int minutes;
+}
+
+class _CreateCalendarEventSheet extends StatefulWidget {
+  const _CreateCalendarEventSheet({required this.date});
+
+  final DateTime date;
+
+  @override
+  State<_CreateCalendarEventSheet> createState() =>
+      _CreateCalendarEventSheetState();
+}
+
+class _CreateCalendarEventSheetState extends State<_CreateCalendarEventSheet> {
+  final _title = TextEditingController(text: '自主训练');
+  int _minutes = 60;
+
+  @override
+  void dispose() {
+    _title.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        20,
+        16,
+        20,
+        MediaQuery.viewInsetsOf(context).bottom + 22,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('加入训练日历', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 6),
+          Text('${widget.date.month} 月 ${widget.date.day} 日'),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _title,
+            autofocus: true,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(labelText: '训练名称'),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<int>(
+            initialValue: _minutes,
+            decoration: const InputDecoration(labelText: '预计时间'),
+            items: const [30, 45, 60, 75, 90]
+                .map(
+                  (minutes) => DropdownMenuItem(
+                    value: minutes,
+                    child: Text('$minutes 分钟'),
+                  ),
+                )
+                .toList(growable: false),
+            onChanged: (value) => setState(() => _minutes = value!),
+          ),
+          const SizedBox(height: 18),
+          FilledButton(
+            onPressed: _title.text.trim().isEmpty
+                ? null
+                : () => Navigator.pop(
+                    context,
+                    _CalendarEventInput(
+                      title: _title.text.trim(),
+                      minutes: _minutes,
+                    ),
+                  ),
+            child: const Text('加入日历'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CalendarAdjustmentInput {
+  const _CalendarAdjustmentInput({
+    required this.strategy,
+    this.targetDate,
+    this.targetMinutes,
+  });
+
+  final String strategy;
+  final DateTime? targetDate;
+  final int? targetMinutes;
+}
+
+class _CalendarAdjustmentSheet extends StatelessWidget {
+  const _CalendarAdjustmentSheet({required this.event});
+
+  final CalendarEvent event;
+
+  Future<void> _move(BuildContext context) async {
+    final initial = event.scheduledDate.add(const Duration(days: 1));
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 90)),
+    );
+    if (date != null && context.mounted) {
+      Navigator.pop(
+        context,
+        _CalendarAdjustmentInput(strategy: 'shift', targetDate: date),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '调整 ${event.title}',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 12),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.event_repeat_rounded),
+              title: const Text('改到其他日期'),
+              subtitle: const Text('保留训练内容，只调整日期'),
+              onTap: () => _move(context),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.compress_rounded),
+              title: const Text('压缩为 45 分钟'),
+              subtitle: const Text('后端会减少总时长并保留重点动作'),
+              onTap: () => Navigator.pop(
+                context,
+                const _CalendarAdjustmentInput(
+                  strategy: 'compress',
+                  targetMinutes: 45,
+                ),
+              ),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.compress_rounded),
+              title: const Text('压缩为 30 分钟'),
+              onTap: () => Navigator.pop(
+                context,
+                const _CalendarAdjustmentInput(
+                  strategy: 'compress',
+                  targetMinutes: 30,
+                ),
+              ),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.event_busy_outlined),
+              title: const Text('跳过本次训练'),
+              onTap: () => Navigator.pop(
+                context,
+                const _CalendarAdjustmentInput(strategy: 'skip'),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

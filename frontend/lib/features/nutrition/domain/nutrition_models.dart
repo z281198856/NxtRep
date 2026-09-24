@@ -392,3 +392,108 @@ class CustomFoodInput {
     'fat_g': fatG,
   };
 }
+
+class NutritionAdvice {
+  const NutritionAdvice({
+    required this.foodName,
+    required this.recommendation,
+    required this.cautions,
+  });
+
+  factory NutritionAdvice.fromJson(Map<String, dynamic> json) =>
+      NutritionAdvice(
+        foodName: json['food_name'] as String,
+        recommendation: json['recommendation'] as String,
+        cautions: (json['cautions'] as List<dynamic>? ?? const [])
+            .whereType<String>()
+            .toList(growable: false),
+      );
+
+  final String foodName;
+  final String recommendation;
+  final List<String> cautions;
+}
+
+class FlexibleMeal {
+  const FlexibleMeal({
+    required this.id,
+    required this.scheduledDate,
+    required this.label,
+    required this.version,
+    this.notes,
+  });
+
+  factory FlexibleMeal.fromJson(Map<String, dynamic> json) => FlexibleMeal(
+    id: json['id'] as String,
+    scheduledDate: DateTime.parse(json['scheduled_date'] as String),
+    label: json['label'] as String,
+    notes: json['notes'] as String?,
+    version: json['version'] as int,
+  );
+
+  final String id;
+  final DateTime scheduledDate;
+  final String label;
+  final String? notes;
+  final int version;
+}
+
+class NutritionTextDraft {
+  const NutritionTextDraft({
+    required this.id,
+    required this.mealType,
+    required this.totals,
+    required this.missingItems,
+    required this.questions,
+    required this.version,
+  });
+
+  factory NutritionTextDraft.fromJson(Map<String, dynamic> json) =>
+      NutritionTextDraft(
+        id: json['id'] as String,
+        mealType: json['meal_type'] as String,
+        totals: NutritionTotals.fromJson(
+          Map<String, dynamic>.from(json['totals'] as Map),
+        ),
+        missingItems: (json['missing_items'] as List<dynamic>? ?? const [])
+            .whereType<String>()
+            .toList(growable: false),
+        questions: (json['questions'] as List<dynamic>? ?? const [])
+            .whereType<String>()
+            .toList(growable: false),
+        version: json['version'] as int,
+      );
+
+  final String id;
+  final String mealType;
+  final NutritionTotals totals;
+  final List<String> missingItems;
+  final List<String> questions;
+  final int version;
+}
+
+class RecipeSummary {
+  const RecipeSummary({
+    required this.id,
+    required this.name,
+    required this.servings,
+    required this.totals,
+    required this.version,
+  });
+
+  factory RecipeSummary.fromJson(Map<String, dynamic> json) => RecipeSummary(
+    id: json['id'] as String,
+    name: json['name'] as String,
+    servings: _decimal(json['servings']),
+    totals: NutritionTotals.fromJson(
+      Map<String, dynamic>.from(json['totals'] as Map),
+    ),
+    version: json['version'] as int,
+  );
+
+  final String id;
+  final String name;
+  final double servings;
+  final NutritionTotals totals;
+  final int version;
+}

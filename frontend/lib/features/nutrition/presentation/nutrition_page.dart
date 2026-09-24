@@ -6,6 +6,7 @@ import '../../../core/widgets/app_widgets.dart';
 import '../domain/nutrition_models.dart';
 import 'food_library_page.dart';
 import 'nutrition_controller.dart';
+import 'nutrition_tools_page.dart';
 import 'widgets/food_line_art.dart';
 
 class NutritionPage extends StatefulWidget {
@@ -95,6 +96,15 @@ class _NutritionPageState extends State<NutritionPage> {
         .showSnackBar(const SnackBar(content: Text('饮食记录已删除')));
   }
 
+  Future<void> _openTools() async {
+    final food = await Navigator.of(context).push<FoodItem>(
+      MaterialPageRoute<FoodItem>(
+        builder: (_) => NutritionToolsPage(controller: widget.controller),
+      ),
+    );
+    if (food != null && mounted) await _recordFood(food);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -106,6 +116,11 @@ class _NutritionPageState extends State<NutritionPage> {
         ),
         title: const Text('饮食记录'),
         actions: [
+          IconButton(
+            tooltip: '饮食工具',
+            onPressed: _openTools,
+            icon: const Icon(Icons.auto_awesome_rounded),
+          ),
           IconButton(
             tooltip: '刷新',
             onPressed: widget.controller.loading

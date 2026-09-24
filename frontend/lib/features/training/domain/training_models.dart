@@ -212,6 +212,55 @@ class CalendarEvent {
   final String? actualWorkoutId;
 }
 
+class PreWorkoutCheckInput {
+  const PreWorkoutCheckInput({
+    required this.sleepQuality,
+    required this.energy,
+    required this.availableMinutes,
+  });
+
+  final int sleepQuality;
+  final int energy;
+  final int availableMinutes;
+
+  Map<String, Object> toJson() => {
+    'sleep_quality': sleepQuality,
+    'energy': energy,
+    'pain': const <Object>[],
+    'available_minutes': availableMinutes,
+  };
+}
+
+class CalendarAdjustmentDraft {
+  const CalendarAdjustmentDraft({
+    required this.id,
+    required this.strategy,
+    required this.durationChangeMinutes,
+    required this.volumeChangePercent,
+    required this.warnings,
+    required this.version,
+  });
+
+  factory CalendarAdjustmentDraft.fromJson(Map<String, dynamic> json) =>
+      CalendarAdjustmentDraft(
+        id: json['id'] as String,
+        strategy: json['strategy'] as String,
+        durationChangeMinutes: json['duration_change_minutes'] as int? ?? 0,
+        volumeChangePercent: _decimalToDouble(json['volume_change_percent']),
+        warnings: (json['warnings'] as List<dynamic>? ?? const [])
+            .whereType<String>()
+            .toList(growable: false),
+        version: json['version'] as int,
+      );
+
+  final String id;
+  final String strategy;
+  final int durationChangeMinutes;
+  final double volumeChangePercent;
+  final List<String> warnings;
+  final int version;
+}
+
 class WorkoutSet {
   const WorkoutSet({
     required this.id,

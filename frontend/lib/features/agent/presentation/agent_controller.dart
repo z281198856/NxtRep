@@ -37,6 +37,7 @@ class AgentController extends ChangeNotifier {
   bool _disposed = false;
 
   String? conversationId;
+  AgentConversation? currentConversation;
   List<AgentMessage> messages = const [];
   List<AgentConfirmationCard> confirmations = const [];
   List<UploadedImage> attachedImages = const [];
@@ -139,7 +140,10 @@ class AgentController extends ChangeNotifier {
 
     StreamIterator<SseEvent>? iterator;
     try {
-      conversationId ??= (await _repository.createConversation()).id;
+      if (conversationId == null) {
+        currentConversation = await _repository.createConversation();
+        conversationId = currentConversation!.id;
+      }
       if (_disposed) return;
       activityLabel = '正在理解你的问题';
       _notifyListeners();
@@ -255,6 +259,147 @@ class AgentController extends ChangeNotifier {
       errorMessage = error.message;
     }
     _notifyListeners();
+  }
+
+  Future<List<AgentConversation>> listConversations({
+    String status = 'active',
+  }) async {
+    try {
+      return await _repository.listConversations(status: status);
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      _notifyListeners();
+      return const [];
+    }
+  }
+
+  Future<bool> openConversation(AgentConversation conversation) async {
+    if (sending || _disposed) return false;
+    errorMessage = null;
+    activityLabel = '正在读取历史对话';
+    _notifyListeners();
+    try {
+      messages = await _repository.listMessages(conversation.id);
+      currentConversation = conversation;
+      conversationId = conversation.id;
+      confirmations = const [];
+      activityLabel = null;
+      _notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      activityLabel = null;
+      errorMessage = error.message;
+      _notifyListeners();
+      return false;
+    }
+  }
+
+  void startNewConversation() {
+    if (sending || _disposed) return;
+    currentConversation = null;
+    conversationId = null;
+    messages = const [];
+    confirmations = const [];
+    errorMessage = null;
+    activityLabel = null;
+    _notifyListeners();
+  }
+
+  Future<bool> renameConversation(
+    AgentConversation conversation,
+    String title,
+  ) async {
+    try {
+      final updated = await _repository.updateConversation(
+        conversation,
+        title: title,
+      );
+      if (currentConversation?.id == updated.id) currentConversation = updated;
+      _notifyListeners();
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      _notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> archiveConversation(AgentConversation conversation) async {
+    try {
+      await _repository.updateConversation(conversation, status: 'archived');
+      if (conversationId == conversation.id) startNewConversation();
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      _notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> deleteConversation(AgentConversation conversation) async {
+    try {
+      await _repository.deleteConversation(conversation);
+      if (conversationId == conversation.id) startNewConversation();
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      _notifyListeners();
+      return false;
+    }
+  }
+
+  Future<List<AgentMemory>> listMemories() async {
+    try {
+      return await _repository.listMemories();
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      _notifyListeners();
+      return const [];
+    }
+  }
+
+  Future<bool> createMemory({
+    required String category,
+    required String content,
+  }) async {
+    try {
+      await _repository.createMemory(category: category, content: content);
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      _notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> updateMemory(
+    AgentMemory memory, {
+    required String category,
+    required String content,
+  }) async {
+    try {
+      await _repository.updateMemory(
+        memory,
+        category: category,
+        content: content,
+      );
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      _notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> deleteMemory(AgentMemory memory) async {
+    try {
+      await _repository.deleteMemory(memory);
+      return true;
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      _notifyListeners();
+      return false;
+    }
   }
 
   void _enqueueAssistantDelta(String delta) {

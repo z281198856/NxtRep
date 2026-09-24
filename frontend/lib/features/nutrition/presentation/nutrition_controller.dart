@@ -85,6 +85,64 @@ class NutritionController extends ChangeNotifier {
     }
   }
 
+  Future<FoodItem?> lookupBarcode(String code) =>
+      _runQuery(() => _repository.getFoodByBarcode(code));
+
+  Future<NutritionAdvice?> getAdvice(String foodName) =>
+      _runQuery(() => _repository.getAdvice(foodName: foodName));
+
+  Future<List<FlexibleMeal>> listFlexibleMeals() async =>
+      await _runQuery(_repository.listFlexibleMeals) ?? const [];
+
+  Future<List<RecipeSummary>> listRecipes() async =>
+      await _runQuery(_repository.listRecipes) ?? const [];
+
+  Future<NutritionTextDraft?> parseTextDraft({
+    required String text,
+    required String mealType,
+  }) => _runQuery(
+    () => _repository.parseTextDraft(text: text, mealType: mealType),
+  );
+
+  Future<bool> submitTextDraft(NutritionTextDraft draft) =>
+      _runMutation(() => _repository.submitTextDraft(draft));
+
+  Future<FlexibleMeal?> createFlexibleMeal({
+    required DateTime date,
+    required String label,
+  }) =>
+      _runQuery(() => _repository.createFlexibleMeal(date: date, label: label));
+
+  Future<RecipeSummary?> createRecipe({
+    required String name,
+    required double servings,
+    required FoodItem food,
+    required double amountG,
+  }) => _runQuery(
+    () => _repository.createRecipe(
+      name: name,
+      servings: servings,
+      food: food,
+      amountG: amountG,
+    ),
+  );
+
+  Future<T?> _runQuery<T>(Future<T> Function() operation) async {
+    if (submitting) return null;
+    submitting = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      return await operation();
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      return null;
+    } finally {
+      submitting = false;
+      notifyListeners();
+    }
+  }
+
   Future<bool> _runMutation(Future<Object?> Function() operation) async {
     if (submitting) return false;
     submitting = true;

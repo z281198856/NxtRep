@@ -35,6 +35,44 @@ class TrainingRepository {
         context: '创建训练计划草稿接口',
       ),
     );
+    return activateDraft(draft);
+  }
+
+  Future<PlanDraft> generatePlanDraft({
+    required String goalType,
+    required int daysPerWeek,
+    required String equipment,
+    String? name,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.post(
+        '/training/plan-drafts:generate',
+        idempotencyKey: _uuid.v4(),
+        body: {
+          'goal_type': goalType,
+          'days_per_week': daysPerWeek,
+          'equipment': equipment,
+          'name': name,
+        },
+      ),
+      context: 'AI 生成训练计划接口',
+    );
+    return PlanDraft.fromJson(json);
+  }
+
+  Future<PlanDraft> parsePlanText({required String text, String? name}) async {
+    final json = expectJsonObject(
+      await _apiClient.post(
+        '/training/plan-drafts:parse-text',
+        idempotencyKey: _uuid.v4(),
+        body: {'text': text.trim(), 'template_id': null, 'name': name},
+      ),
+      context: '文字导入训练计划接口',
+    );
+    return PlanDraft.fromJson(json);
+  }
+
+  Future<ActiveTrainingPlan> activateDraft(PlanDraft draft) async {
     final validation = PlanValidation.fromJson(
       expectJsonObject(
         await _apiClient.post(
@@ -90,6 +128,114 @@ class TrainingRepository {
       );
     }
     return active;
+  }
+
+  Future<CalendarEvent> createCalendarEvent({
+    required DateTime date,
+    required String title,
+    required int estimatedMinutes,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.post(
+        '/calendar/events',
+        idempotencyKey: _uuid.v4(),
+        body: {
+          'scheduled_date': _dateOnly(date),
+          'title': title.trim(),
+          'estimated_minutes': estimatedMinutes,
+          'exercises': const <Object>[],
+        },
+      ),
+      context: '新建日历训练接口',
+    );
+    return CalendarEvent.fromJson(json);
+  }
+
+  Future<CalendarAdjustmentDraft> rescheduleEvent({
+    required CalendarEvent event,
+    required String strategy,
+    DateTime? targetDate,
+    String? reason,
+  }) async {
+    final draft = CalendarAdjustmentDraft.fromJson(
+      expectJsonObject(
+        await _apiClient.post(
+          '/calendar/reschedule-drafts',
+          idempotencyKey: _uuid.v4(),
+          body: {
+            'missed_event_id': event.id,
+            'strategy': strategy,
+            'target_date': targetDate == null ? null : _dateOnly(targetDate),
+            'reason': reason,
+          },
+        ),
+        context: '训练改期草稿接口',
+      ),
+    );
+    await _submitAndApproveCalendarDraft(draft);
+    return draft;
+  }
+
+  Future<CalendarAdjustmentDraft> compressEvent({
+    required CalendarEvent event,
+    required int targetMinutes,
+    String? reason,
+  }) async {
+    final draft = CalendarAdjustmentDraft.fromJson(
+      expectJsonObject(
+        await _apiClient.post(
+          '/calendar/compression-drafts',
+          idempotencyKey: _uuid.v4(),
+          body: {
+            'event_id': event.id,
+            'target_minutes': targetMinutes,
+            'reason': reason,
+          },
+        ),
+        context: '训练压缩草稿接口',
+      ),
+    );
+    await _submitAndApproveCalendarDraft(draft);
+    return draft;
+  }
+
+  Future<void> _submitAndApproveCalendarDraft(
+    CalendarAdjustmentDraft draft,
+  ) async {
+    final submitted = PlanConfirmation.fromSubmitJson(
+      expectJsonObject(
+        await _apiClient.post(
+          '/calendar/reschedule-drafts/${draft.id}/submit',
+          idempotencyKey: _uuid.v4(),
+          body: {'expected_version': draft.version},
+        ),
+        context: '提交日历调整接口',
+      ),
+    );
+    await _approveConfirmation(submitted.id);
+  }
+
+  Future<void> _approveConfirmation(String confirmationId) async {
+    final detail = ConfirmationDetails.fromJson(
+      expectJsonObject(
+        await _apiClient.get('/confirmations/$confirmationId'),
+        context: '确认单详情接口',
+      ),
+    );
+    final decision = expectJsonObject(
+      await _apiClient.post(
+        '/confirmations/$confirmationId/approve',
+        idempotencyKey: _uuid.v4(),
+        body: {'expected_version': detail.version},
+      ),
+      context: '确认执行接口',
+    );
+    if (decision['status'] != 'succeeded') {
+      throw const ApiException(
+        code: 'CONFIRMATION_FAILED',
+        message: '操作未能生效，请刷新后重试',
+      );
+    }
   }
 
   Future<ActiveTrainingPlan?> getActivePlan() async {
@@ -156,7 +302,10 @@ class TrainingRepository {
     return Workout.fromJson(json);
   }
 
-  Future<Workout> startWorkout(CalendarEvent event) async {
+  Future<Workout> startWorkout(
+    CalendarEvent event, {
+    PreWorkoutCheckInput? preCheck,
+  }) async {
     final operationId = _uuid.v4();
     final json = expectJsonObject(
       await _apiClient.post(
@@ -166,7 +315,7 @@ class TrainingRepository {
           'calendar_event_id': event.id,
           'plan_day_id': event.planDayId,
           'started_at': DateTime.now().toUtc().toIso8601String(),
-          'pre_check': null,
+          'pre_check': preCheck?.toJson(),
         },
       ),
       context: '开始训练接口',
@@ -201,6 +350,112 @@ class TrainingRepository {
       context: '训练组记录接口',
     );
     return WorkoutSet.fromJson(json);
+  }
+
+  Future<WorkoutSet> updateSet({
+    required Workout workout,
+    required WorkoutSet set,
+    required double weightKg,
+    required int reps,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.patch(
+        '/workouts/${workout.id}/sets/${set.id}',
+        body: {
+          'weight_kg': weightKg,
+          'reps': reps,
+          'reason': '用户在移动端修改训练组',
+          'expected_version': set.version,
+        },
+      ),
+      context: '修改训练组接口',
+    );
+    return WorkoutSet.fromJson(json);
+  }
+
+  Future<void> deleteSet({required Workout workout, required WorkoutSet set}) =>
+      _apiClient
+          .delete(
+            '/workouts/${workout.id}/sets/${set.id}',
+            body: {'reason': '用户在移动端删除训练组', 'expected_version': set.version},
+          )
+          .then((_) {});
+
+  Future<Workout> addExercise({
+    required Workout workout,
+    required String exerciseId,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.post(
+        '/workouts/${workout.id}/exercises',
+        idempotencyKey: _uuid.v4(),
+        body: {
+          'exercise_id': exerciseId,
+          'target_sets': 3,
+          'rep_min': 8,
+          'rep_max': 12,
+          'target_load_kg': null,
+          'target_rir': 2,
+          'rest_seconds': 90,
+          'expected_workout_version': workout.version,
+        },
+      ),
+      context: '临时添加训练动作接口',
+    );
+    return Workout.fromJson(json);
+  }
+
+  Future<Workout> replaceExercise({
+    required Workout workout,
+    required WorkoutExercise exercise,
+    required String replacementExerciseId,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.post(
+        '/workouts/${workout.id}/exercises/${exercise.id}/replace',
+        body: {
+          'replacement_exercise_id': replacementExerciseId,
+          'reason': '用户在训练中替换动作',
+          'expected_workout_version': workout.version,
+        },
+      ),
+      context: '替换训练动作接口',
+    );
+    return Workout.fromJson(json);
+  }
+
+  Future<Workout> skipExercise({
+    required Workout workout,
+    required WorkoutExercise exercise,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.post(
+        '/workouts/${workout.id}/exercises/${exercise.id}/skip',
+        idempotencyKey: _uuid.v4(),
+        body: {
+          'reason': '用户在训练中跳过动作',
+          'expected_workout_version': workout.version,
+        },
+      ),
+      context: '跳过训练动作接口',
+    );
+    return Workout.fromJson(json);
+  }
+
+  Future<Workout> abandonWorkout(Workout workout) async {
+    final json = expectJsonObject(
+      await _apiClient.post(
+        '/workouts/${workout.id}/abandon',
+        idempotencyKey: _uuid.v4(),
+        body: {
+          'ended_at': DateTime.now().toUtc().toIso8601String(),
+          'reason': '用户主动放弃本次训练',
+          'expected_version': workout.version,
+        },
+      ),
+      context: '放弃训练接口',
+    );
+    return Workout.fromJson(json);
   }
 
   Future<Workout> pauseWorkout(Workout workout) async {
