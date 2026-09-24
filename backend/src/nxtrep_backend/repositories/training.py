@@ -9,6 +9,7 @@ from nxtrep_backend.db.models import (
     CalendarEvent,
     CalendarRescheduleDraft,
     Exercise,
+    ExerciseAlias,
     TrainingPlanDraft,
     TrainingPlanVersion,
     TrainingTemplate,
@@ -61,6 +62,17 @@ class SqlAlchemyTrainingRepository:
             )
         )
         return {str(exercise_id): name for exercise_id, name in rows}
+
+    async def visible_exercise_names(self, user_id: UUID) -> list[tuple[UUID, str, str | None]]:
+        rows = await self.session.execute(
+            select(Exercise.id, Exercise.name_zh, ExerciseAlias.alias)
+            .outerjoin(ExerciseAlias, ExerciseAlias.exercise_id == Exercise.id)
+            .where(
+                Exercise.deleted_at.is_(None),
+                (Exercise.owner_user_id.is_(None) | (Exercise.owner_user_id == user_id)),
+            )
+        )
+        return [(exercise_id, name, alias) for exercise_id, name, alias in rows]
 
     async def delete_draft(self, draft: TrainingPlanDraft) -> None:
         await self.session.delete(draft)

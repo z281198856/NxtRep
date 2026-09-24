@@ -20,6 +20,7 @@ from nxtrep_backend.schemas.training import (
     RescheduleDraftCreateRequest,
     SubstitutionDraftCreateRequest,
 )
+from nxtrep_backend.services.training_text import TrainingTextParseError, parse_training_text
 
 
 class TrainingNotFoundError(RuntimeError):
@@ -152,6 +153,24 @@ class TrainingService:
             weekly_frequency=template.days_per_week,
             days=_snapshot_days(template.days),
             source="official_template",
+        )
+        await self.repository.add_draft(draft)
+        await self.validate_draft(user_id, draft)
+        return draft
+
+    async def create_from_text(
+        self, user_id: UUID, text: str, name: str | None, template_id: UUID | None
+    ) -> TrainingPlanDraft:
+        if template_id is not None:
+            raise TrainingTextParseError(1, "文字导入不能同时指定模板，请直接粘贴动作安排")
+        names = await self.repository.visible_exercise_names(user_id)
+        days = parse_training_text(text, names)
+        draft = TrainingPlanDraft(
+            user_id=user_id,
+            name=(name or "文字导入训练计划").strip(),
+            weekly_frequency=len(days),
+            days=_snapshot_days(days),
+            source="parsed_text",
         )
         await self.repository.add_draft(draft)
         await self.validate_draft(user_id, draft)
@@ -417,8 +436,15 @@ class TrainingService:
             activated_at=activated_at,
         )
         await self.repository.add_plan_version(version)
-        start = date.today()
-        await self.repository.delete_future_planned_events(user_id, start)
+        today = date.today()
+        # Imported weekday headings refer to real weekdays. Start at the next
+        # Monday (or today when activated on Monday), unlike relative templates.
+        start = (
+            today + timedelta(days=(7 - today.weekday()) % 7)
+            if draft.source == "parsed_text"
+            else today
+        )
+        await self.repository.delete_future_planned_events(user_id, today)
         events: list[CalendarEvent] = []
         for week in range(4):
             for day in draft.days:

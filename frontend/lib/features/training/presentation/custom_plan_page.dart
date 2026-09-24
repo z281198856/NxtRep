@@ -14,6 +14,7 @@ class CustomPlanPage extends StatefulWidget {
 }
 
 class _CustomPlanPageState extends State<CustomPlanPage> {
+  static const _example = '周一：哑铃地板卧推 3×8-12，单臂哑铃划船 3×10\n周四：哑铃高脚杯深蹲 4×8';
   final _name = TextEditingController();
   final _planText = TextEditingController();
   String _mode = 'generate';
@@ -30,6 +31,7 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
   }
 
   Future<void> _createDraft() async {
+    setState(() => _draft = null);
     final draft = _mode == 'generate'
         ? await widget.controller.generatePlan(
             goalType: _goal,
@@ -140,16 +142,45 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
                 onChanged: (value) => setState(() => _equipment = value!),
               ),
             ] else
-              TextField(
-                controller: _planText,
-                minLines: 7,
-                maxLines: 12,
-                onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(
-                  labelText: '粘贴训练安排',
-                  hintText: '周一：深蹲 3×8，卧推 3×10……',
-                  alignLabelWithHint: true,
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('按训练日填写动作库中的名称、组数和次数。无法识别的动作会提示具体行数。'),
+                  const SizedBox(height: 12),
+                  AppSurface(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('格式示例'),
+                        const SizedBox(height: 6),
+                        const Text(_example),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton.icon(
+                            onPressed: () => setState(() {
+                              _planText.text = _example;
+                              _draft = null;
+                            }),
+                            icon: const Icon(Icons.content_paste_rounded),
+                            label: const Text('填入示例'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _planText,
+                    minLines: 7,
+                    maxLines: 12,
+                    onChanged: (_) => setState(() => _draft = null),
+                    decoration: const InputDecoration(
+                      labelText: '粘贴训练安排',
+                      hintText: '例如：周一：哑铃地板卧推 3×8-12',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                ],
               ),
             const SizedBox(height: 18),
             FilledButton.icon(
@@ -186,6 +217,10 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
                     Text(
                       '每周 ${draft.weeklyFrequency} 天 · ${draft.days.length} 个训练日',
                     ),
+                    if (_mode == 'import') ...[
+                      const SizedBox(height: 5),
+                      const Text('启用后从下一个周一开始排期；若当天是周一，则从当天开始。'),
+                    ],
                     const Divider(height: 26),
                     for (final day in draft.days)
                       Padding(
@@ -211,6 +246,15 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
                                   Text(
                                     '${day.estimatedMinutes} 分钟 · ${day.exercises.length} 个动作',
                                   ),
+                                  for (final exercise in day.exercises)
+                                    if (exercise['exercise_name']
+                                        case final String exerciseName)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 5),
+                                        child: Text(
+                                          '$exerciseName · ${exercise['target_sets']} 组 × ${exercise['rep_min']}${exercise['rep_min'] == exercise['rep_max'] ? '' : '–${exercise['rep_max']}'} 次',
+                                        ),
+                                      ),
                                 ],
                               ),
                             ),

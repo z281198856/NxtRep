@@ -140,3 +140,89 @@ async def test_catalog_can_be_downgraded_and_reapplied_without_deleting_exercise
                 assert await session.get(Exercise, UUID(str(catalog.exercise_id(slug)))) is not None
         finally:
             await transaction.rollback()
+
+
+async def test_text_import_uses_submitted_exercises_and_rejects_unknown_names():
+    async with SessionFactory() as session:
+        transaction = await session.begin()
+        previous_overrides = app.dependency_overrides.copy()
+        try:
+            user = User(username=f"text-import-qa-{uuid4().hex}", password_setup_required=False)
+            session.add(user)
+            await session.flush()
+            app.dependency_overrides[get_current_user] = lambda: user
+            app.dependency_overrides[get_db_session] = lambda: session
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post(
+                    "/api/v1/training/plan-drafts:parse-text",
+                    headers={"Idempotency-Key": str(uuid4())},
+                    json={
+                        "text": "周一：哑铃地板卧推 3×8-12，单臂哑铃划船 3组×10次\n"
+                        "周四：哑铃高脚杯深蹲 4×8",
+                        "name": "我的哑铃安排",
+                    },
+                )
+                assert response.status_code == 201, response.text
+                draft = response.json()
+                assert draft["name"] == "我的哑铃安排"
+                assert draft["weekly_frequency"] == 2
+                assert [day["day_index"] for day in draft["days"]] == [1, 4]
+                assert [day["name"] for day in draft["days"]] == ["周一训练", "周四训练"]
+                first, second = draft["days"]
+                assert [item["exercise_name"] for item in first["exercises"]] == [
+                    "哑铃地板卧推",
+                    "单臂哑铃划船",
+                ]
+                assert (first["exercises"][0]["target_sets"], first["exercises"][0]["rep_max"]) == (
+                    3,
+                    12,
+                )
+                assert second["exercises"][0]["target_sets"] == 4
+                assert not draft["validation_errors"]
+                validation = await client.post(
+                    f"/api/v1/training/plan-drafts/{draft['id']}/validate",
+                    json={"expected_version": draft["version"]},
+                )
+                assert validation.status_code == 200, validation.text
+                assert validation.json()["valid"] is True
+                submit = await client.post(
+                    f"/api/v1/training/plan-drafts/{draft['id']}/submit",
+                    headers={"Idempotency-Key": str(uuid4())},
+                    json={"expected_version": draft["version"]},
+                )
+                assert submit.status_code == 200, submit.text
+                confirmation_id = submit.json()["confirmation_id"]
+                confirmation = await client.get(f"/api/v1/confirmations/{confirmation_id}")
+                approve = await client.post(
+                    f"/api/v1/confirmations/{confirmation_id}/approve",
+                    headers={"Idempotency-Key": str(uuid4())},
+                    json={"expected_version": confirmation.json()["version"]},
+                )
+                assert approve.status_code == 200, approve.text
+                calendar = await client.get(
+                    "/api/v1/calendar",
+                    params={
+                        "start_date": str(date.today()),
+                        "end_date": str(date.today() + timedelta(days=35)),
+                    },
+                )
+                assert calendar.status_code == 200, calendar.text
+                assert len(calendar.json()) == 8
+                scheduled = [
+                    date.fromisoformat(event["scheduled_date"]) for event in calendar.json()
+                ]
+                assert {item.weekday() for item in scheduled} == {0, 3}
+                invalid = await client.post(
+                    "/api/v1/training/plan-drafts:parse-text",
+                    headers={"Idempotency-Key": str(uuid4())},
+                    json={"text": "周一：不存在的动作 3×8"},
+                )
+                assert invalid.status_code == 422
+                assert invalid.json()["error"]["code"] == "TRAINING_TEXT_PARSE_FAILED"
+                assert "第 1 行" in invalid.json()["error"]["message"]
+        finally:
+            app.dependency_overrides.clear()
+            app.dependency_overrides.update(previous_overrides)
+            await transaction.rollback()

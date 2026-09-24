@@ -39,6 +39,7 @@ from nxtrep_backend.services.training import (
     TrainingValidationError,
     draft_payload,
 )
+from nxtrep_backend.services.training_text import TrainingTextParseError
 
 router = APIRouter()
 
@@ -139,9 +140,7 @@ async def get_template(
             message="Training template not found",
         )
     exercise_ids = {
-        UUID(exercise["exercise_id"])
-        for day in item.days
-        for exercise in day.get("exercises", [])
+        UUID(exercise["exercise_id"]) for day in item.days for exercise in day.get("exercises", [])
     }
     names = await repository.template_exercise_names(exercise_ids)
     days = [
@@ -233,13 +232,17 @@ async def parse_text_plan_draft(
         return replayed
     try:
         response = _draft_response(
-            await _service(session).create_suggested_draft(
-                user_id=user.id,
-                source="parsed_text",
-                template_id=body.template_id,
-                name=body.name,
+            await _service(session).create_from_text(
+                user_id=user.id, text=body.text, name=body.name, template_id=body.template_id
             )
         )
+    except TrainingTextParseError as exc:
+        raise ApiError(
+            status_code=422,
+            code="TRAINING_TEXT_PARSE_FAILED",
+            message=str(exc),
+            details={"line": exc.line},
+        ) from exc
     except RuntimeError as exc:
         _raise_training_error(exc)
     await complete_idempotent(idem, decision, response, 201)
