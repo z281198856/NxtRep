@@ -92,6 +92,8 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
             ),
             const SizedBox(height: 14),
             if (_mode == 'generate') ...[
+              const Text('按目标、每周安排和器械匹配训练模板，预览后再启用。'),
+              const SizedBox(height: 14),
               DropdownButtonFormField<String>(
                 initialValue: _goal,
                 decoration: const InputDecoration(labelText: '训练目标'),
@@ -117,6 +119,14 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
                 ],
                 onChanged: (value) => setState(() => _days = value!),
               ),
+              if (_days >= 5) ...[
+                const SizedBox(height: 8),
+                const Text('5–7 天安排包含轻量恢复日，不会每天都安排高强度训练。'),
+              ],
+              if (_days == 1) ...[
+                const SizedBox(height: 8),
+                const Text('每周 1 天为低频起步安排，可在时间允许时增加频次。'),
+              ],
               const SizedBox(height: 14),
               DropdownButtonFormField<String>(
                 initialValue: _equipment,

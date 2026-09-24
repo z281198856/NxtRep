@@ -97,6 +97,7 @@ class TrainingTemplateResponse(BaseModel):
     goal_types: list[str]
     days_per_week: int
     duration_minutes: int
+    equipment: list[str] = Field(default_factory=list)
 
 
 class TrainingTemplateDetailResponse(TrainingTemplateResponse):

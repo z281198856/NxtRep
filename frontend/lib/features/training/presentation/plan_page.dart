@@ -190,10 +190,18 @@ class _PlanPageState extends State<PlanPage> {
                   ),
                   if (plan == null) ...[
                     const SizedBox(height: 28),
-                    const SectionTitle(title: '官方推荐计划'),
+                    SectionTitle(
+                      title: '官方推荐计划',
+                      action: TextButton(
+                        onPressed: widget.controller.submitting
+                            ? null
+                            : _openCustomPlan,
+                        child: const Text('按条件选计划'),
+                      ),
+                    ),
                     const SizedBox(height: 6),
                     Text(
-                      '计划会先展示影响范围，确认后才会启用。',
+                      '先看每周 3 天的常用安排，也可按目标、器械和频次选择。',
                       style: Theme.of(context).textTheme.bodyMedium
                           ?.copyWith(color: AppColors.muted),
                     ),
@@ -206,7 +214,7 @@ class _PlanPageState extends State<PlanPage> {
                         message: '可以先让 AI 教练根据你的条件生成计划草稿。',
                       )
                     else
-                      ...widget.controller.templates.map(
+                      ...widget.controller.recommendedTemplates.map(
                         (template) => Padding(
                           padding: const EdgeInsets.only(bottom: 10),
                           child: _TemplatePlanCard(

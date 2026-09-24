@@ -70,6 +70,7 @@ class TrainingTemplate {
     required this.goalTypes,
     required this.daysPerWeek,
     required this.durationMinutes,
+    this.equipment = const [],
   });
 
   factory TrainingTemplate.fromJson(Map<String, dynamic> json) =>
@@ -81,6 +82,8 @@ class TrainingTemplate {
         ),
         daysPerWeek: json['days_per_week'] as int,
         durationMinutes: json['duration_minutes'] as int,
+        equipment: (json['equipment'] as List<dynamic>? ?? const [])
+            .cast<String>(),
       );
 
   final String id;
@@ -88,6 +91,7 @@ class TrainingTemplate {
   final List<String> goalTypes;
   final int daysPerWeek;
   final int durationMinutes;
+  final List<String> equipment;
 }
 
 class PlanDraft {

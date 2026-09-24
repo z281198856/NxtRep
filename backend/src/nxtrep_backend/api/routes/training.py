@@ -115,6 +115,7 @@ async def list_templates(
             goal_types=item.goal_types,
             days_per_week=item.days_per_week,
             duration_minutes=item.duration_minutes,
+            equipment=item.equipment,
         )
         for item in items
     ]

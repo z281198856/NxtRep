@@ -19,6 +19,23 @@ class PlanController extends ChangeNotifier {
   String? activatingTemplateId;
   String? errorMessage;
 
+  List<TrainingTemplate> get recommendedTemplates {
+    final selected = <TrainingTemplate>[];
+    for (final gear in ['bodyweight', 'dumbbell', 'barbell', 'cable']) {
+      final matches = templates.where(
+        (item) =>
+            item.daysPerWeek == 3 &&
+            item.goalTypes.contains('muscle_gain') &&
+            item.equipment.contains(gear) &&
+            item.equipment.every(
+              (value) => value == gear || value == 'bodyweight',
+            ),
+      );
+      if (matches.isNotEmpty) selected.add(matches.first);
+    }
+    return selected.isEmpty ? templates.take(4).toList() : selected;
+  }
+
   Future<void> refresh() async {
     if (loading) return;
     loading = true;

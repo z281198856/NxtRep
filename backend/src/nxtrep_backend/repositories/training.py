@@ -33,6 +33,11 @@ class SqlAlchemyTrainingRepository:
             conditions.append(TrainingTemplate.days_per_week == days_per_week)
         if equipment:
             conditions.append(TrainingTemplate.equipment.contains([equipment]))
+            # A single-equipment request must not select a mixed-equipment plan.
+            # Unloaded accessory movements remain available in all tracks.
+            conditions.append(
+                TrainingTemplate.equipment.contained_by(list({equipment, "bodyweight"}))
+            )
         result = await self.session.scalars(
             select(TrainingTemplate).where(*conditions).order_by(TrainingTemplate.name)
         )
