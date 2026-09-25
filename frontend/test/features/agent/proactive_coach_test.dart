@@ -7,6 +7,7 @@ import 'package:http/testing.dart';
 import 'package:nxtrep/core/config/api_config.dart';
 import 'package:nxtrep/core/network/api_client.dart';
 import 'package:nxtrep/features/agent/data/proactive_repository.dart';
+import 'package:nxtrep/features/agent/domain/proactive_models.dart';
 import 'package:nxtrep/features/agent/presentation/proactive_controller.dart';
 import 'package:nxtrep/features/exercises/data/exercise_repository.dart';
 import 'package:nxtrep/features/training/data/training_repository.dart';
@@ -184,6 +185,20 @@ void main() {
       expect(planOpened, true);
       expect(requests, contains('POST /api/v1/notifications/notice-1/read'));
       expect(proactive.notices, isEmpty);
+
+      proactive.notices = const [
+        ProactiveNotice(
+          id: 'nutrition-notice',
+          title: '昨天没有饮食记录',
+          body: '没有记录不代表没有进食。',
+          route: 'nutrition',
+          kind: 'nutrition_log_gap',
+          feedbackRating: 'not_relevant',
+        ),
+      ];
+      proactive.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(find.text('这类饮食记录提醒会暂停 7 天；改为“有帮助”可恢复。'), findsOneWidget);
     },
   );
 }

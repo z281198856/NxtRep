@@ -18,7 +18,7 @@ from nxtrep_backend.db.models import (
 )
 from nxtrep_backend.db.session import SessionFactory
 from nxtrep_backend.main import app
-from nxtrep_backend.services.proactive_coach import CHINA_TIMEZONE
+from nxtrep_backend.services.proactive_coach import CHINA_TIMEZONE, ProactiveCoachService
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -140,7 +140,9 @@ async def test_opt_in_review_is_actionable_idempotent_and_does_not_change_facts(
                 )
                 assert inbox.status_code == 200
                 assert inbox.json()["total"] == 3
-                notice_id = first.json()[0]["id"]
+                notice_id = next(
+                    row["id"] for row in first.json() if row["data"]["kind"] == "nutrition_log_gap"
+                )
                 feedback_path = f"/api/v1/agent/proactive/notices/{notice_id}/feedback"
                 invalid = await client.put(feedback_path, json={"rating": "unsafe"})
                 assert invalid.status_code == 422
@@ -165,7 +167,7 @@ async def test_opt_in_review_is_actionable_idempotent_and_does_not_change_facts(
                     )
                     == 1
                 )
-                read = await client.post(f"/api/v1/notifications/{first.json()[0]['id']}/read")
+                read = await client.post(f"/api/v1/notifications/{notice_id}/read")
                 assert read.status_code == 200
                 assert read.json()["read_at"] is not None
                 after_read = await client.get(
@@ -173,6 +175,13 @@ async def test_opt_in_review_is_actionable_idempotent_and_does_not_change_facts(
                     params={"unread_only": "true", "category": "proactive_coach"},
                 )
                 assert after_read.json()["total"] == 2
+                next_day = today + timedelta(days=1)
+                paused = await ProactiveCoachService(session).review_user(user.id, next_day)
+                assert all(item.data["kind"] != "nutrition_log_gap" for item in paused)
+                corrected = await client.put(feedback_path, json={"rating": "helpful"})
+                assert corrected.status_code == 200, corrected.text
+                resumed = await ProactiveCoachService(session).review_user(user.id, next_day)
+                assert any(item.data["kind"] == "nutrition_log_gap" for item in resumed)
                 assert (
                     await session.scalar(
                         select(func.count())
@@ -187,4 +196,72 @@ async def test_opt_in_review_is_actionable_idempotent_and_does_not_change_facts(
         finally:
             app.dependency_overrides.clear()
             app.dependency_overrides.update(previous_overrides)
+            await transaction.rollback()
+
+
+async def test_nutrition_feedback_cooldown_expires_without_hiding_recovery_checks():
+    today = datetime.now(CHINA_TIMEZONE).date()
+    yesterday = today - timedelta(days=1)
+    async with SessionFactory() as session:
+        transaction = await session.begin()
+        try:
+            user = User(username=f"coach-cooldown-{uuid4().hex}", password_setup_required=False)
+            session.add(user)
+            await session.flush()
+            feedback = AuditEvent(
+                user_id=user.id,
+                action="proactive_feedback.recorded",
+                resource_type="notification",
+                resource_id=str(uuid4()),
+                details={"kind": "nutrition_log_gap", "rating": "not_relevant"},
+            )
+            session.add_all(
+                [
+                    NotificationSetting(
+                        user_id=user.id,
+                        enabled=True,
+                        categories={"proactive_coach": True},
+                        frequency="daily",
+                    ),
+                    NutritionEntry(
+                        user_id=user.id,
+                        meal_type="lunch",
+                        eaten_at=datetime.combine(
+                            yesterday - timedelta(days=2), time(12), tzinfo=CHINA_TIMEZONE
+                        ),
+                        items=[],
+                        totals={},
+                    ),
+                    Workout(
+                        user_id=user.id,
+                        status="completed",
+                        started_at=datetime.combine(yesterday, time(9), tzinfo=CHINA_TIMEZONE),
+                        ended_at=datetime.combine(yesterday, time(10), tzinfo=CHINA_TIMEZONE),
+                        fatigue=5,
+                    ),
+                    feedback,
+                ]
+            )
+            await session.flush()
+            service = ProactiveCoachService(session)
+            paused = await service.review_user(user.id, today)
+            assert {item.data["kind"] for item in paused} == {"recovery_check"}
+
+            feedback.created_at = datetime.combine(
+                today - timedelta(days=6), time(12), tzinfo=CHINA_TIMEZONE
+            )
+            await session.flush()
+            still_paused = await service.review_user(user.id, today)
+            assert all(item.data["kind"] != "nutrition_log_gap" for item in still_paused)
+
+            feedback.created_at = datetime.combine(
+                today - timedelta(days=7), time(12), tzinfo=CHINA_TIMEZONE
+            )
+            await session.flush()
+            resumed = await service.review_user(user.id, today)
+            assert {item.data["kind"] for item in resumed} == {
+                "recovery_check",
+                "nutrition_log_gap",
+            }
+        finally:
             await transaction.rollback()

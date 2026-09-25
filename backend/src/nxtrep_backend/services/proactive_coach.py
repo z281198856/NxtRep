@@ -1,7 +1,7 @@
 """Opt-in, repeatable coaching observations over recorded user facts."""
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
 
@@ -21,6 +21,7 @@ from nxtrep_backend.db.models import (
 CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
 COACH_NAMESPACE = UUID("81359e64-5b92-4dba-9c87-36ec97b25aa0")
 COACH_CATEGORY = "proactive_coach"
+NUTRITION_FEEDBACK_COOLDOWN_DAYS = 7
 
 
 class ProactiveNoticeNotFoundError(RuntimeError):
@@ -39,6 +40,25 @@ class CoachObservation:
 class ProactiveCoachService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+
+    async def _pause_nutrition_gap_after_feedback(self, user_id: UUID, today: date) -> bool:
+        """Only low-risk nutrition logging nudges are paused by negative feedback."""
+        first_cooldown_day = today - timedelta(days=NUTRITION_FEEDBACK_COOLDOWN_DAYS - 1)
+        cutoff = datetime.combine(first_cooldown_day, time.min, tzinfo=CHINA_TIMEZONE)
+        next_day = datetime.combine(today + timedelta(days=1), time.min, tzinfo=CHINA_TIMEZONE)
+        latest_rating = await self.session.scalar(
+            select(AuditEvent.details["rating"].as_string())
+            .where(
+                AuditEvent.user_id == user_id,
+                AuditEvent.action == "proactive_feedback.recorded",
+                AuditEvent.details["kind"].as_string() == "nutrition_log_gap",
+                AuditEvent.created_at >= cutoff,
+                AuditEvent.created_at < next_day,
+            )
+            .order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+            .limit(1)
+        )
+        return latest_rating in {"not_relevant", "inaccurate"}
 
     async def record_feedback(
         self, user_id: UUID, notification_id: UUID, rating: str
@@ -64,6 +84,7 @@ class ProactiveCoachService:
                 resource_type="notification",
                 resource_id=str(notification_id),
                 details={"rating": rating, "kind": notice.data.get("kind")},
+                created_at=datetime.now(UTC),
             )
         )
         await self.session.flush()
@@ -153,7 +174,11 @@ class ProactiveCoachService:
                     NutritionEntry.eaten_at < start,
                 )
             )
-            if not yesterday_records and recent_records:
+            if (
+                not yesterday_records
+                and recent_records
+                and not await self._pause_nutrition_gap_after_feedback(user_id, today)
+            ):
                 observations.append(
                     CoachObservation(
                         kind="nutrition_log_gap",

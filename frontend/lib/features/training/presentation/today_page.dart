@@ -223,34 +223,49 @@ class _TodayPageState extends State<TodayPage> {
     _ => Icons.auto_awesome_rounded,
   };
 
-  Widget _noticeActions(
-    ProactiveNotice notice, {
-    VoidCallback? closeSheet,
-  }) => Wrap(
-    spacing: 4,
-    crossAxisAlignment: WrapCrossAlignment.center,
-    children: [
-      for (final (rating, label) in [
-        ('helpful', '有帮助'),
-        ('not_relevant', '不相关'),
-        ('inaccurate', '内容不准'),
-      ])
-        TextButton(
-          onPressed: notice.feedbackRating == rating
-              ? null
-              : () => widget.proactiveController.submitFeedback(notice, rating),
-          child: Text(notice.feedbackRating == rating ? '已评价：$label' : label),
-        ),
-      TextButton.icon(
-        onPressed: () {
-          closeSheet?.call();
-          widget.onDiscussNotice(notice);
-        },
-        icon: const Icon(Icons.chat_bubble_outline_rounded, size: 17),
-        label: const Text('和教练讨论'),
-      ),
-    ],
-  );
+  Widget _noticeActions(ProactiveNotice notice, {VoidCallback? closeSheet}) =>
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              for (final (rating, label) in [
+                ('helpful', '有帮助'),
+                ('not_relevant', '不相关'),
+                ('inaccurate', '内容不准'),
+              ])
+                TextButton(
+                  onPressed: notice.feedbackRating == rating
+                      ? null
+                      : () => widget.proactiveController.submitFeedback(
+                          notice,
+                          rating,
+                        ),
+                  child: Text(
+                    notice.feedbackRating == rating ? '已评价：$label' : label,
+                  ),
+                ),
+              TextButton.icon(
+                onPressed: () {
+                  closeSheet?.call();
+                  widget.onDiscussNotice(notice);
+                },
+                icon: const Icon(Icons.chat_bubble_outline_rounded, size: 17),
+                label: const Text('和教练讨论'),
+              ),
+            ],
+          ),
+          if (notice.kind == 'nutrition_log_gap' &&
+              {'not_relevant', 'inaccurate'}.contains(notice.feedbackRating))
+            Text(
+              '这类饮食记录提醒会暂停 7 天；改为“有帮助”可恢复。',
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: AppColors.muted),
+            ),
+        ],
+      );
 
   Future<void> _openWorkout() async {
     await Navigator.of(context).push(
