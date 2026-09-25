@@ -16,6 +16,7 @@ from nxtrep_backend.api.routes import (
     memory,
     nutrition,
     platform,
+    proactive,
     profile,
     settings,
     training,
@@ -46,6 +47,7 @@ api_router.include_router(
 )
 api_router.include_router(memory.router, prefix="/memories", tags=["memories"])
 api_router.include_router(agent.router, prefix="/agent", tags=["agent"])
+api_router.include_router(proactive.router, prefix="/agent/proactive", tags=["agent"])
 api_router.include_router(confirmations.router, prefix="/confirmations", tags=["confirmations"])
 api_router.include_router(training.router, prefix="/training", tags=["training"])
 api_router.include_router(calendar.router, prefix="/calendar", tags=["calendar"])

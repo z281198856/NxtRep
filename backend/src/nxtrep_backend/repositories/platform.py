@@ -33,10 +33,19 @@ class SqlAlchemyPlatformRepository:
         await self.session.flush()
         return item
 
-    async def list_notifications(self, user_id: UUID, unread_only: bool, page: int, page_size: int):
+    async def list_notifications(
+        self,
+        user_id: UUID,
+        unread_only: bool,
+        page: int,
+        page_size: int,
+        category: str | None = None,
+    ):
         conditions = [AppNotification.user_id == user_id]
         if unread_only:
             conditions.append(AppNotification.read_at.is_(None))
+        if category is not None:
+            conditions.append(AppNotification.category == category)
         total = await self.session.scalar(
             select(func.count()).select_from(AppNotification).where(*conditions)
         )

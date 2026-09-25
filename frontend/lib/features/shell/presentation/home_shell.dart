@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import '../../../core/media/image_upload.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../agent/data/agent_repository.dart';
+import '../../agent/data/proactive_repository.dart';
 import '../../agent/presentation/agent_controller.dart';
 import '../../agent/presentation/agent_page.dart';
+import '../../agent/presentation/proactive_controller.dart';
 import '../../auth/presentation/session_controller.dart';
 import '../../exercises/data/exercise_repository.dart';
 import '../../exercises/presentation/exercise_library_page.dart';
@@ -40,6 +42,7 @@ class _HomeShellState extends State<HomeShell> {
   late final TrainingController _trainingController;
   late final ImageUploadRepository _imageUploadRepository;
   late final AgentController _agentController;
+  late final ProactiveController _proactiveController;
   late final NutritionController _nutritionController;
   late final ProgressController _progressController;
   late final BodyProgressController _bodyProgressController;
@@ -59,6 +62,9 @@ class _HomeShellState extends State<HomeShell> {
     _agentController = AgentController(
       AgentRepository(widget.controller.authRepository.apiClient),
       imageUploader: _imageUploadRepository.uploadChatImage,
+    );
+    _proactiveController = ProactiveController(
+      ProactiveRepository(widget.controller.authRepository.apiClient),
     );
     _nutritionController = NutritionController(
       NutritionRepository(widget.controller.authRepository.apiClient),
@@ -86,6 +92,7 @@ class _HomeShellState extends State<HomeShell> {
   void dispose() {
     _trainingController.dispose();
     _agentController.dispose();
+    _proactiveController.dispose();
     _imageUploadRepository.close();
     _nutritionController.dispose();
     _progressController.dispose();
@@ -96,7 +103,10 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   void _selectTab(int value) {
-    if (value == 0) _trainingController.refresh();
+    if (value == 0) {
+      _trainingController.refresh();
+      _proactiveController.refresh();
+    }
     if (value == 1) _planController.refresh();
     if (value == 2) _progressController.refresh();
     setState(() => _index = value);
@@ -108,6 +118,7 @@ class _HomeShellState extends State<HomeShell> {
       TodayPage(
         username: widget.controller.account?.username ?? '',
         controller: _trainingController,
+        proactiveController: _proactiveController,
         exerciseRepository: _exerciseRepository,
         onOpenPlan: () => _selectTab(1),
         onOpenProgress: () => _selectTab(2),

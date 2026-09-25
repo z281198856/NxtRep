@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../agent/domain/proactive_models.dart';
+import '../../agent/presentation/proactive_controller.dart';
 import '../../exercises/data/exercise_repository.dart';
 import '../domain/training_models.dart';
 import 'training_controller.dart';
@@ -12,6 +14,7 @@ class TodayPage extends StatefulWidget {
     super.key,
     required this.username,
     required this.controller,
+    required this.proactiveController,
     required this.exerciseRepository,
     required this.onOpenNutrition,
     required this.onOpenPlan,
@@ -21,6 +24,7 @@ class TodayPage extends StatefulWidget {
 
   final String username;
   final TrainingController controller;
+  final ProactiveController proactiveController;
   final ExerciseRepository exerciseRepository;
   final VoidCallback onOpenNutrition;
   final VoidCallback onOpenPlan;
@@ -140,8 +144,70 @@ class _TodayPageState extends State<TodayPage> {
   @override
   void initState() {
     super.initState();
-    widget.controller.refresh();
+    _refresh();
   }
+
+  Future<void> _refresh() async {
+    await Future.wait<void>([
+      widget.controller.refresh(),
+      widget.proactiveController.refresh(),
+    ]);
+  }
+
+  Future<void> _openNotice(ProactiveNotice notice) async {
+    await widget.proactiveController.markRead(notice);
+    if (!mounted) return;
+    switch (notice.route) {
+      case 'plan':
+        widget.onOpenPlan();
+      case 'nutrition':
+        widget.onOpenNutrition();
+      default:
+        widget.onOpenAgent();
+    }
+  }
+
+  Future<void> _openCoachInbox() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(sheetContext).height * 0.65,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+            children: [
+              Text(
+                '主动教练建议',
+                style: Theme.of(sheetContext).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              const Text('建议来自已记录的数据；点开后可查看或调整，教练不会自动改动计划。'),
+              const SizedBox(height: 14),
+              for (final notice in widget.proactiveController.notices)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(_noticeIcon(notice.kind)),
+                  title: Text(notice.title),
+                  subtitle: Text(notice.body),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _openNotice(notice);
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  IconData _noticeIcon(String kind) => switch (kind) {
+    'missed_workout' => Icons.event_repeat_rounded,
+    'nutrition_log_gap' => Icons.restaurant_menu_rounded,
+    'recovery_check' => Icons.self_improvement_rounded,
+    _ => Icons.auto_awesome_rounded,
+  };
 
   Future<void> _openWorkout() async {
     await Navigator.of(context).push(
@@ -172,22 +238,27 @@ class _TodayPageState extends State<TodayPage> {
     return Scaffold(
       body: SafeArea(
         child: ListenableBuilder(
-          listenable: widget.controller,
+          listenable: Listenable.merge([
+            widget.controller,
+            widget.proactiveController,
+          ]),
           builder: (context, _) {
             final workout = widget.controller.activeWorkout;
             final nextEvent = widget.controller.events.isEmpty
                 ? null
                 : widget.controller.events.first;
             return RefreshIndicator(
-              onRefresh: widget.controller.refresh,
+              onRefresh: _refresh,
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: const EdgeInsets.fromLTRB(20, 22, 20, 30),
                 children: [
                   _HomeHeader(
                     username: widget.username,
-                    refreshing: widget.controller.loading,
-                    onRefresh: widget.controller.refresh,
+                    refreshing:
+                        widget.controller.loading ||
+                        widget.proactiveController.loading,
+                    onRefresh: _refresh,
                   ),
                   const SizedBox(height: 22),
                   if (widget.controller.errorMessage case final message?) ...[
@@ -245,54 +316,58 @@ class _TodayPageState extends State<TodayPage> {
                   ),
                   const SizedBox(height: 26),
                   SectionTitle(
-                    title: '今日建议',
-                    action: TextButton(
-                      onPressed: widget.onOpenAgent,
-                      child: const Text('问教练'),
-                    ),
+                    title: '主动教练',
+                    action: widget.proactiveController.notices.length > 2
+                        ? TextButton(
+                            onPressed: _openCoachInbox,
+                            child: const Text('查看全部'),
+                          )
+                        : null,
                   ),
                   const SizedBox(height: 10),
                   AppSurface(
-                    onTap: widget.onOpenAgent,
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          width: 52,
-                          height: 52,
-                          decoration: BoxDecoration(
-                            color: AppColors.mintSoft,
-                            borderRadius: BorderRadius.circular(17),
-                          ),
-                          child: const Icon(
-                            Icons.self_improvement_rounded,
-                            color: AppColors.mint,
-                            size: 27,
-                          ),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.auto_awesome_rounded,
+                              color: AppColors.mint,
+                            ),
+                            const SizedBox(width: 10),
+                            const Expanded(child: Text('根据你的记录检查需要关注的事')),
+                            Switch.adaptive(
+                              value: widget.proactiveController.enabled,
+                              onChanged:
+                                  widget.proactiveController.settings == null ||
+                                      widget.proactiveController.updating
+                                  ? null
+                                  : widget.proactiveController.setEnabled,
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                workout == null ? '给身体留出恢复空间' : '专注完成当前训练',
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                workout == null
-                                    ? '睡眠、饮水和轻度活动同样属于计划的一部分。'
-                                    : '按计划完成动作，不必为了数字牺牲动作质量。',
-                                style: Theme.of(context).textTheme.bodyMedium
-                                    ?.copyWith(color: AppColors.muted),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Icon(
-                          Icons.chevron_right_rounded,
-                          color: AppColors.muted,
-                        ),
+                        const Text('开启后每日检查；只在应用内给建议，不会自动改动训练或饮食计划。'),
+                        if (widget.proactiveController.errorMessage
+                            case final message?) ...[
+                          const SizedBox(height: 10),
+                          AppErrorCard(message: message),
+                        ],
+                        if (widget.proactiveController.enabled) ...[
+                          const Divider(height: 22),
+                          if (widget.proactiveController.notices.isEmpty)
+                            const Text('目前没有新的建议，继续按自己的节奏记录即可。'),
+                          for (final notice
+                              in widget.proactiveController.notices.take(2))
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: Icon(_noticeIcon(notice.kind)),
+                              title: Text(notice.title),
+                              subtitle: Text(notice.body),
+                              trailing: const Icon(Icons.chevron_right_rounded),
+                              onTap: () => _openNotice(notice),
+                            ),
+                        ],
                       ],
                     ),
                   ),

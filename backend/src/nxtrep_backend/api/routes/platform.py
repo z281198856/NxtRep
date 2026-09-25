@@ -110,9 +110,10 @@ async def list_notifications(
     unread_only: bool = False,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    category: str | None = Query(default=None, max_length=40),
 ):
     items, total = await SqlAlchemyPlatformRepository(session).list_notifications(
-        user.id, unread_only, page, page_size
+        user.id, unread_only, page, page_size, category
     )
     return NotificationListResponse(
         list=[NotificationResponse.model_validate(item, from_attributes=True) for item in items],

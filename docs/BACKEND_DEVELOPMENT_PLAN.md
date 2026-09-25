@@ -313,6 +313,7 @@ backend/src/nxtrep_backend/
 |---|---|---|---|
 | POST | `/agent/chat` | 兼容的单次非流式聊天入口 | M2 |
 | POST | `/agent/chat/stream` | 兼容的单次 SSE 聊天入口 | M2 |
+| POST | `/agent/proactive/review` | 经用户授权后检查近期记录并生成幂等站内建议 | M3 |
 | POST | `/agent/conversations` | 新建空会话 | M2 |
 | GET | `/agent/conversations` | 会话列表、置顶和归档筛选 | M2 |
 | GET | `/agent/conversations/{id}` | 当前会话元数据 | M2 |
@@ -344,7 +345,7 @@ backend/src/nxtrep_backend/
 | POST | `/devices/push-tokens` | 注册 APNs token | M3 |
 | DELETE | `/devices/push-tokens/{id}` | 撤销设备推送 | M3 |
 
-服务端强制：默认每天最多 2 条，同一问题 24 小时不重复，普通消息在免打扰期间延后，所有变更仍需确认。
+设计目标：默认每天最多 2 条，同一问题 24 小时不重复，普通消息在免打扰期间延后，所有变更仍需确认。当前主动教练 MVP 仅生成幂等站内通知，不发送系统推送，也不自动执行变更；每日总量控制和免打扰延后仍待实现。
 
 ### 3.11 离线同步、冲突、导出和删除
 
