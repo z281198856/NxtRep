@@ -15,13 +15,89 @@ import 'package:nxtrep/features/training/presentation/today_page.dart';
 import 'package:nxtrep/features/training/presentation/training_controller.dart';
 
 void main() {
+  test('important-only scope filters routine nutrition notices', () async {
+    var frequency = 'daily';
+    var version = 2;
+    final api = ApiClient(
+      config: ApiConfig(baseUri: Uri.parse('https://api.example.test/api/v1')),
+      accessTokenProvider: () => 'access',
+      httpClient: MockClient((request) async {
+        final path = request.url.path;
+        if (path == '/api/v1/notification-settings') {
+          if (request.method == 'PATCH') {
+            final body = jsonDecode(request.body) as Map<String, dynamic>;
+            expect(body['expected_version'], version);
+            frequency = body['frequency'] as String;
+            version += 1;
+          }
+          return http.Response(
+            jsonEncode({
+              'enabled': true,
+              'categories': {'proactive_coach': true},
+              'frequency': frequency,
+              'version': version,
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        if (path == '/api/v1/agent/proactive/review') {
+          return http.Response('[]', 200);
+        }
+        if (path == '/api/v1/notifications') {
+          return http.Response(
+            jsonEncode({
+              'list': [
+                {
+                  'id': 'training',
+                  'category': 'proactive_coach',
+                  'title': '训练安排',
+                  'body': '查看日历',
+                  'data': {'kind': 'missed_workout', 'route': 'plan'},
+                },
+                {
+                  'id': 'nutrition',
+                  'category': 'proactive_coach',
+                  'title': '饮食记录',
+                  'body': '可补记',
+                  'data': {'kind': 'nutrition_log_gap', 'route': 'nutrition'},
+                },
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }
+        throw StateError('Unexpected request: ${request.method} $path');
+      }),
+    );
+    final controller = ProactiveController(ProactiveRepository(api));
+    addTearDown(() {
+      controller.dispose();
+      api.close();
+    });
+
+    await controller.refresh();
+    expect(controller.notices.map((item) => item.kind).toSet(), {
+      'missed_workout',
+      'nutrition_log_gap',
+    });
+    await controller.setFrequency('important_only');
+    expect(controller.settings?.frequency, 'important_only');
+    expect(controller.notices.map((item) => item.kind), ['missed_workout']);
+  });
+
   testWidgets(
     'opt-in daily coach shows a fact-based suggestion and opens plan',
     (tester) async {
       final requests = <String>[];
       var planOpened = false;
       var discussed = false;
-      var enabled = false;
+      var notificationsEnabled = false;
+      var coachCategoryEnabled = false;
+      var version = 1;
+      var frequency = 'important_only';
+      var preservedScopeOnReenable = false;
       String? feedbackRating;
       String? notificationCategory;
       final api = ApiClient(
@@ -44,24 +120,35 @@ void main() {
           if (path == '/api/v1/notification-settings') {
             if (request.method == 'PATCH') {
               final body = jsonDecode(request.body) as Map<String, dynamic>;
-              expect(body['expected_version'], 1);
-              expect((body['categories'] as Map)['proactive_coach'], true);
-              enabled = true;
+              expect(body['expected_version'], version);
+              version += 1;
+              if (body['enabled'] case final bool value) {
+                notificationsEnabled = value;
+              }
+              if (body['categories'] case final Map categories) {
+                coachCategoryEnabled = categories['proactive_coach'] == true;
+                if (coachCategoryEnabled && version > 3) {
+                  preservedScopeOnReenable = !body.containsKey('frequency');
+                }
+              }
+              if (body['frequency'] case final String selected) {
+                frequency = selected;
+              }
             }
             return http.Response(
               jsonEncode({
-                'enabled': enabled,
-                'categories': enabled ? {'proactive_coach': true} : {},
-                'frequency': enabled ? 'daily' : 'important_only',
+                'enabled': notificationsEnabled,
+                'categories': {'proactive_coach': coachCategoryEnabled},
+                'frequency': frequency,
                 'quiet_hours': null,
-                'version': enabled ? 2 : 1,
+                'version': version,
               }),
               200,
               headers: {'content-type': 'application/json; charset=utf-8'},
             );
           }
           if (path == '/api/v1/agent/proactive/review') {
-            expect(enabled, true);
+            expect(notificationsEnabled && coachCategoryEnabled, true);
             return http.Response('[]', 200);
           }
           if (path == '/api/v1/notifications') {
@@ -152,6 +239,7 @@ void main() {
       await tester.tap(find.byType(Switch));
       await tester.pumpAndSettle();
       expect(proactive.enabled, true);
+      expect(proactive.settings?.frequency, 'daily');
       expect(requests, contains('POST /api/v1/agent/proactive/review'));
       expect(proactive.errorMessage, isNull, reason: requests.join(', '));
       expect(notificationCategory, 'proactive_coach');
@@ -185,6 +273,23 @@ void main() {
       expect(planOpened, true);
       expect(requests, contains('POST /api/v1/notifications/notice-1/read'));
       expect(proactive.notices, isEmpty);
+
+      await tester.ensureVisible(find.byType(DropdownButton<String>));
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('仅训练与恢复').last);
+      await tester.pumpAndSettle();
+      expect(proactive.settings?.frequency, 'important_only');
+      expect(frequency, 'important_only');
+      await tester.ensureVisible(find.byType(Switch));
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+      expect(proactive.enabled, false);
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+      expect(proactive.enabled, true);
+      expect(proactive.settings?.frequency, 'important_only');
+      expect(preservedScopeOnReenable, true);
 
       proactive.notices = const [
         ProactiveNotice(

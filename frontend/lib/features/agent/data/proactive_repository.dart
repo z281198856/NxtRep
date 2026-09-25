@@ -23,11 +23,24 @@ class ProactiveRepository {
         body: {
           'enabled': enabled ? true : current.enabled,
           'categories': {...current.categories, 'proactive_coach': enabled},
-          if (enabled) 'frequency': 'daily',
+          if (enabled && current.version == 1) 'frequency': 'daily',
           'expected_version': current.version,
         },
       ),
       context: '更新主动管理设置接口',
+    ),
+  );
+
+  Future<ProactiveSettings> setFrequency(
+    ProactiveSettings current,
+    String frequency,
+  ) async => ProactiveSettings.fromJson(
+    expectJsonObject(
+      await _apiClient.patch(
+        '/notification-settings',
+        body: {'frequency': frequency, 'expected_version': current.version},
+      ),
+      context: '更新主动建议范围接口',
     ),
   );
 

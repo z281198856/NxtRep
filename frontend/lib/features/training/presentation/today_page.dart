@@ -399,19 +399,56 @@ class _TodayPageState extends State<TodayPage> {
                               value: widget.proactiveController.enabled,
                               onChanged:
                                   widget.proactiveController.settings == null ||
-                                      widget.proactiveController.updating
+                                      widget.proactiveController.updating ||
+                                      widget.proactiveController.loading
                                   ? null
                                   : widget.proactiveController.setEnabled,
                             ),
                           ],
                         ),
-                        const Text('开启后每日检查；只在应用内给建议，不会自动改动训练或饮食计划。'),
+                        const Text('开启后会检查记录，建议仅在应用内展示；通常每天最多两条，高疲劳可例外。不会自动改计划。'),
                         if (widget.proactiveController.errorMessage
                             case final message?) ...[
                           const SizedBox(height: 10),
                           AppErrorCard(message: message),
                         ],
                         if (widget.proactiveController.enabled) ...[
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              const Expanded(child: Text('提醒范围')),
+                              DropdownButton<String>(
+                                value:
+                                    widget
+                                            .proactiveController
+                                            .settings
+                                            ?.frequency ==
+                                        'important_only'
+                                    ? 'important_only'
+                                    : 'daily',
+                                onChanged:
+                                    widget.proactiveController.updating ||
+                                        widget.proactiveController.loading
+                                    ? null
+                                    : (value) {
+                                        if (value != null) {
+                                          widget.proactiveController
+                                              .setFrequency(value);
+                                        }
+                                      },
+                                items: const [
+                                  DropdownMenuItem(
+                                    value: 'important_only',
+                                    child: Text('仅训练与恢复'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: 'daily',
+                                    child: Text('包含饮食记录'),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
                           const Divider(height: 22),
                           if (widget.proactiveController.notices.isEmpty)
                             const Text('目前没有新的建议，继续按自己的节奏记录即可。'),

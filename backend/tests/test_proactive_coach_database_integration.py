@@ -56,13 +56,6 @@ async def test_opt_in_review_is_actionable_idempotent_and_does_not_change_facts(
                         title="哑铃训练",
                         estimated_minutes=40,
                     ),
-                    Workout(
-                        user_id=user.id,
-                        status="completed",
-                        started_at=start,
-                        ended_at=start + timedelta(minutes=35),
-                        fatigue=4,
-                    ),
                     NutritionEntry(
                         user_id=user.id,
                         meal_type="lunch",
@@ -120,7 +113,6 @@ async def test_opt_in_review_is_actionable_idempotent_and_does_not_change_facts(
                 assert first.status_code == 200, first.text
                 assert {row["data"]["kind"] for row in first.json()} == {
                     "missed_workout",
-                    "recovery_check",
                     "nutrition_log_gap",
                 }
                 assert all(row["category"] == "proactive_coach" for row in first.json())
@@ -132,14 +124,14 @@ async def test_opt_in_review_is_actionable_idempotent_and_does_not_change_facts(
                     .select_from(AppNotification)
                     .where(AppNotification.user_id == user.id)
                 )
-                assert count == 3
+                assert count == 2
 
                 inbox = await client.get(
                     "/api/v1/notifications",
                     params={"unread_only": "true", "category": "proactive_coach"},
                 )
                 assert inbox.status_code == 200
-                assert inbox.json()["total"] == 3
+                assert inbox.json()["total"] == 2
                 notice_id = next(
                     row["id"] for row in first.json() if row["data"]["kind"] == "nutrition_log_gap"
                 )
@@ -174,7 +166,7 @@ async def test_opt_in_review_is_actionable_idempotent_and_does_not_change_facts(
                     "/api/v1/notifications",
                     params={"unread_only": "true", "category": "proactive_coach"},
                 )
-                assert after_read.json()["total"] == 2
+                assert after_read.json()["total"] == 1
                 next_day = today + timedelta(days=1)
                 paused = await ProactiveCoachService(session).review_user(user.id, next_day)
                 assert all(item.data["kind"] != "nutrition_log_gap" for item in paused)
@@ -263,5 +255,79 @@ async def test_nutrition_feedback_cooldown_expires_without_hiding_recovery_check
                 "recovery_check",
                 "nutrition_log_gap",
             }
+        finally:
+            await transaction.rollback()
+
+
+@pytest.mark.parametrize("late_fatigue", [False, True])
+async def test_daily_limit_prioritizes_recovery_and_allows_late_safety_notice(late_fatigue):
+    today = datetime.now(CHINA_TIMEZONE).date()
+    yesterday = today - timedelta(days=1)
+    workout = Workout(
+        status="completed",
+        started_at=datetime.combine(yesterday, time(9), tzinfo=CHINA_TIMEZONE),
+        ended_at=datetime.combine(yesterday, time(10), tzinfo=CHINA_TIMEZONE),
+        fatigue=5,
+    )
+    async with SessionFactory() as session:
+        transaction = await session.begin()
+        try:
+            user = User(username=f"coach-limit-{uuid4().hex}", password_setup_required=False)
+            session.add(user)
+            await session.flush()
+            workout.user_id = user.id
+            session.add_all(
+                [
+                    NotificationSetting(
+                        user_id=user.id,
+                        enabled=True,
+                        categories={"proactive_coach": True},
+                        frequency="daily",
+                    ),
+                    CalendarEvent(
+                        user_id=user.id,
+                        scheduled_date=yesterday,
+                        status="planned",
+                        title="训练计划",
+                        estimated_minutes=40,
+                    ),
+                    NutritionEntry(
+                        user_id=user.id,
+                        meal_type="lunch",
+                        eaten_at=datetime.combine(
+                            yesterday - timedelta(days=2), time(12), tzinfo=CHINA_TIMEZONE
+                        ),
+                        items=[],
+                        totals={},
+                    ),
+                ]
+            )
+            if not late_fatigue:
+                session.add(workout)
+            await session.flush()
+            service = ProactiveCoachService(session)
+            first = await service.review_user(user.id, today)
+            first_kinds = {item.data["kind"] for item in first}
+            if late_fatigue:
+                assert first_kinds == {"missed_workout", "nutrition_log_gap"}
+                session.add(workout)
+                await session.flush()
+                second = await service.review_user(user.id, today)
+                assert {item.data["kind"] for item in second} == {
+                    "recovery_check",
+                    "missed_workout",
+                    "nutrition_log_gap",
+                }
+            else:
+                assert first_kinds == {"recovery_check", "missed_workout"}
+                second = first
+            repeated = await service.review_user(user.id, today)
+            assert {item.id for item in repeated} == {item.id for item in second}
+            count = await session.scalar(
+                select(func.count())
+                .select_from(AppNotification)
+                .where(AppNotification.user_id == user.id)
+            )
+            assert count == (3 if late_fatigue else 2)
         finally:
             await transaction.rollback()

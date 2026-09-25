@@ -22,6 +22,8 @@ CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
 COACH_NAMESPACE = UUID("81359e64-5b92-4dba-9c87-36ec97b25aa0")
 COACH_CATEGORY = "proactive_coach"
 NUTRITION_FEEDBACK_COOLDOWN_DAYS = 7
+DAILY_COACH_NOTICE_LIMIT = 2
+OBSERVATION_PRIORITY = {"recovery_check": 0, "missed_workout": 1, "nutrition_log_gap": 2}
 
 
 class ProactiveNoticeNotFoundError(RuntimeError):
@@ -91,8 +93,12 @@ class ProactiveCoachService:
         return notice
 
     async def review_user(self, user_id: UUID, today: date | None = None) -> list[AppNotification]:
-        """Create at most one notification per fact and day, only after explicit opt-in."""
-        settings = await self.session.get(NotificationSetting, user_id)
+        """Create at most one notice per kind and day, only after explicit opt-in."""
+        settings = await self.session.scalar(
+            select(NotificationSetting)
+            .where(NotificationSetting.user_id == user_id)
+            .with_for_update()
+        )
         if (
             settings is None
             or not settings.enabled
@@ -189,11 +195,31 @@ class ProactiveCoachService:
                     )
                 )
 
+        existing_notices = list(
+            await self.session.scalars(
+                select(AppNotification)
+                .where(
+                    AppNotification.user_id == user_id,
+                    AppNotification.category == COACH_CATEGORY,
+                    AppNotification.data["review_date"].as_string() == today.isoformat(),
+                )
+                .order_by(AppNotification.created_at.desc())
+            )
+        )
+        existing_by_kind = {}
+        for notice in existing_notices:
+            existing_by_kind.setdefault(notice.data.get("kind"), notice.id)
+        remaining = max(0, DAILY_COACH_NOTICE_LIMIT - len(existing_notices))
         ids: list[UUID] = []
-        for item in observations:
+        for item in sorted(observations, key=lambda value: OBSERVATION_PRIORITY[value.kind]):
+            if existing_id := existing_by_kind.get(item.kind):
+                ids.append(existing_id)
+                continue
             notification_id = uuid5(
                 COACH_NAMESPACE, f"{user_id}:{today}:{item.kind}:{item.subject_id}"
             )
+            if remaining == 0 and item.kind != "recovery_check":
+                continue
             ids.append(notification_id)
             await self.session.execute(
                 insert(AppNotification)
@@ -212,6 +238,8 @@ class ProactiveCoachService:
                 )
                 .on_conflict_do_nothing(index_elements=[AppNotification.id])
             )
+            existing_by_kind[item.kind] = notification_id
+            remaining = max(0, remaining - 1)
         if not ids:
             return []
         return list(

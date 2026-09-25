@@ -17,6 +17,11 @@ class ProactiveController extends ChangeNotifier {
 
   bool get enabled => settings?.coachEnabled ?? false;
 
+  List<ProactiveNotice> _visibleNotices(List<ProactiveNotice> values) =>
+      settings?.frequency == 'important_only'
+      ? values.where((item) => item.kind != 'nutrition_log_gap').toList()
+      : values;
+
   Future<void> refresh() async {
     if (loading) return;
     loading = true;
@@ -25,7 +30,9 @@ class ProactiveController extends ChangeNotifier {
     try {
       settings = await _repository.getSettings();
       if (enabled) await _repository.review();
-      notices = enabled ? await _repository.listUnread() : const [];
+      notices = enabled
+          ? _visibleNotices(await _repository.listUnread())
+          : const [];
     } on ApiException catch (error) {
       errorMessage = error.message;
     } finally {
@@ -36,14 +43,40 @@ class ProactiveController extends ChangeNotifier {
 
   Future<void> setEnabled(bool value) async {
     final current = settings;
-    if (current == null || updating) return;
+    if (current == null || updating || loading) return;
     updating = true;
     errorMessage = null;
     notifyListeners();
     try {
       settings = await _repository.setEnabled(current, value);
       if (enabled) await _repository.review();
-      notices = enabled ? await _repository.listUnread() : const [];
+      notices = enabled
+          ? _visibleNotices(await _repository.listUnread())
+          : const [];
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+    } finally {
+      updating = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> setFrequency(String value) async {
+    final current = settings;
+    if (current == null ||
+        updating ||
+        loading ||
+        !enabled ||
+        current.frequency == value) {
+      return;
+    }
+    updating = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      settings = await _repository.setFrequency(current, value);
+      await _repository.review();
+      notices = _visibleNotices(await _repository.listUnread());
     } on ApiException catch (error) {
       errorMessage = error.message;
     } finally {
