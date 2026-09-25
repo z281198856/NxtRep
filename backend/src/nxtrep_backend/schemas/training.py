@@ -114,6 +114,7 @@ class PlanDraftResponse(BaseModel):
     days: list[dict]
     validation_errors: list[dict] = Field(default_factory=list)
     validation_warnings: list[dict] = Field(default_factory=list)
+    recognized_text: str | None = None
 
 
 class PlanValidationResponse(BaseModel):

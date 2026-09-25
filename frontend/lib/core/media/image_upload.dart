@@ -268,6 +268,15 @@ class ImageUploadRepository {
   Future<UploadedImage> uploadChatImage(Uint8List source) =>
       _uploadImage(source, purpose: 'chat_attachment');
 
+  Future<UploadedImage> uploadTrainingPlanImage(Uint8List source) =>
+      _uploadImage(
+        source,
+        purpose: 'training_plan',
+        preferredMaxBytes: 2 * 1024 * 1024,
+        preferredMaxPixels: 2048 * 2048,
+        preferredMaxDimension: 2048,
+      );
+
   Future<UploadedImage> uploadBodyProgressImage(Uint8List source) =>
       _uploadImage(
         source,

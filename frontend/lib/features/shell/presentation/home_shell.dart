@@ -72,6 +72,7 @@ class _HomeShellState extends State<HomeShell> {
     );
     _planController = PlanController(
       TrainingRepository(widget.controller.authRepository.apiClient),
+      imageUploader: _imageUploadRepository.uploadTrainingPlanImage,
     );
     _profileController = ProfileController(
       ProfileRepository(widget.controller.authRepository.apiClient),

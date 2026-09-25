@@ -119,6 +119,7 @@ class PlanDraft {
     required this.version,
     required this.weeklyFrequency,
     required this.days,
+    this.recognizedText,
   });
 
   factory PlanDraft.fromJson(Map<String, dynamic> json) => PlanDraft(
@@ -127,6 +128,7 @@ class PlanDraft {
     status: json['status'] as String,
     version: json['version'] as int,
     weeklyFrequency: json['weekly_frequency'] as int,
+    recognizedText: json['recognized_text'] as String?,
     days: (json['days'] as List<dynamic>? ?? const [])
         .map((item) => TrainingPlanDay.fromJson(item as Map<String, dynamic>))
         .toList(growable: false),
@@ -138,6 +140,7 @@ class PlanDraft {
   final int version;
   final int weeklyFrequency;
   final List<TrainingPlanDay> days;
+  final String? recognizedText;
 }
 
 class PlanValidation {

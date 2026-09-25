@@ -1,13 +1,17 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../core/widgets/app_widgets.dart';
 import '../domain/training_models.dart';
 import 'plan_controller.dart';
 
 class CustomPlanPage extends StatefulWidget {
-  const CustomPlanPage({super.key, required this.controller});
+  const CustomPlanPage({super.key, required this.controller, this.pickImage});
 
   final PlanController controller;
+  final Future<Uint8List?> Function(ImageSource)? pickImage;
 
   @override
   State<CustomPlanPage> createState() => _CustomPlanPageState();
@@ -17,11 +21,14 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
   static const _example = '周一：哑铃地板卧推 3×8-12，单臂哑铃划船 3×10\n周四：哑铃高脚杯深蹲 4×8';
   final _name = TextEditingController();
   final _planText = TextEditingController();
+  final _imagePicker = ImagePicker();
   String _mode = 'generate';
   String _goal = 'muscle_gain';
   String _equipment = 'barbell';
   int _days = 3;
   PlanDraft? _draft;
+  Uint8List? _imageBytes;
+  String? _pickerError;
 
   @override
   void dispose() {
@@ -32,18 +39,83 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
 
   Future<void> _createDraft() async {
     setState(() => _draft = null);
-    final draft = _mode == 'generate'
-        ? await widget.controller.generatePlan(
-            goalType: _goal,
-            daysPerWeek: _days,
-            equipment: _equipment,
-            name: _name.text.trim().isEmpty ? null : _name.text.trim(),
-          )
-        : await widget.controller.importPlanText(
-            _planText.text,
-            name: _name.text.trim().isEmpty ? null : _name.text.trim(),
-          );
+    final name = _name.text.trim().isEmpty ? null : _name.text.trim();
+    final PlanDraft? draft;
+    if (_mode == 'generate') {
+      draft = await widget.controller.generatePlan(
+        goalType: _goal,
+        daysPerWeek: _days,
+        equipment: _equipment,
+        name: name,
+      );
+    } else if (_mode == 'import') {
+      draft = await widget.controller.importPlanText(
+        _planText.text,
+        name: name,
+      );
+    } else {
+      final bytes = _imageBytes;
+      if (bytes == null) return;
+      draft = await widget.controller.importPlanImage(bytes, name: name);
+    }
     if (mounted && draft != null) setState(() => _draft = draft);
+  }
+
+  Future<void> _chooseImage() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera_rounded),
+              title: const Text('拍摄训练表'),
+              onTap: () => Navigator.pop(context, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('从相册选择'),
+              onTap: () => Navigator.pop(context, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+    try {
+      final Uint8List? bytes;
+      if (widget.pickImage case final picker?) {
+        bytes = await picker(source);
+      } else {
+        final picked = await _imagePicker.pickImage(
+          source: source,
+          maxWidth: 2048,
+          maxHeight: 2048,
+          imageQuality: 90,
+          requestFullMetadata: false,
+        );
+        bytes = await picked?.readAsBytes();
+      }
+      if (bytes == null) return;
+      if (mounted) {
+        setState(() {
+          _imageBytes = bytes;
+          _draft = null;
+          _pickerError = null;
+        });
+      }
+    } on Object {
+      if (mounted) setState(() => _pickerError = '无法读取图片，请重试或改用文字导入');
+    }
+  }
+
+  void _editRecognizedText() {
+    _planText.text = widget.controller.recognizedImportText ?? '';
+    setState(() {
+      _mode = 'import';
+      _draft = null;
+    });
   }
 
   Future<void> _activate() async {
@@ -65,16 +137,9 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
           children: [
             SegmentedButton<String>(
               segments: const [
-                ButtonSegment(
-                  value: 'generate',
-                  icon: Icon(Icons.auto_awesome_rounded),
-                  label: Text('智能生成'),
-                ),
-                ButtonSegment(
-                  value: 'import',
-                  icon: Icon(Icons.text_snippet_outlined),
-                  label: Text('文字导入'),
-                ),
+                ButtonSegment(value: 'generate', label: Text('智能生成')),
+                ButtonSegment(value: 'import', label: Text('文字导入')),
+                ButtonSegment(value: 'image', label: Text('图片导入')),
               ],
               selected: {_mode},
               onSelectionChanged: (value) {
@@ -141,7 +206,7 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
                 ],
                 onChanged: (value) => setState(() => _equipment = value!),
               ),
-            ] else
+            ] else if (_mode == 'import')
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -181,12 +246,33 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
                     ),
                   ),
                 ],
+              )
+            else ...[
+              const Text('拍摄或选择清晰的训练表，识别后会先生成草稿供你核对，不会直接启用。'),
+              const SizedBox(height: 14),
+              OutlinedButton.icon(
+                onPressed: widget.controller.submitting ? null : _chooseImage,
+                icon: const Icon(Icons.add_photo_alternate_outlined),
+                label: Text(_imageBytes == null ? '选择训练表图片' : '更换图片'),
               ),
+              if (_imageBytes case final bytes?) ...[
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.memory(bytes, height: 190, fit: BoxFit.contain),
+                ),
+              ],
+              if (_pickerError case final message?) ...[
+                const SizedBox(height: 10),
+                AppErrorCard(message: message),
+              ],
+            ],
             const SizedBox(height: 18),
             FilledButton.icon(
               onPressed:
                   widget.controller.submitting ||
-                      (_mode == 'import' && _planText.text.trim().isEmpty)
+                      (_mode == 'import' && _planText.text.trim().isEmpty) ||
+                      (_mode == 'image' && _imageBytes == null)
                   ? null
                   : _createDraft,
               icon: widget.controller.submitting
@@ -195,11 +281,36 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.auto_awesome_rounded),
-              label: Text(_mode == 'generate' ? '生成计划草稿' : '解析训练安排'),
+              label: Text(switch (_mode) {
+                'generate' => '生成计划草稿',
+                'image' => '识别图片并预览',
+                _ => '解析训练安排',
+              }),
             ),
             if (widget.controller.errorMessage case final message?) ...[
               const SizedBox(height: 14),
               AppErrorCard(message: message),
+            ],
+            if (_mode == 'image' &&
+                widget.controller.recognizedImportText != null) ...[
+              const SizedBox(height: 14),
+              AppSurface(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('图片识别文字（请核对）'),
+                    const SizedBox(height: 8),
+                    SelectableText(widget.controller.recognizedImportText!),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: _editRecognizedText,
+                        child: const Text('编辑识别结果'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ],
             if (_draft case final draft?) ...[
               const SizedBox(height: 24),
@@ -217,7 +328,7 @@ class _CustomPlanPageState extends State<CustomPlanPage> {
                     Text(
                       '每周 ${draft.weeklyFrequency} 天 · ${draft.days.length} 个训练日',
                     ),
-                    if (_mode == 'import') ...[
+                    if (_mode == 'import' || _mode == 'image') ...[
                       const SizedBox(height: 5),
                       const Text('启用后从下一个周一开始排期；若当天是周一，则从当天开始。'),
                     ],

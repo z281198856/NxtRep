@@ -80,6 +80,21 @@ class TrainingRepository {
     return PlanDraft.fromJson(json);
   }
 
+  Future<PlanDraft> parsePlanImage({
+    required String imageAssetId,
+    String? name,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.post(
+        '/training/plan-drafts:parse-image',
+        idempotencyKey: _uuid.v4(),
+        body: {'image_asset_id': imageAssetId, 'name': name},
+      ),
+      context: '图片导入训练计划接口',
+    );
+    return PlanDraft.fromJson(json);
+  }
+
   Future<ActiveTrainingPlan> activateDraft(PlanDraft draft) async {
     final validation = PlanValidation.fromJson(
       expectJsonObject(

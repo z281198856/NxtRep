@@ -1,13 +1,15 @@
 import 'package:flutter/foundation.dart';
 
+import '../../../core/media/image_upload.dart';
 import '../../../core/network/api_exception.dart';
 import '../data/training_repository.dart';
 import '../domain/training_models.dart';
 
 class PlanController extends ChangeNotifier {
-  PlanController(this._repository);
+  PlanController(this._repository, {this.imageUploader});
 
   final TrainingRepository _repository;
+  final Future<UploadedImage> Function(Uint8List)? imageUploader;
 
   ActiveTrainingPlan? activePlan;
   List<CalendarEvent> events = const [];
@@ -18,6 +20,7 @@ class PlanController extends ChangeNotifier {
   bool detailLoading = false;
   String? activatingTemplateId;
   String? errorMessage;
+  String? recognizedImportText;
 
   List<TrainingTemplate> get recommendedTemplates {
     final selected = <TrainingTemplate>[];
@@ -108,10 +111,37 @@ class PlanController extends ChangeNotifier {
   Future<PlanDraft?> importPlanText(String text, {String? name}) =>
       _loadDraft(() => _repository.parsePlanText(text: text, name: name));
 
+  Future<PlanDraft?> importPlanImage(Uint8List source, {String? name}) =>
+      _loadDraft(() async {
+        final uploader = imageUploader;
+        if (uploader == null) {
+          throw const ApiException(
+            code: 'IMAGE_UPLOAD_UNAVAILABLE',
+            message: '当前无法上传训练计划图片',
+          );
+        }
+        final uploaded = await uploader(source);
+        try {
+          final draft = await _repository.parsePlanImage(
+            imageAssetId: uploaded.assetId,
+            name: name,
+          );
+          recognizedImportText = draft.recognizedText;
+          return draft;
+        } on ApiException catch (error) {
+          final details = error.details;
+          if (details is Map && details['recognized_text'] is String) {
+            recognizedImportText = details['recognized_text'] as String;
+          }
+          rethrow;
+        }
+      });
+
   Future<PlanDraft?> _loadDraft(Future<PlanDraft> Function() load) async {
     if (submitting) return null;
     submitting = true;
     errorMessage = null;
+    recognizedImportText = null;
     notifyListeners();
     try {
       return await load();

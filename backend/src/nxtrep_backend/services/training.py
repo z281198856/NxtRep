@@ -159,18 +159,26 @@ class TrainingService:
         return draft
 
     async def create_from_text(
-        self, user_id: UUID, text: str, name: str | None, template_id: UUID | None
+        self,
+        user_id: UUID,
+        text: str,
+        name: str | None,
+        template_id: UUID | None,
+        source: str = "parsed_text",
     ) -> TrainingPlanDraft:
+        if source not in {"parsed_text", "parsed_image"}:
+            raise ValueError("Unsupported training plan import source")
         if template_id is not None:
             raise TrainingTextParseError(1, "文字导入不能同时指定模板，请直接粘贴动作安排")
         names = await self.repository.visible_exercise_names(user_id)
         days = parse_training_text(text, names)
+        default_name = "图片导入训练计划" if source == "parsed_image" else "文字导入训练计划"
         draft = TrainingPlanDraft(
             user_id=user_id,
-            name=(name or "文字导入训练计划").strip(),
+            name=(name or default_name).strip(),
             weekly_frequency=len(days),
             days=_snapshot_days(days),
-            source="parsed_text",
+            source=source,
         )
         await self.repository.add_draft(draft)
         await self.validate_draft(user_id, draft)
@@ -441,7 +449,7 @@ class TrainingService:
         # Monday (or today when activated on Monday), unlike relative templates.
         start = (
             today + timedelta(days=(7 - today.weekday()) % 7)
-            if draft.source == "parsed_text"
+            if draft.source in {"parsed_text", "parsed_image"}
             else today
         )
         await self.repository.delete_future_planned_events(user_id, today)

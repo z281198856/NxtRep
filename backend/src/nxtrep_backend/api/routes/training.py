@@ -2,6 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, Response, status
 
+from nxtrep_backend.agents.vision import GlmVisionAnalyzer, VisionModelResponseError
 from nxtrep_backend.api.deps import CurrentUser, DbSession
 from nxtrep_backend.api.errors import ApiError
 from nxtrep_backend.api.idempotency import (
@@ -10,6 +11,14 @@ from nxtrep_backend.api.idempotency import (
     complete_idempotent,
     replay_response,
 )
+from nxtrep_backend.core.config import StorageConfigurationError, get_settings
+from nxtrep_backend.providers.model_errors import VisionModelBusyError
+from nxtrep_backend.providers.models import (
+    ModelConfigurationError,
+    build_fallback_vision_model,
+    build_vision_model,
+)
+from nxtrep_backend.providers.storage import StorageProviderError, build_image_storage_provider
 from nxtrep_backend.repositories.confirmation import SqlAlchemyConfirmationRepository
 from nxtrep_backend.repositories.media import SqlAlchemyImageAssetRepository
 from nxtrep_backend.repositories.training import SqlAlchemyTrainingRepository
@@ -32,12 +41,21 @@ from nxtrep_backend.schemas.training import (
     TrainingTemplateDetailResponse,
     TrainingTemplateResponse,
 )
+from nxtrep_backend.services.agent_media import (
+    AgentImageAssetNotFoundError,
+    AgentImageAssetNotReadyError,
+    AgentImageAssetResolver,
+)
 from nxtrep_backend.services.training import (
     TrainingConflictError,
     TrainingNotFoundError,
     TrainingService,
     TrainingValidationError,
     draft_payload,
+)
+from nxtrep_backend.services.training_image import (
+    TrainingImageReader,
+    TrainingImageTranscriptionError,
 )
 from nxtrep_backend.services.training_text import TrainingTextParseError
 
@@ -47,6 +65,16 @@ router = APIRouter()
 def _service(session: DbSession) -> TrainingService:
     return TrainingService(
         SqlAlchemyTrainingRepository(session), SqlAlchemyConfirmationRepository(session)
+    )
+
+
+def _image_reader(session: DbSession) -> TrainingImageReader:
+    settings = get_settings()
+    return TrainingImageReader(
+        AgentImageAssetResolver(
+            SqlAlchemyImageAssetRepository(session), build_image_storage_provider(settings)
+        ),
+        GlmVisionAnalyzer(build_vision_model(settings), build_fallback_vision_model(settings)),
     )
 
 
@@ -287,25 +315,52 @@ async def parse_image_plan_draft(
             message="Image is not a training plan asset",
         )
     try:
-        draft = await _service(session).create_suggested_draft(
-            user_id=user.id,
-            source="parsed_image",
-            template_id=body.template_id,
-            name=body.name,
+        recognized_text = await _image_reader(session).read(
+            user_id=user.id, asset_id=body.image_asset_id
         )
-        draft.validation_warnings = [
-            *draft.validation_warnings,
-            {
-                "field": "image_asset_id",
-                "code": "IMAGE_PARSE_REQUIRES_REVIEW",
-                "message": (
-                    "The image establishes draft provenance; review all template-derived "
-                    "exercises before submitting"
-                ),
-            },
-        ]
-        await session.flush()
+        draft = await _service(session).create_from_text(
+            user_id=user.id,
+            text=recognized_text,
+            name=body.name,
+            template_id=body.template_id,
+            source="parsed_image",
+        )
         response = _draft_response(draft)
+        response.recognized_text = recognized_text
+    except TrainingTextParseError as exc:
+        raise ApiError(
+            status_code=422,
+            code="TRAINING_IMAGE_PARSE_FAILED",
+            message=str(exc),
+            details={"line": exc.line, "recognized_text": recognized_text},
+        ) from exc
+    except (TrainingImageTranscriptionError, VisionModelResponseError) as exc:
+        raise ApiError(
+            status_code=422,
+            code="TRAINING_IMAGE_PARSE_FAILED",
+            message=str(exc),
+        ) from exc
+    except (AgentImageAssetNotFoundError, AgentImageAssetNotReadyError) as exc:
+        raise ApiError(status_code=409, code="IMAGE_ASSET_NOT_READY", message=str(exc)) from exc
+    except VisionModelBusyError as exc:
+        raise ApiError(
+            status_code=503,
+            code="VISION_MODEL_BUSY",
+            message="AI vision service is busy; please retry shortly",
+            headers={"Retry-After": "5"},
+        ) from exc
+    except ModelConfigurationError as exc:
+        raise ApiError(
+            status_code=503,
+            code="VISION_MODEL_UNAVAILABLE",
+            message="Vision model is not configured",
+        ) from exc
+    except (StorageConfigurationError, StorageProviderError) as exc:
+        raise ApiError(
+            status_code=503,
+            code="IMAGE_STORAGE_UNAVAILABLE",
+            message="Image storage is temporarily unavailable",
+        ) from exc
     except RuntimeError as exc:
         _raise_training_error(exc)
     await complete_idempotent(idem, decision, response, 201)
