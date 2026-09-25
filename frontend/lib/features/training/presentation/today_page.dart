@@ -20,6 +20,7 @@ class TodayPage extends StatefulWidget {
     required this.onOpenPlan,
     required this.onOpenProgress,
     required this.onOpenAgent,
+    required this.onDiscussNotice,
   });
 
   final String username;
@@ -30,6 +31,7 @@ class TodayPage extends StatefulWidget {
   final VoidCallback onOpenPlan;
   final VoidCallback onOpenProgress;
   final VoidCallback onOpenAgent;
+  final ValueChanged<ProactiveNotice> onDiscussNotice;
 
   @override
   State<TodayPage> createState() => _TodayPageState();
@@ -171,31 +173,43 @@ class _TodayPageState extends State<TodayPage> {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (sheetContext) => SafeArea(
-        child: SizedBox(
-          height: MediaQuery.sizeOf(sheetContext).height * 0.65,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
-            children: [
-              Text(
-                '主动教练建议',
-                style: Theme.of(sheetContext).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 8),
-              const Text('建议来自已记录的数据；点开后可查看或调整，教练不会自动改动计划。'),
-              const SizedBox(height: 14),
-              for (final notice in widget.proactiveController.notices)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(_noticeIcon(notice.kind)),
-                  title: Text(notice.title),
-                  subtitle: Text(notice.body),
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    _openNotice(notice);
-                  },
+      builder: (sheetContext) => ListenableBuilder(
+        listenable: widget.proactiveController,
+        builder: (context, _) => SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(sheetContext).height * 0.65,
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+              children: [
+                Text(
+                  '主动教练建议',
+                  style: Theme.of(sheetContext).textTheme.titleLarge,
                 ),
-            ],
+                const SizedBox(height: 8),
+                const Text('建议来自已记录的数据；点开后可查看或调整，教练不会自动改动计划。'),
+                const SizedBox(height: 14),
+                for (final notice in widget.proactiveController.notices)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(_noticeIcon(notice.kind)),
+                        title: Text(notice.title),
+                        subtitle: Text(notice.body),
+                        onTap: () {
+                          Navigator.pop(sheetContext);
+                          _openNotice(notice);
+                        },
+                      ),
+                      _noticeActions(
+                        notice,
+                        closeSheet: () => Navigator.pop(sheetContext),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -208,6 +222,35 @@ class _TodayPageState extends State<TodayPage> {
     'recovery_check' => Icons.self_improvement_rounded,
     _ => Icons.auto_awesome_rounded,
   };
+
+  Widget _noticeActions(
+    ProactiveNotice notice, {
+    VoidCallback? closeSheet,
+  }) => Wrap(
+    spacing: 4,
+    crossAxisAlignment: WrapCrossAlignment.center,
+    children: [
+      for (final (rating, label) in [
+        ('helpful', '有帮助'),
+        ('not_relevant', '不相关'),
+        ('inaccurate', '内容不准'),
+      ])
+        TextButton(
+          onPressed: notice.feedbackRating == rating
+              ? null
+              : () => widget.proactiveController.submitFeedback(notice, rating),
+          child: Text(notice.feedbackRating == rating ? '已评价：$label' : label),
+        ),
+      TextButton.icon(
+        onPressed: () {
+          closeSheet?.call();
+          widget.onDiscussNotice(notice);
+        },
+        icon: const Icon(Icons.chat_bubble_outline_rounded, size: 17),
+        label: const Text('和教练讨论'),
+      ),
+    ],
+  );
 
   Future<void> _openWorkout() async {
     await Navigator.of(context).push(
@@ -359,13 +402,21 @@ class _TodayPageState extends State<TodayPage> {
                             const Text('目前没有新的建议，继续按自己的节奏记录即可。'),
                           for (final notice
                               in widget.proactiveController.notices.take(2))
-                            ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              leading: Icon(_noticeIcon(notice.kind)),
-                              title: Text(notice.title),
-                              subtitle: Text(notice.body),
-                              trailing: const Icon(Icons.chevron_right_rounded),
-                              onTap: () => _openNotice(notice),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: Icon(_noticeIcon(notice.kind)),
+                                  title: Text(notice.title),
+                                  subtitle: Text(notice.body),
+                                  trailing: const Icon(
+                                    Icons.chevron_right_rounded,
+                                  ),
+                                  onTap: () => _openNotice(notice),
+                                ),
+                                _noticeActions(notice),
+                              ],
                             ),
                         ],
                       ],

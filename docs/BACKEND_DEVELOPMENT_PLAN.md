@@ -314,6 +314,7 @@ backend/src/nxtrep_backend/
 | POST | `/agent/chat` | 兼容的单次非流式聊天入口 | M2 |
 | POST | `/agent/chat/stream` | 兼容的单次 SSE 聊天入口 | M2 |
 | POST | `/agent/proactive/review` | 经用户授权后检查近期记录并生成幂等站内建议 | M3 |
+| PUT | `/agent/proactive/notices/{id}/feedback` | 用户评价主动建议的有用性或准确性 | M3 |
 | POST | `/agent/conversations` | 新建空会话 | M2 |
 | GET | `/agent/conversations` | 会话列表、置顶和归档筛选 | M2 |
 | GET | `/agent/conversations/{id}` | 当前会话元数据 | M2 |

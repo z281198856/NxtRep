@@ -274,6 +274,9 @@ uv run python -m nxtrep_backend.cli.run_proactive_review
 
 可用 `--date YYYY-MM-DD` 检查指定日期（例如在测试环境中复现）；定时器本身未随项目部署。
 这项 MVP 不发送系统推送，通知仅在 App 内展示。
+用户可对每条建议反馈「有帮助」「不相关」或「内容不准」；反馈保留在通知及审计事件中，
+用于后续评估，不会在当前版本中自动改变训练计划或个性化规则。用户主动选择讨论建议时，
+会进入现有 Agent 会话；若需要实际变更，仍须经过待确认草稿，不能直接执行。
 
 ## Agent 固定评测与监控
 
@@ -320,7 +323,7 @@ uv run python -m nxtrep_backend.cli.evaluate_agent \
 
 ## 当前状态
 
-后端功能代码已经完成，OpenAPI 当前包含 166 个路径、201 个操作和 222 个 Schema。
+后端功能代码已经完成，OpenAPI 当前包含 169 个路径、204 个操作和 224 个 Schema。
 数据库迁移头为 `e4b7c2a9d851`。训练接口支持暂停/继续、有效训练时长和组间计时恢复。
 发布前仍需为目标环境配置 PostgreSQL + pgvector、
 安全 JWT、显式 CORS 来源，以及按需配置模型和 OSS 密钥；外部服务未配置时相关接口会

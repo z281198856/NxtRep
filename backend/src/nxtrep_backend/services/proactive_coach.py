@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nxtrep_backend.db.models import (
     AppNotification,
+    AuditEvent,
     CalendarEvent,
     NotificationSetting,
     NutritionEntry,
@@ -20,6 +21,10 @@ from nxtrep_backend.db.models import (
 CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
 COACH_NAMESPACE = UUID("81359e64-5b92-4dba-9c87-36ec97b25aa0")
 COACH_CATEGORY = "proactive_coach"
+
+
+class ProactiveNoticeNotFoundError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +39,35 @@ class CoachObservation:
 class ProactiveCoachService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+
+    async def record_feedback(
+        self, user_id: UUID, notification_id: UUID, rating: str
+    ) -> AppNotification:
+        notice = await self.session.scalar(
+            select(AppNotification)
+            .where(
+                AppNotification.id == notification_id,
+                AppNotification.user_id == user_id,
+                AppNotification.category == COACH_CATEGORY,
+            )
+            .with_for_update()
+        )
+        if notice is None:
+            raise ProactiveNoticeNotFoundError("Proactive notice not found")
+        if notice.data.get("feedback", {}).get("rating") == rating:
+            return notice
+        notice.data = {**notice.data, "feedback": {"rating": rating}}
+        self.session.add(
+            AuditEvent(
+                user_id=user_id,
+                action="proactive_feedback.recorded",
+                resource_type="notification",
+                resource_id=str(notification_id),
+                details={"rating": rating, "kind": notice.data.get("kind")},
+            )
+        )
+        await self.session.flush()
+        return notice
 
     async def review_user(self, user_id: UUID, today: date | None = None) -> list[AppNotification]:
         """Create at most one notification per fact and day, only after explicit opt-in."""

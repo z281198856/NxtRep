@@ -29,6 +29,7 @@ class ProactiveNotice {
     required this.body,
     required this.route,
     required this.kind,
+    required this.feedbackRating,
   });
 
   factory ProactiveNotice.fromJson(Map<String, dynamic> json) {
@@ -39,6 +40,7 @@ class ProactiveNotice {
       body: json['body'] as String,
       route: data['route'] as String? ?? 'agent',
       kind: data['kind'] as String? ?? 'general',
+      feedbackRating: (data['feedback'] as Map?)?['rating'] as String?,
     );
   }
 
@@ -47,4 +49,5 @@ class ProactiveNotice {
   final String body;
   final String route;
   final String kind;
+  final String? feedbackRating;
 }

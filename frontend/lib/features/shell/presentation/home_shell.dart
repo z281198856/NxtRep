@@ -123,6 +123,19 @@ class _HomeShellState extends State<HomeShell> {
         onOpenPlan: () => _selectTab(1),
         onOpenProgress: () => _selectTab(2),
         onOpenAgent: () => _selectTab(3),
+        onDiscussNotice: (notice) async {
+          final prompt = switch (notice.kind) {
+            'missed_workout' =>
+              '昨天日历中的训练尚未标记完成。请先核对我的训练记录和日历，若需要调整，只提出草稿供我确认，不要直接修改。',
+            'recovery_check' =>
+              '昨天我记录了较高训练后疲劳。请先核对记录与今天安排，讨论安全的调整；如需变更，先提出草稿等我确认。',
+            'nutrition_log_gap' =>
+              '昨天没有饮食记录，请帮我核对，但不要假设我没有进食。如需补记或调整，请先提出草稿供我确认。',
+            _ => '请根据这条主动建议先核对事实，再讨论是否需要调整；任何变更都请先提出草稿等我确认。',
+          };
+          _selectTab(3);
+          await _agentController.send(prompt);
+        },
         onOpenNutrition: () => Navigator.of(context).push(
           MaterialPageRoute<void>(
             builder: (_) => NutritionPage(controller: _nutritionController),

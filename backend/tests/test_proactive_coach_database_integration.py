@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from nxtrep_backend.api.deps import get_current_user, get_db_session
 from nxtrep_backend.db.models import (
     AppNotification,
+    AuditEvent,
     CalendarEvent,
     NotificationSetting,
     NutritionEntry,
@@ -34,8 +35,18 @@ async def test_opt_in_review_is_actionable_idempotent_and_does_not_change_facts(
         previous_overrides = app.dependency_overrides.copy()
         try:
             user = User(username=f"coach-review-{uuid4().hex}", password_setup_required=False)
+            other_user = User(username=f"coach-other-{uuid4().hex}", password_setup_required=False)
             session.add(user)
+            session.add(other_user)
             await session.flush()
+            other_notice = AppNotification(
+                user_id=other_user.id,
+                category="proactive_coach",
+                title="private",
+                body="private",
+                data={"kind": "missed_workout"},
+            )
+            session.add(other_notice)
             session.add_all(
                 [
                     CalendarEvent(
@@ -129,6 +140,31 @@ async def test_opt_in_review_is_actionable_idempotent_and_does_not_change_facts(
                 )
                 assert inbox.status_code == 200
                 assert inbox.json()["total"] == 3
+                notice_id = first.json()[0]["id"]
+                feedback_path = f"/api/v1/agent/proactive/notices/{notice_id}/feedback"
+                invalid = await client.put(feedback_path, json={"rating": "unsafe"})
+                assert invalid.status_code == 422
+                foreign = await client.put(
+                    f"/api/v1/agent/proactive/notices/{other_notice.id}/feedback",
+                    json={"rating": "helpful"},
+                )
+                assert foreign.status_code == 404
+                feedback = await client.put(feedback_path, json={"rating": "inaccurate"})
+                assert feedback.status_code == 200, feedback.text
+                assert feedback.json()["data"]["feedback"] == {"rating": "inaccurate"}
+                repeated = await client.put(feedback_path, json={"rating": "inaccurate"})
+                assert repeated.status_code == 200
+                assert (
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(AuditEvent)
+                        .where(
+                            AuditEvent.user_id == user.id,
+                            AuditEvent.action == "proactive_feedback.recorded",
+                        )
+                    )
+                    == 1
+                )
                 read = await client.post(f"/api/v1/notifications/{first.json()[0]['id']}/read")
                 assert read.status_code == 200
                 assert read.json()["read_at"] is not None

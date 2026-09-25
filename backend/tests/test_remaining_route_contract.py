@@ -100,6 +100,7 @@ def test_agent_routes_include_chat_conversation_and_run_management() -> None:
         "/api/v1/agent/conversations/{conversation_id}",
         "/api/v1/agent/conversations/{conversation_id}/messages",
         "/api/v1/agent/proactive/review",
+        "/api/v1/agent/proactive/notices/{notification_id}/feedback",
         "/api/v1/agent/runs/{run_id}",
         "/api/v1/agent/runs/{run_id}:cancel",
         "/api/v1/agent/tool-runs",

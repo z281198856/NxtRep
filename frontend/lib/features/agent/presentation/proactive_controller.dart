@@ -62,4 +62,19 @@ class ProactiveController extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  Future<void> submitFeedback(ProactiveNotice notice, String rating) async {
+    if (notice.feedbackRating == rating) return;
+    errorMessage = null;
+    try {
+      final updated = await _repository.submitFeedback(notice.id, rating);
+      notices = [
+        for (final item in notices) item.id == notice.id ? updated : item,
+      ];
+      notifyListeners();
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+      notifyListeners();
+    }
+  }
 }

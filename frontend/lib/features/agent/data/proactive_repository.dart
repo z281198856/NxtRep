@@ -60,4 +60,15 @@ class ProactiveRepository {
   Future<void> markRead(String id) async {
     await _apiClient.post('/notifications/$id/read');
   }
+
+  Future<ProactiveNotice> submitFeedback(String id, String rating) async =>
+      ProactiveNotice.fromJson(
+        expectJsonObject(
+          await _apiClient.put(
+            '/agent/proactive/notices/$id/feedback',
+            body: {'rating': rating},
+          ),
+          context: '主动建议反馈接口',
+        ),
+      );
 }
