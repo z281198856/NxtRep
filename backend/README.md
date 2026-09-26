@@ -273,6 +273,23 @@ uv run python -m nxtrep_backend.cli.run_proactive_review
 ```
 
 可用 `--date YYYY-MM-DD` 检查指定日期（例如在测试环境中复现）；定时器本身未随项目部署。
+也可将以下命令作为**独立、受进程管理器监护的 worker** 运行，无需依赖用户打开 App。
+本地开发命令为：
+
+```bash
+uv run python -m nxtrep_backend.cli.run_proactive_worker --at 08:00
+```
+
+复用后端 Docker 镜像时，将启动命令覆盖为
+`python -m nxtrep_backend.cli.run_proactive_worker --at 08:00`。
+
+`--at` 使用 `Asia/Shanghai` 的 24 小时制时间，默认 `08:00`；失败默认 15 分钟后开始
+指数退避重试，最长间隔 6 小时，可用 `--retry-minutes` 调整初始间隔。启动时若已过当天
+执行时间，会立即补跑当天；重启后可能
+再次检查同一天，但通知按日期/类型去重。进程运行期间会保留失败日期并重试，且不会
+因此阻塞次日检查；若进程长期停机，恢复后只自动补跑当天，不回放所有停机日。
+不要把 worker 嵌入每个 Uvicorn worker，也不要与另一套定时器同时部署；建议只运行
+一个受监护的实例。复用 Web Docker 镜像时须覆盖默认启动命令，并禁用其 HTTP 健康检查。
 这项 MVP 不发送系统推送，通知仅在 App 内展示。
 用户可对每条建议反馈「有帮助」「不相关」或「内容不准」；反馈保留在通知及审计事件中，
 用于后续评估，不会在当前版本中自动改变训练计划或个性化规则。用户主动选择讨论建议时，
