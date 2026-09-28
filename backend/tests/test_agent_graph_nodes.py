@@ -330,6 +330,112 @@ async def test_streaming_direct_answer_is_emitted_on_custom_channel() -> None:
 
 
 @pytest.mark.asyncio
+async def test_training_plan_reply_is_short_and_uses_confirmation_preview_data() -> None:
+    planner, executor, synthesizer = make_dependencies()
+    card = AgentConfirmationCard(
+        confirmation_id=uuid4(),
+        operation_type="training_plan_activate",
+        status="pending",
+        impact="未来日历使用新计划，历史训练不变",
+        expires_at="2026-09-29T00:00:00+08:00",
+        version=1,
+    )
+    bundle = AgentExecutionBundle(
+        branch_results=[
+            AgentBranchResult(
+                task_type="training_plan_draft",
+                status="completed",
+                result={"answer": "| 很长的表格 | @RIR3 |"},
+                operation_results=[
+                    {
+                        "status": "confirmation_required",
+                        "draft": {
+                            "name": "三日全身计划",
+                            "weekly_frequency": 3,
+                            "days": [{"name": "全身 A"}, {"name": "全身 B"}, {"name": "全身 C"}],
+                        },
+                    }
+                ],
+                confirmation_cards=[card],
+                requires_confirmation=True,
+            )
+        ]
+    )
+    nodes = AgentGraphNodes(
+        planner=planner,
+        executor=executor,
+        synthesizer=synthesizer,
+    )
+
+    update = await nodes.synthesize_response(
+        {
+            "request": AgentChatRequest(message="生成训练计划"),
+            "execution_bundle": bundle,
+        }
+    )
+
+    answer = update["response_message"]
+    assert "回答：已生成「三日全身计划」" in answer
+    assert "分析：草稿包含 3 个训练日" in answer
+    assert "@RIR" not in answer
+    assert "|" not in answer
+    synthesizer.synthesize.assert_not_awaited()
+
+
+def test_training_plan_analysis_explains_facts_without_inventing_missing_metrics() -> None:
+    context = {
+        "profile": {"height_cm": "178", "weekly_training_days": 3},
+        "goal_type": "fat_loss_retain",
+        "measurements": {
+            "weight_kg": "78.5",
+            "weight_recorded_at": "2026-09-20",
+            "body_fat_percent": "24.0",
+            "body_fat_recorded_at": "2026-09-20",
+        },
+    }
+    analysis = AgentGraphNodes._training_plan_analysis(
+        context, frequency=3, day_count=3
+    )
+
+    assert "减脂保肌" in analysis
+    assert "每周 3 次与你填写的可训练天数一致" in analysis
+    assert "身高 178 cm" in analysis
+    assert "体重 78.5 kg（2026-09-20 记录）" in analysis
+    assert "体脂 24.0%（2026-09-20 记录）" in analysis
+    assert "不能单凭" in analysis
+
+    missing = AgentGraphNodes._training_plan_analysis(
+        {"profile": {"weekly_training_days": 4}, "measurements": {}},
+        frequency=3,
+        day_count=3,
+    )
+    assert "确认前请核对是否可执行" in missing
+    assert "尚无身高、体重、体脂记录" in missing
+    assert "78.5" not in missing
+
+    within_time = AgentGraphNodes._training_plan_analysis(
+        {"profile": {"session_duration_minutes": 80}, "measurements": {}},
+        frequency=3,
+        day_count=3,
+        duration_range=(60, 60),
+    )
+    assert "单次时长在你可用的 80 分钟内" in within_time
+    assert "可能超时" not in within_time
+
+    stale = AgentGraphNodes._training_plan_analysis(
+        {
+            "measurements": {
+                "weight_kg": "78",
+                "weight_recorded_at": "2020-01-01",
+            }
+        },
+        frequency=3,
+        day_count=3,
+    )
+    assert "记录已超过 90 天" in stale
+
+
+@pytest.mark.asyncio
 async def test_streaming_failed_vision_branch_uses_deterministic_answer() -> None:
     planner, executor, synthesizer = make_dependencies()
     execution_bundle = AgentExecutionBundle(

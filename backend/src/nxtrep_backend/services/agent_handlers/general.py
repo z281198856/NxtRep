@@ -2,8 +2,9 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph.state import CompiledStateGraph
+from pydantic import ValidationError
 
 from nxtrep_backend.agents.vision import GlmVisionAnalyzer
 from nxtrep_backend.schemas.agent import (
@@ -18,6 +19,13 @@ from nxtrep_backend.services.agent_execution import AgentBranchInput
 
 class GeneralQuestionResponseError(RuntimeError):
     pass
+
+
+TRAINING_PLAN_RETRY_INSTRUCTION = (
+    "安全校验发现上一轮只给出了文字计划，没有创建可确认的训练计划草稿。"
+    "请基于当前用户要求和必要的数据，调用 propose_training_plan 创建并校验草稿；"
+    "不要再次只输出文字计划。如果确实无法创建，应说明缺少什么信息。"
+)
 
 
 class GeneralQuestionBranchHandler:
@@ -156,13 +164,67 @@ class GeneralQuestionBranchHandler:
         content = None
         for builder in builders:
             try:
-                result = await builder(task).ainvoke({"messages": messages})
-                response_messages = result.get("messages")
-                if not response_messages:
-                    raise GeneralQuestionResponseError("ReAct Agent returned no messages")
-                content = response_messages[-1].content
-                if not isinstance(content, str) or not content.strip():
-                    raise GeneralQuestionResponseError("ReAct Agent returned no answer")
+                attempts = 2 if task.task_type == "training_plan_draft" else 1
+                for attempt in range(attempts):
+                    attempt_messages = messages
+                    if attempt:
+                        attempt_messages = [
+                            {"role": "system", "content": TRAINING_PLAN_RETRY_INSTRUCTION},
+                            *messages,
+                        ]
+                    result = await builder(task).ainvoke({"messages": attempt_messages})
+                    response_messages = result.get("messages")
+                    if not response_messages:
+                        raise GeneralQuestionResponseError("ReAct Agent returned no messages")
+                    final_message = response_messages[-1]
+                    content = (
+                        final_message.content if isinstance(final_message, AIMessage) else None
+                    )
+                    if not isinstance(content, str) or not content.strip():
+                        operations = self._operation_results(response_messages)
+                        if any(
+                            item.get("status") == "confirmation_required" for item in operations
+                        ):
+                            content = "提案已创建，请在确认卡片中审核。"
+                        elif any(
+                            item.get("status") in {"saved", "updated", "deleted"}
+                            for item in operations
+                        ):
+                            content = "长期记忆操作已完成。"
+                        elif task.task_type == "training_plan_draft":
+                            if self._proposal_was_attempted(response_messages):
+                                return self._training_plan_failure(
+                                    task,
+                                    code="TRAINING_PLAN_DRAFT_INVALID",
+                                    message="训练计划草稿未通过校验，请调整要求后重试。",
+                                )
+                            if attempt:
+                                return self._training_plan_failure(
+                                    task,
+                                    code="TRAINING_PLAN_DRAFT_NOT_CREATED",
+                                    message="AI 未能创建可确认的训练计划草稿，请稍后重试。",
+                                )
+                            continue
+                        else:
+                            raise GeneralQuestionResponseError("ReAct Agent returned no answer")
+                    if task.task_type != "training_plan_draft":
+                        break
+                    operations = self._operation_results(response_messages)
+                    cards = self._confirmation_cards(operations)
+                    if any(card.operation_type == "training_plan_activate" for card in cards):
+                        break
+                    if self._proposal_was_attempted(response_messages):
+                        return self._training_plan_failure(
+                            task,
+                            code="TRAINING_PLAN_DRAFT_INVALID",
+                            message="训练计划草稿未通过校验，请调整要求后重试。",
+                        )
+                    if attempt:
+                        return self._training_plan_failure(
+                            task,
+                            code="TRAINING_PLAN_DRAFT_NOT_CREATED",
+                            message="AI 未能创建可确认的训练计划草稿，请稍后重试。",
+                        )
                 break
             except Exception as exc:
                 last_error = exc
@@ -171,19 +233,7 @@ class GeneralQuestionBranchHandler:
                 raise last_error
             raise GeneralQuestionResponseError("ReAct Agent invocation failed") from last_error
 
-        operation_results = [
-            payload
-            for message in response_messages
-            if isinstance(message, ToolMessage)
-            if (payload := self._tool_payload(message.content)) is not None
-            if payload.get("status")
-            in {
-                "confirmation_required",
-                "saved",
-                "updated",
-                "deleted",
-            }
-        ]
+        operation_results = self._operation_results(response_messages)
         confirmation_cards = self._confirmation_cards(operation_results)
         citations = self._knowledge_citations(response_messages)
 
@@ -200,6 +250,51 @@ class GeneralQuestionBranchHandler:
             requires_confirmation=any(
                 operation.get("status") == "confirmation_required"
                 for operation in operation_results
+            ),
+        )
+
+    @classmethod
+    def _operation_results(cls, messages: list[Any]) -> list[dict[str, Any]]:
+        return [
+            payload
+            for message in messages
+            if isinstance(message, ToolMessage)
+            if (payload := cls._tool_payload(message.content)) is not None
+            if payload.get("status")
+            in {
+                "confirmation_required",
+                "saved",
+                "updated",
+                "deleted",
+            }
+        ]
+
+    @staticmethod
+    def _proposal_was_attempted(messages: list[Any]) -> bool:
+        return any(
+            (isinstance(item, ToolMessage) and (item.name or "").startswith("propose_"))
+            or (
+                isinstance(item, AIMessage)
+                and any(
+                    (call.get("name") or "").startswith("propose_")
+                    for call in item.tool_calls
+                )
+            )
+            for item in messages
+        )
+
+    @staticmethod
+    def _training_plan_failure(
+        task: AgentIntentTask, *, code: str, message: str
+    ) -> AgentBranchResult:
+        return AgentBranchResult(
+            task_type=task.task_type,
+            asset_ids=task.asset_ids,
+            status="failed",
+            error=AgentBranchError(
+                code=code,
+                message=message,
+                retryable=True,
             ),
         )
 
@@ -310,7 +405,10 @@ class GeneralQuestionBranchHandler:
             payload = operation.get("confirmation")
             if not isinstance(payload, dict):
                 continue
-            card = AgentConfirmationCard.model_validate(payload)
+            try:
+                card = AgentConfirmationCard.model_validate(payload)
+            except ValidationError:
+                continue
             key = str(card.confirmation_id)
             if key not in seen:
                 cards.append(card)

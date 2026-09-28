@@ -6,13 +6,19 @@ import '../../../core/widgets/app_widgets.dart';
 import '../domain/nutrition_models.dart';
 import 'food_library_page.dart';
 import 'nutrition_controller.dart';
+import 'nutrition_photo_page.dart';
 import 'nutrition_tools_page.dart';
 import 'widgets/food_line_art.dart';
 
 class NutritionPage extends StatefulWidget {
-  const NutritionPage({super.key, required this.controller});
+  const NutritionPage({
+    super.key,
+    required this.controller,
+    this.embedded = false,
+  });
 
   final NutritionController controller;
+  final bool embedded;
 
   @override
   State<NutritionPage> createState() => _NutritionPageState();
@@ -105,15 +111,26 @@ class _NutritionPageState extends State<NutritionPage> {
     if (food != null && mounted) await _recordFood(food);
   }
 
+  Future<void> _openPhoto() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => NutritionPhotoPage(controller: widget.controller),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        leading: IconButton(
-          tooltip: '返回',
-          onPressed: () => Navigator.maybePop(context),
-          icon: const Icon(Icons.arrow_back_rounded),
-        ),
+        automaticallyImplyLeading: !widget.embedded,
+        leading: widget.embedded
+            ? null
+            : IconButton(
+                tooltip: '返回',
+                onPressed: () => Navigator.maybePop(context),
+                icon: const Icon(Icons.arrow_back_rounded),
+              ),
         title: const Text('饮食记录'),
         actions: [
           IconButton(
@@ -163,6 +180,43 @@ class _NutritionPageState extends State<NutritionPage> {
                   AppErrorCard(message: message),
                 ],
                 const SizedBox(height: 20),
+                AppSurface(
+                  onTap: widget.controller.submitting ? null : _openPhoto,
+                  color: AppColors.indigoSoft,
+                  padding: const EdgeInsets.all(18),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.camera_alt_rounded,
+                        color: AppColors.indigo,
+                        size: 36,
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '拍照记一餐',
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'AI 识别食物并估算热量与三大营养素，确认后保存',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: AppColors.muted),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(
+                        Icons.chevron_right_rounded,
+                        color: AppColors.indigo,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
                 AppSurface(
                   onTap: widget.controller.submitting ? null : _openFoods,
                   padding: const EdgeInsets.all(18),

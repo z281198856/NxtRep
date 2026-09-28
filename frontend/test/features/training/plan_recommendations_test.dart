@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/testing.dart';
 import 'package:nxtrep/core/config/api_config.dart';
 import 'package:nxtrep/core/network/api_client.dart';
+import 'package:nxtrep/features/profile/domain/profile_models.dart';
 import 'package:nxtrep/features/training/data/training_repository.dart';
 import 'package:nxtrep/features/training/domain/training_models.dart';
 import 'package:nxtrep/features/training/presentation/plan_controller.dart';
@@ -88,6 +89,56 @@ void main() {
     expect(controller.recommendedTemplates.single.id, 'legacy');
   });
 
+  test('strength and weekly frequency rank matching gym plans first', () {
+    controller.recommendationProfile = _profile(days: 4, minutes: 45);
+    controller.recommendationPreferences = _preferences(
+      goal: 'strength',
+      equipment: ['barbell', 'dumbbell', 'cable', 'rack'],
+    );
+    controller.templates = [
+      _template('gain-4', 'muscle_gain', 'dumbbell', 4),
+      _template('strength-3', 'strength', 'dumbbell', 3),
+      _template('strength-4', 'strength', 'barbell', 4),
+      _template('strength-5', 'strength', 'cable', 5),
+    ];
+
+    expect(controller.recommendedTemplates.map((item) => item.id), [
+      'strength-4',
+      'strength-3',
+      'strength-5',
+    ]);
+    expect(controller.recommendationDescription, contains('每周 4 天'));
+  });
+
+  test('bodyweight preference does not recommend unavailable equipment', () {
+    controller.recommendationProfile = _profile(days: 3);
+    controller.recommendationPreferences = _preferences(
+      goal: 'fat_loss_retain',
+      equipment: ['bodyweight'],
+    );
+    controller.templates = [
+      _template('cable-fat-loss', 'fat_loss_retain', 'cable', 3),
+      _template('bodyweight-fat-loss', 'fat_loss_retain', 'bodyweight', 3),
+      _template('bodyweight-gain', 'muscle_gain', 'bodyweight', 3),
+    ];
+
+    expect(controller.recommendedTemplates.map((item) => item.id), [
+      'bodyweight-fat-loss',
+    ]);
+  });
+
+  test('unavailable equipment is never recommended as a fallback', () {
+    controller.recommendationPreferences = _preferences(
+      goal: 'strength',
+      equipment: ['bodyweight'],
+    );
+    controller.templates = [
+      _template('cable-strength', 'strength', 'cable', 3),
+    ];
+
+    expect(controller.recommendedTemplates, isEmpty);
+  });
+
   test('catalog filters by goal, equipment and frequency', () {
     controller.templates = [
       const TrainingTemplate(
@@ -127,3 +178,42 @@ void main() {
     );
   });
 }
+
+UserProfile _profile({required int days, int? minutes}) => UserProfile(
+  displayName: null,
+  sex: 'unspecified',
+  birthDate: null,
+  heightCm: null,
+  experienceLevel: 'beginner',
+  weeklyTrainingDays: days,
+  sessionDurationMinutes: minutes,
+  timezone: 'Asia/Shanghai',
+  version: 1,
+);
+
+TrainingPreferences _preferences({
+  required String goal,
+  required List<String> equipment,
+}) => TrainingPreferences(
+  version: 1,
+  goalType: goal,
+  targetDate: null,
+  targetWeightKg: null,
+  equipment: equipment,
+  preferredExercises: const [],
+  dislikedExercises: const [],
+  painOrInjuries: const [],
+  allergies: const [],
+  dietaryPreferences: const [],
+  warnings: const [],
+);
+
+TrainingTemplate _template(String id, String goal, String gear, int days) =>
+    TrainingTemplate(
+      id: id,
+      name: id,
+      goalTypes: [goal],
+      daysPerWeek: days,
+      durationMinutes: 45,
+      equipment: [gear],
+    );

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../domain/body_models.dart';
+import 'navy_body_fat_sheet.dart';
 import 'progress_controller.dart';
 
 class ProgressPage extends StatefulWidget {
@@ -46,6 +47,18 @@ class _ProgressPageState extends State<ProgressPage> {
     );
   }
 
+  Future<void> _openNavyEstimator() async {
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => NavyBodyFatSheet(controller: widget.controller),
+    );
+    if (!mounted || saved != true) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('体脂估算已保存，可在趋势中查看')));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -54,6 +67,13 @@ class _ProgressPageState extends State<ProgressPage> {
           listenable: widget.controller,
           builder: (context, _) {
             final controller = widget.controller;
+            SavedBodyFatEstimate? latestNavy;
+            for (final estimate in controller.bodyFatEstimates) {
+              if (estimate.method == 'navy') {
+                latestNavy = estimate;
+                break;
+              }
+            }
             return RefreshIndicator(
               onRefresh: controller.refresh,
               child: ListView(
@@ -91,6 +111,11 @@ class _ProgressPageState extends State<ProgressPage> {
                       onTap: widget.onOpenBodyProgress,
                     ),
                     const SizedBox(height: 16),
+                    _NavyEstimateCard(
+                      latest: latestNavy,
+                      onTap: _openNavyEstimator,
+                    ),
+                    const SizedBox(height: 16),
                     _TrainingSummaryCard(
                       summary: controller.overview?.training,
                       days: controller.selectedDays,
@@ -118,6 +143,42 @@ class _ProgressPageState extends State<ProgressPage> {
       ),
     );
   }
+}
+
+class _NavyEstimateCard extends StatelessWidget {
+  const _NavyEstimateCard({required this.latest, required this.onTap});
+
+  final SavedBodyFatEstimate? latest;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => AppSurface(
+    onTap: onTap,
+    padding: const EdgeInsets.all(16),
+    child: Row(
+      children: [
+        const Icon(Icons.calculate_outlined, color: AppColors.indigo, size: 34),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('围度估算体脂', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 3),
+              Text(
+                latest == null
+                    ? '输入身高、腰围、颈围等，由系统计算'
+                    : '最近估算 ${latest!.result.valuePercent.toStringAsFixed(1)}% · 参考范围 ${latest!.result.rangeMinPercent.toStringAsFixed(1)}%–${latest!.result.rangeMaxPercent.toStringAsFixed(1)}%',
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: AppColors.muted),
+              ),
+            ],
+          ),
+        ),
+        const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+      ],
+    ),
+  );
 }
 
 class _BodyProgressEntry extends StatelessWidget {
@@ -157,9 +218,8 @@ class _BodyProgressEntry extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text(
                   photoCountLabel,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.muted,
-                  ),
+                  style: Theme.of(context).textTheme.bodyMedium
+                      ?.copyWith(color: AppColors.muted),
                 ),
               ],
             ),
@@ -347,6 +407,14 @@ class _TrendSection extends StatelessWidget {
               ),
           ],
         ),
+        if (metric == BodyMetric.bodyFat) ...[
+          const SizedBox(height: 8),
+          Text(
+            '趋势可能包含设备实测与围度估算；方法不同，数值不宜直接比较。',
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: AppColors.muted),
+          ),
+        ],
         const SizedBox(height: 12),
         AppSurface(
           padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
@@ -550,7 +618,7 @@ class _MeasurementSection extends StatelessWidget {
           AppEmptyState(
             icon: Icons.monitor_weight_outlined,
             title: '从第一条记录开始',
-            message: '可以只记录体重、腰围或体脂中的一项，持续记录比一次填满更重要。',
+            message: '可以只记录体重或围度；体脂可在上方用围度估算。',
             action: FilledButton.icon(
               onPressed: onAdd,
               icon: const Icon(Icons.add_rounded),
@@ -588,7 +656,7 @@ class _MeasurementTile extends StatelessWidget {
       if (measurement.waistCm case final value?)
         '腰围 ${value.toStringAsFixed(1)} cm',
       if (measurement.bodyFatPercent case final value?)
-        '体脂 ${value.toStringAsFixed(1)}%',
+        '手填体脂 ${value.toStringAsFixed(1)}%',
       if (measurement.neckCm case final value?)
         '颈围 ${value.toStringAsFixed(1)} cm',
       if (measurement.hipCm case final value?)
@@ -878,13 +946,22 @@ class _MeasurementSheetState extends State<_MeasurementSheet> {
               const SizedBox(height: 11),
               Row(
                 children: [
-                  Expanded(child: _measurementField(_bodyFat, '体脂率（%）', 70)),
-                  const SizedBox(width: 10),
                   Expanded(child: _measurementField(_hip, '臀围（cm）', 400)),
+                  const SizedBox(width: 10),
+                  Expanded(child: _measurementField(_neck, '颈围（cm）', 200)),
                 ],
               ),
               const SizedBox(height: 11),
-              _measurementField(_neck, '颈围（cm，可选）', 200),
+              ExpansionTile(
+                title: const Text('有设备实测体脂？可选填'),
+                tilePadding: EdgeInsets.zero,
+                initiallyExpanded: widget.initial?.bodyFatPercent != null,
+                children: [
+                  _measurementField(_bodyFat, '设备实测体脂率（%）', 70),
+                  const SizedBox(height: 8),
+                  const Text('没有设备读数时无需填写；可在进展页通过围度估算。'),
+                ],
+              ),
               const SizedBox(height: 11),
               TextFormField(
                 controller: _conditions,

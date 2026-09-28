@@ -26,6 +26,144 @@ class NutritionTotals {
   final double fatG;
 }
 
+class NutritionEstimateRange {
+  const NutritionEstimateRange({
+    required this.minimum,
+    required this.estimated,
+    required this.maximum,
+  });
+
+  factory NutritionEstimateRange.fromJson(Map<String, dynamic> json) =>
+      NutritionEstimateRange(
+        minimum: NutritionTotals.fromJson(
+          Map<String, dynamic>.from(json['minimum'] as Map),
+        ),
+        estimated: NutritionTotals.fromJson(
+          Map<String, dynamic>.from(json['estimated'] as Map),
+        ),
+        maximum: NutritionTotals.fromJson(
+          Map<String, dynamic>.from(json['maximum'] as Map),
+        ),
+      );
+
+  final NutritionTotals minimum;
+  final NutritionTotals estimated;
+  final NutritionTotals maximum;
+}
+
+class NutritionPhotoItem {
+  const NutritionPhotoItem({
+    required this.name,
+    required this.amountG,
+    required this.amountMinG,
+    required this.amountMaxG,
+    required this.confidence,
+    required this.status,
+    required this.assumptions,
+    required this.questions,
+    this.nutrition,
+  });
+
+  factory NutritionPhotoItem.fromJson(Map<String, dynamic> json) {
+    final match = Map<String, dynamic>.from(json['match'] as Map);
+    final detected = Map<String, dynamic>.from(match['detected'] as Map);
+    final nutrition = json['nutrition'];
+    return NutritionPhotoItem(
+      name: detected['name'] as String,
+      amountG: _decimal(detected['estimated_amount_g']),
+      amountMinG: _decimal(detected['amount_min_g']),
+      amountMaxG: _decimal(detected['amount_max_g']),
+      confidence: detected['confidence'] as String? ?? 'low',
+      status: match['status'] as String? ?? 'not_found',
+      assumptions: (json['assumptions'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(),
+      questions: (json['follow_up_questions'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(),
+      nutrition: nutrition is Map
+          ? NutritionEstimateRange.fromJson(
+              Map<String, dynamic>.from(nutrition),
+            )
+          : null,
+    );
+  }
+
+  final String name;
+  final double amountG;
+  final double amountMinG;
+  final double amountMaxG;
+  final String confidence;
+  final String status;
+  final List<String> assumptions;
+  final List<String> questions;
+  final NutritionEstimateRange? nutrition;
+}
+
+class NutritionPhotoDraft {
+  const NutritionPhotoDraft({
+    required this.imageAssetId,
+    required this.mealType,
+    required this.eatenAt,
+    required this.items,
+    required this.totals,
+    required this.isComplete,
+    required this.assumptions,
+    required this.questions,
+  });
+
+  factory NutritionPhotoDraft.fromJson(Map<String, dynamic> json) {
+    final recognition = Map<String, dynamic>.from(json['recognition'] as Map);
+    final calculation = Map<String, dynamic>.from(json['calculation'] as Map);
+    return NutritionPhotoDraft(
+      imageAssetId: json['image_asset_id'] as String,
+      mealType: json['meal_type'] as String,
+      eatenAt: DateTime.parse(json['eaten_at'] as String),
+      items: (calculation['items'] as List<dynamic>)
+          .map(
+            (item) => NutritionPhotoItem.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ),
+          )
+          .toList(),
+      totals: NutritionEstimateRange.fromJson(
+        Map<String, dynamic>.from(calculation['totals'] as Map),
+      ),
+      isComplete: calculation['is_complete'] as bool? ?? false,
+      assumptions: (recognition['assumptions'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(),
+      questions:
+          (recognition['follow_up_questions'] as List<dynamic>? ?? const [])
+              .whereType<String>()
+              .toList(),
+    );
+  }
+
+  final String imageAssetId;
+  final String mealType;
+  final DateTime eatenAt;
+  final List<NutritionPhotoItem> items;
+  final NutritionEstimateRange totals;
+  final bool isComplete;
+  final List<String> assumptions;
+  final List<String> questions;
+}
+
+class NutritionPhotoEntryInput {
+  const NutritionPhotoEntryInput({
+    required this.mealType,
+    required this.eatenAt,
+    required this.items,
+    required this.imageAssetId,
+  });
+
+  final String mealType;
+  final DateTime eatenAt;
+  final List<NutritionEntryItem> items;
+  final String imageAssetId;
+}
+
 class FoodItem {
   const FoodItem({
     required this.id,

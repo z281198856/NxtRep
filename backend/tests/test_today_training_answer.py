@@ -44,7 +44,10 @@ def test_direct_answer_prioritizes_active_workout_progress() -> None:
 
     assert answer is not None
     assert "进行中的训练" in answer
-    assert "深蹲：已完成 1/3 组，每组 8–12 次，目标 40 kg，RIR 2" in answer
+    assert "回答：" in answer
+    assert "分析：" in answer
+    assert "深蹲：已完成 1/3 组，每组 8–12 次，目标 40 kg，做完还可再做约 2 次" in answer
+    assert "RIR" not in answer
     assert "不应覆盖进行中训练" not in answer
 
 
@@ -113,8 +116,8 @@ def test_direct_answer_explains_completely_empty_training_state() -> None:
     answer = direct_today_training_answer(bundle)
 
     assert answer is not None
-    assert "没有进行中的训练" in answer
-    assert "没有今日安排或已启用的训练计划" in answer
+    assert "今天没有安排训练" in answer
+    assert "没有进行中的训练、今日安排或已启用的训练计划" in answer
     assert "徒手" in answer
     assert "健身房器械" in answer
 

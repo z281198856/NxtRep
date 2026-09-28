@@ -10,6 +10,7 @@ import '../../../core/widgets/app_widgets.dart';
 import '../domain/agent_models.dart';
 import 'agent_controller.dart';
 import 'agent_management_page.dart';
+import 'agent_reply_format.dart';
 
 class AgentPage extends StatefulWidget {
   const AgentPage({super.key, required this.controller});
@@ -496,7 +497,7 @@ class _MessageBubble extends StatelessWidget {
                   _Thinking(label: activityLabel ?? '正在思考')
                 else
                   SelectionArea(
-                    child: _MarkdownLiteText(content: message.content),
+                    child: _AgentReplyText(content: message.content),
                   ),
                 if (message.pending && message.content.isNotEmpty) ...[
                   const SizedBox(height: 7),
@@ -631,10 +632,69 @@ class _StreamingCursorState extends State<_StreamingCursor>
   }
 }
 
-class _MarkdownLiteText extends StatelessWidget {
-  const _MarkdownLiteText({required this.content});
+class _AgentReplyText extends StatelessWidget {
+  const _AgentReplyText({required this.content});
 
   final String content;
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = parseAgentReply(content);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 15, 16, 14),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        border: Border.all(color: AppColors.line),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.bolt_rounded,
+                size: 17,
+                color: AppColors.primary,
+              ),
+              const SizedBox(width: 6),
+              Text('回答', style: Theme.of(context).textTheme.labelLarge),
+            ],
+          ),
+          if (parts.answer.isNotEmpty) ...[
+            const SizedBox(height: 7),
+            _MarkdownLiteText(content: parts.answer),
+          ],
+          if (parts.analysis.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            const Divider(height: 1, color: AppColors.line),
+            const SizedBox(height: 11),
+            Row(
+              children: [
+                const Icon(
+                  Icons.info_outline_rounded,
+                  size: 16,
+                  color: AppColors.muted,
+                ),
+                const SizedBox(width: 6),
+                Text('分析', style: Theme.of(context).textTheme.labelMedium),
+              ],
+            ),
+            const SizedBox(height: 5),
+            _MarkdownLiteText(content: parts.analysis, muted: true),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _MarkdownLiteText extends StatelessWidget {
+  const _MarkdownLiteText({required this.content, this.muted = false});
+
+  final String content;
+  final bool muted;
 
   @override
   Widget build(BuildContext context) {
@@ -659,6 +719,7 @@ class _MarkdownLiteText extends StatelessWidget {
                   Expanded(
                     child: _InlineText(
                       text: line.trimLeft().substring(2).trimRight(),
+                      muted: muted,
                     ),
                   ),
                 ],
@@ -670,6 +731,7 @@ class _MarkdownLiteText extends StatelessWidget {
               child: _InlineText(
                 text: line.replaceFirst(RegExp(r'^#{1,4}\s*'), ''),
                 heading: line.trimLeft().startsWith('#'),
+                muted: muted,
               ),
             ),
       ],
@@ -683,10 +745,15 @@ class _MarkdownLiteText extends StatelessWidget {
 }
 
 class _InlineText extends StatelessWidget {
-  const _InlineText({required this.text, this.heading = false});
+  const _InlineText({
+    required this.text,
+    this.heading = false,
+    this.muted = false,
+  });
 
   final String text;
   final bool heading;
+  final bool muted;
 
   @override
   Widget build(BuildContext context) {
@@ -717,8 +784,10 @@ class _InlineText extends StatelessWidget {
       style:
           (heading
                   ? Theme.of(context).textTheme.titleMedium
+                  : muted
+                  ? Theme.of(context).textTheme.bodyMedium
                   : Theme.of(context).textTheme.bodyLarge)
-              ?.copyWith(height: 1.62),
+              ?.copyWith(height: 1.55, color: muted ? AppColors.muted : null),
     );
   }
 }
@@ -729,39 +798,181 @@ class _ConfirmationCard extends StatelessWidget {
   final AgentConfirmationCard card;
   final AgentController controller;
 
+  String get _title => switch (card.operationType) {
+    'training_plan_activate' => '启用训练计划',
+    'training_plan_archive' => '归档训练计划',
+    'nutrition_entry_create' => '保存这餐饮食',
+    'nutrition_entry_delete' => '删除饮食记录',
+    'nutrition_target_activate' => '启用饮食目标',
+    'body_measurement_create' => '保存身体记录',
+    'body_measurement_delete' => '删除身体记录',
+    'calendar_reschedule' => '调整训练日程',
+    'training_progression_apply' => '调整训练强度',
+    _ => '确认这项更改',
+  };
+
+  String get _approveLabel => switch (card.operationType) {
+    'training_plan_activate' || 'nutrition_target_activate' => '确认启用',
+    'nutrition_entry_create' || 'body_measurement_create' => '确认保存',
+    'training_plan_archive' => '确认归档',
+    'nutrition_entry_delete' || 'body_measurement_delete' => '确认删除',
+    _ => '确认更改',
+  };
+
+  String? get _previewTitle {
+    if (card.operationType == 'training_plan_activate') {
+      final name = card.draft?['name'];
+      return name is String && name.trim().isNotEmpty ? name.trim() : null;
+    }
+    if (card.operationType == 'nutrition_entry_create') {
+      final entry = card.after?['entry'];
+      if (entry is Map) {
+        return switch (entry['meal_type']) {
+          'breakfast' => '早餐记录',
+          'lunch' => '午餐记录',
+          'dinner' => '晚餐记录',
+          'snack' => '加餐记录',
+          _ => '饮食记录',
+        };
+      }
+    }
+    return null;
+  }
+
+  List<String> get _previewFacts {
+    if (card.operationType == 'training_plan_activate') {
+      final draft = card.draft;
+      final facts = <String>[];
+      final frequency = draft?['weekly_frequency'];
+      if (frequency is int) facts.add('每周 $frequency 次');
+      final days = draft?['days'];
+      if (days is List) {
+        final names = days
+            .whereType<Map>()
+            .map((day) => day['name'])
+            .whereType<String>()
+            .where((name) => name.trim().isNotEmpty)
+            .take(3)
+            .toList(growable: false);
+        if (names.isNotEmpty) facts.add('训练日：${names.join(' · ')}');
+      }
+      return facts;
+    }
+    if (card.operationType == 'body_measurement_create') {
+      final measurement = card.after?['measurement'];
+      if (measurement is! Map) return const [];
+      return [
+        if (measurement['weight_kg'] != null)
+          '体重 ${measurement['weight_kg']} kg',
+        if (measurement['waist_cm'] != null) '腰围 ${measurement['waist_cm']} cm',
+        if (measurement['body_fat_percent'] != null)
+          '体脂 ${measurement['body_fat_percent']}%',
+      ];
+    }
+    if (card.operationType == 'nutrition_entry_create') {
+      final entry = card.after?['entry'];
+      if (entry is Map && entry['items'] is List) {
+        return ['${(entry['items'] as List).length} 种食物'];
+      }
+    }
+    return const [];
+  }
+
+  String get _impactText {
+    if (card.operationType == 'body_measurement_create') {
+      return '确认后会记入身体数据，方便查看进度变化。';
+    }
+    return card.impact;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final previewTitle = _previewTitle;
+    final previewFacts = _previewFacts;
     return Padding(
       padding: const EdgeInsets.only(left: 45, bottom: 16),
       child: AppSurface(
-        color: AppColors.amberSoft,
-        borderColor: AppColors.amber.withValues(alpha: 0.22),
+        borderColor: AppColors.amber.withValues(alpha: 0.4),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
-                const Icon(Icons.fact_check_outlined, color: AppColors.amber),
-                const SizedBox(width: 8),
-                Text('执行前需要确认', style: Theme.of(context).textTheme.titleMedium),
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: AppColors.amberSoft,
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: const Icon(
+                    Icons.fact_check_outlined,
+                    color: AppColors.amber,
+                    size: 21,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _title,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
               ],
             ),
-            const SizedBox(height: 9),
-            Text(card.impact),
-            const SizedBox(height: 15),
+            if (previewTitle != null || previewFacts.isNotEmpty) ...[
+              const SizedBox(height: 13),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.canvas,
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (previewTitle != null)
+                      Text(
+                        previewTitle,
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                    for (final fact in previewFacts) ...[
+                      const SizedBox(height: 4),
+                      Text(fact, style: Theme.of(context).textTheme.bodyMedium),
+                    ],
+                    if (card.operationType == 'training_plan_activate' &&
+                        card.draft?['days'] is List)
+                      _TrainingDraftPreview(days: card.draft!['days'] as List),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Text(
+              _impactText,
+              style: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(color: AppColors.muted),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              '只有你确认后才会生效',
+              style: Theme.of(context).textTheme.labelMedium
+                  ?.copyWith(color: AppColors.amber),
+            ),
+            const SizedBox(height: 14),
             Row(
               children: [
                 Expanded(
                   child: OutlinedButton(
                     onPressed: () => controller.decide(card, approve: false),
-                    child: const Text('暂不执行'),
+                    child: const Text('取消'),
                   ),
                 ),
                 const SizedBox(width: 9),
                 Expanded(
                   child: FilledButton(
                     onPressed: () => controller.decide(card, approve: true),
-                    child: const Text('确认执行'),
+                    child: Text(_approveLabel),
                   ),
                 ),
               ],
@@ -770,6 +981,67 @@ class _ConfirmationCard extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _TrainingDraftPreview extends StatelessWidget {
+  const _TrainingDraftPreview({required this.days});
+
+  final List days;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.canvas,
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: const EdgeInsets.only(bottom: 6),
+        title: const Text('查看各训练日和动作'),
+        children: [
+          for (var index = 0; index < days.length; index++)
+            if (days[index] is Map)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _day(context, days[index] as Map, index + 1),
+              ),
+        ],
+      ),
+    );
+  }
+
+  Widget _day(BuildContext context, Map day, int index) {
+    final exercises = day['exercises'];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '第 $index 天 · ${day['name'] ?? '训练日'}',
+          style: Theme.of(context).textTheme.labelLarge,
+        ),
+        const SizedBox(height: 3),
+        Text('约 ${day['estimated_minutes'] ?? '—'} 分钟'),
+        if (exercises is List)
+          for (final exercise in exercises)
+            if (exercise is Map)
+              Padding(
+                padding: const EdgeInsets.only(top: 5),
+                child: Text(_exerciseText(exercise)),
+              ),
+      ],
+    );
+  }
+
+  String _exerciseText(Map exercise) {
+    final name = exercise['exercise_name'] ?? '动作名称暂不可用';
+    final sets = exercise['target_sets'];
+    final min = exercise['rep_min'];
+    final max = exercise['rep_max'];
+    final reps = min == max ? '$min' : '$min–$max';
+    final target = sets != null && min != null && max != null
+        ? ' · $sets 组 × $reps 次'
+        : '';
+    final reserve = exercise['target_rir'];
+    return '$name$target${reserve == null ? '' : ' · 做完还能再做约 $reserve 次'}';
   }
 }
 

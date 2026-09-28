@@ -226,6 +226,7 @@ def build_agent_workflow_service(
             tool_context=tool_context,
             tool_groups=groups_for_task(task),
             model=text_model,
+            task_type=task.task_type,
         )
 
     fallback_agent_builder = None
@@ -237,6 +238,7 @@ def build_agent_workflow_service(
                 tool_context=tool_context,
                 tool_groups=groups_for_task(task),
                 model=fallback_text_model,
+                task_type=task.task_type,
             )
 
     general_handler = GeneralQuestionBranchHandler(
@@ -252,7 +254,7 @@ def build_agent_workflow_service(
             candidate_k=settings.rag_candidate_k,
             top_k=settings.rag_top_k,
         )
-    training_plan_handler = TrainingPlanBranchHandler(general_handler)
+    training_plan_handler = TrainingPlanBranchHandler(general_handler, tool_context)
     structured_data_handler = TodayTrainingQueryBranchHandler(
         training_service,
         workout_service,

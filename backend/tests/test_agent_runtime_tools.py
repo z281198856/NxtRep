@@ -58,6 +58,24 @@ def test_build_agent_supports_tool_free_legacy_mode(monkeypatch) -> None:
     assert create_agent.call_args.kwargs["tools"] == []
 
 
+def test_training_plan_agent_receives_task_specific_tool_instruction(monkeypatch) -> None:
+    create_agent = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr(runtime_module, "create_agent", create_agent)
+    monkeypatch.setattr(runtime_module, "build_tools", MagicMock(return_value=[]))
+
+    runtime_module.build_agent(
+        MagicMock(spec=Settings),
+        tool_context=MagicMock(spec=AgentToolContext),
+        tool_groups=frozenset({"training_draft"}),
+        model=MagicMock(),
+        task_type="training_plan_draft",
+    )
+
+    prompt = create_agent.call_args.kwargs["system_prompt"]
+    assert "propose_training_plan" in prompt
+    assert "仅输出文字计划不算完成" in prompt
+
+
 def test_build_agent_rejects_groups_without_context() -> None:
     with pytest.raises(ValueError, match="tool_context is required"):
         runtime_module.build_agent(

@@ -183,6 +183,92 @@ void main() {
     expect(controller.messages.last.pending, isFalse);
   });
 
+  testWidgets('explains when AI did not create a confirmable training plan', (
+    tester,
+  ) async {
+    final repository = _FakeAgentRepository();
+    repository.messageStream = Stream<SseEvent>.value(
+      _event('completed', {
+        'response': {
+          'message': 'AI 未能创建可确认的训练计划草稿，请稍后重试。',
+          'status': 'failed',
+          'analysis_results': [
+            {
+              'status': 'failed',
+              'error': {
+                'code': 'TRAINING_PLAN_DRAFT_NOT_CREATED',
+                'message': 'AI 未能创建可确认的训练计划草稿，请稍后重试。',
+                'retryable': true,
+              },
+            },
+          ],
+        },
+      }),
+    );
+    final controller = AgentController(repository);
+    addTearDown(controller.dispose);
+    addTearDown(repository.close);
+
+    final sendFuture = controller.send('生成一份训练计划草稿');
+    await tester.pump();
+    await tester.pump();
+    await sendFuture;
+
+    expect(controller.errorMessage, 'AI 未能创建可确认的训练计划草稿，请稍后重试');
+    expect(controller.confirmations, isEmpty);
+  });
+
+  testWidgets('attaches a training plan preview to its confirmation card', (
+    tester,
+  ) async {
+    final repository = _FakeAgentRepository();
+    repository.messageStream = Stream<SseEvent>.value(
+      _event('completed', {
+        'response': {
+          'message': '回答：计划草稿已生成。\n分析：每周训练三次。',
+          'status': 'completed',
+          'analysis_results': [
+            {
+              'operation_results': [
+                {
+                  'status': 'confirmation_required',
+                  'draft': {
+                    'name': '三日全身计划',
+                    'weekly_frequency': 3,
+                    'days': [
+                      {'name': '全身 A'},
+                    ],
+                  },
+                  'confirmation': {'confirmation_id': 'card-1'},
+                },
+              ],
+            },
+          ],
+          'confirmation_cards': [
+            {
+              'confirmation_id': 'card-1',
+              'operation_type': 'training_plan_activate',
+              'status': 'pending',
+              'impact': '未来日历使用新计划，历史训练不变',
+              'version': 1,
+            },
+          ],
+        },
+      }),
+    );
+    final controller = AgentController(repository);
+    addTearDown(controller.dispose);
+    addTearDown(repository.close);
+
+    final sendFuture = controller.send('生成训练计划草稿');
+    await tester.pump();
+    await tester.pump();
+    await sendFuture;
+
+    expect(controller.confirmations.single.draft?['name'], '三日全身计划');
+    expect(controller.confirmations.single.draft?['weekly_frequency'], 3);
+  });
+
   testWidgets('cancels the stream and typing timer safely on dispose', (
     tester,
   ) async {

@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Sequence
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -45,6 +46,34 @@ def is_today_training_query(message: str) -> bool:
     )
 
 
+def is_explicit_training_plan_creation_request(message: str) -> bool:
+    normalized = "".join(message.casefold().split())
+    action = re.search(r"生成|制定|创建|做一份", normalized)
+    if action is None:
+        return False
+    prefix = normalized[: action.start()]
+    if not any(marker in prefix for marker in ("请", "帮我", "给我", "为我", "我要", "我想")):
+        return False
+    if any(
+        marker in prefix
+        for marker in (
+            "如何", "怎么", "怎样", "为什么", "如果", "假设", "是否",
+            "请解释", "请说明", "告诉我",
+        )
+    ):
+        return False
+    if any(marker in prefix[-5:] for marker in ("不要", "别", "先不", "无需", "不必")):
+        return False
+    tail = normalized[action.end() :]
+    if re.search(
+        r"(?:并|同时|还要)(?:帮我|为我)?(?:记录|保存|修改|删除|查询|对比)"
+        r".{0,12}(?:饮食|体重|体脂|目标|记忆|训练记录)",
+        tail,
+    ):
+        return False
+    return "计划草稿" in tail or bool(re.search(r"(?:训练|健身|运动|力量).{0,8}计划", tail))
+
+
 class AgentIntentRouter:
     def __init__(
         self,
@@ -86,6 +115,20 @@ class AgentIntentRouter:
                         "confidence": "high",
                         "routing_reason": (
                             "A read-only query about today's training was recognized locally."
+                        ),
+                    }
+                ]
+            )
+
+        if not images and is_explicit_training_plan_creation_request(normalized_message):
+            return AgentIntentPlan(
+                tasks=[
+                    {
+                        "task_type": "training_plan_draft",
+                        "required_context": ["profile", "goal", "constraints", "body", "exercise"],
+                        "confidence": "high",
+                        "routing_reason": (
+                            "An explicit training plan creation request was recognized locally."
                         ),
                     }
                 ]

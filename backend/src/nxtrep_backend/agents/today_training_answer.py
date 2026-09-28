@@ -3,7 +3,11 @@ from decimal import Decimal, InvalidOperation
 
 from nxtrep_backend.schemas.agent import AgentExecutionBundle
 
-MAX_EXERCISES_IN_ANSWER = 8
+MAX_EXERCISES_IN_ANSWER = 4
+
+
+def _answer_with_analysis(answer: str, analysis: str) -> str:
+    return f"回答：{answer}\n\n分析：{analysis}"
 
 
 def direct_today_training_answer(
@@ -39,25 +43,26 @@ def direct_today_training_answer(
     if active_plan is not None:
         return _active_plan_answer(active_plan)
 
-    return (
-        "你今天还没有进行中的训练，也没有今日安排或已启用的训练计划。\n"
-        "可以先创建训练计划；如果想马上练，也可以让我按“徒手”或“健身房器械”"
-        "帮你生成一节训练。"
+    return _answer_with_analysis(
+        "今天没有安排训练。",
+        "没有进行中的训练、今日安排或已启用的训练计划。"
+        "可以先创建计划，或选择徒手、健身房器械训练。",
     )
 
 
 def _active_workout_answer(workout: Mapping[str, object]) -> str:
     status = _text(workout.get("status"))
     state_text = "暂停中" if status == "paused" else "进行中"
-    lines = [f"你有一场{state_text}的训练，优先继续完成这一节。"]
+    answer = f"你有一场{state_text}的训练，优先继续完成这一节。"
+    details: list[str] = []
     exercise_lines = _exercise_lines(workout.get("exercises"), active=True)
     if exercise_lines:
-        lines.append("当前进度：")
-        lines.extend(f"- {line}" for line in exercise_lines)
-        lines.append("按剩余组数继续即可；如果出现明显疼痛，请立即停止并调整。")
+        details.append("当前进度：")
+        details.extend(f"- {line}" for line in exercise_lines)
+        details.append("按剩余组数继续；如有明显疼痛，请停止训练。")
     else:
-        lines.append("这节训练目前没有可显示的动作，请返回训练页检查训练内容。")
-    return "\n".join(lines)
+        details.append("这节训练目前没有可显示的动作，请返回训练页检查。")
+    return _answer_with_analysis(answer, "\n".join(details))
 
 
 def _scheduled_events_answer(events: list[Mapping[str, object]]) -> str:
@@ -108,7 +113,10 @@ def _scheduled_events_answer(events: list[Mapping[str, object]]) -> str:
     elif any(_text(event.get("status")) == "missed" for event in events):
         lines.append("如需补练，建议先重新安排，避免为了补课临时堆高训练量。")
 
-    return "\n".join(lines)
+    return _answer_with_analysis(
+        lines[0],
+        "\n".join(lines[1:]) or "依据你今天的训练日历安排。",
+    )
 
 
 def _active_plan_answer(plan: Mapping[str, object]) -> str:
@@ -125,7 +133,7 @@ def _active_plan_answer(plan: Mapping[str, object]) -> str:
     if day_names:
         lines.append(f"计划日包括：{'、'.join(day_names[:MAX_EXERCISES_IN_ANSWER])}。")
     lines.append("如果今天状态良好并想加练，可从计划中选择一个训练日；否则按恢复日安排。")
-    return "\n".join(lines)
+    return _answer_with_analysis(lines[0], "\n".join(lines[1:]))
 
 
 def _exercise_lines(value: object, *, active: bool) -> list[str]:
@@ -190,7 +198,7 @@ def _exercise_line(
         details.append(f"目标 {load} kg")
     rir = _non_negative_int(target.get("target_rir"))
     if rir is not None:
-        details.append(f"RIR {rir}")
+        details.append(f"做完还可再做约 {rir} 次")
 
     return f"{name}：{'，'.join(details)}" if details else name
 

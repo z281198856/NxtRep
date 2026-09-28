@@ -224,6 +224,157 @@ async def test_handler_propagates_confirmation_requirement() -> None:
 
 
 @pytest.mark.asyncio
+async def test_training_plan_retries_text_only_answer_and_returns_confirmation() -> None:
+    confirmation_id = uuid4()
+    agent = make_react_agent({})
+    agent.ainvoke.side_effect = [
+        {"messages": [AIMessage(content="这是文字计划。")]},
+        {
+            "messages": [
+                ToolMessage(
+                    content=json.dumps(
+                        {
+                            "status": "confirmation_required",
+                            "confirmation": {
+                                "confirmation_id": str(confirmation_id),
+                                "operation_type": "training_plan_activate",
+                                "status": "pending",
+                                "impact": "激活训练计划",
+                                "expires_at": datetime(2026, 9, 9, tzinfo=UTC).isoformat(),
+                                "version": 1,
+                            },
+                        }
+                    ),
+                    name="propose_training_plan",
+                    tool_call_id="plan-call",
+                ),
+                AIMessage(content="草稿已创建，请确认。"),
+            ]
+        },
+    ]
+
+    result = await make_handler(agent).execute(make_input(task_type="training_plan_draft"))
+
+    assert agent.ainvoke.await_count == 2
+    assert result.status == "completed"
+    assert result.confirmation_cards[0].confirmation_id == confirmation_id
+    assert result.requires_confirmation is True
+    retry_messages = agent.ainvoke.await_args_list[1].args[0]["messages"]
+    assert retry_messages[0]["role"] == "system"
+    assert "propose_training_plan" in retry_messages[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_training_plan_without_tool_returns_specific_failure_after_one_retry() -> None:
+    agent = make_react_agent({"messages": [AIMessage(content="这里只有文字计划。")]})
+
+    result = await make_handler(agent).execute(make_input(task_type="training_plan_draft"))
+
+    assert agent.ainvoke.await_count == 2
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.code == "TRAINING_PLAN_DRAFT_NOT_CREATED"
+
+
+@pytest.mark.asyncio
+async def test_training_plan_retries_empty_model_answer_without_tool() -> None:
+    agent = make_react_agent({})
+    agent.ainvoke.side_effect = [
+        {"messages": [AIMessage(content="")]},
+        {"messages": [AIMessage(content="仍未创建草稿")]},
+    ]
+
+    result = await make_handler(agent).execute(make_input(task_type="training_plan_draft"))
+
+    assert agent.ainvoke.await_count == 2
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.code == "TRAINING_PLAN_DRAFT_NOT_CREATED"
+
+
+@pytest.mark.asyncio
+async def test_training_plan_does_not_retry_after_draft_tool_was_called() -> None:
+    agent = make_react_agent(
+        {
+            "messages": [
+                ToolMessage(
+                    content=json.dumps({"status": "needs_review", "draft": {}}),
+                    name="propose_training_plan",
+                    tool_call_id="plan-call",
+                ),
+                AIMessage(content="草稿未通过校验。"),
+            ]
+        }
+    )
+
+    result = await make_handler(agent).execute(make_input(task_type="training_plan_draft"))
+
+    agent.ainvoke.assert_awaited_once()
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.code == "TRAINING_PLAN_DRAFT_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_training_plan_does_not_retry_after_different_proposal_tool() -> None:
+    agent = make_react_agent(
+        {
+            "messages": [
+                ToolMessage(
+                    content=json.dumps({"status": "confirmation_required", "confirmation": {}}),
+                    name="propose_schedule_change",
+                    tool_call_id="schedule-call",
+                ),
+                AIMessage(content="已创建其他提案。"),
+            ]
+        }
+    )
+
+    result = await make_handler(agent).execute(make_input(task_type="training_plan_draft"))
+
+    agent.ainvoke.assert_awaited_once()
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.code == "TRAINING_PLAN_DRAFT_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_completed_proposal_is_not_reported_failed_when_final_answer_is_empty() -> None:
+    confirmation_id = uuid4()
+    agent = make_react_agent(
+        {
+            "messages": [
+                ToolMessage(
+                    content=json.dumps(
+                        {
+                            "status": "confirmation_required",
+                            "confirmation": {
+                                "confirmation_id": str(confirmation_id),
+                                "operation_type": "training_plan_activate",
+                                "status": "pending",
+                                "impact": "激活训练计划",
+                                "expires_at": datetime(2026, 9, 9, tzinfo=UTC).isoformat(),
+                                "version": 1,
+                            },
+                        }
+                    ),
+                    name="propose_training_plan",
+                    tool_call_id="plan-call",
+                ),
+                AIMessage(content=""),
+            ]
+        }
+    )
+
+    result = await make_handler(agent).execute(make_input(task_type="training_plan_draft"))
+
+    agent.ainvoke.assert_awaited_once()
+    assert result.status == "completed"
+    assert result.confirmation_cards[0].confirmation_id == confirmation_id
+    assert result.result == {"answer": "提案已创建，请在确认卡片中审核。"}
+
+
+@pytest.mark.asyncio
 async def test_handler_propagates_knowledge_citations() -> None:
     react_agent = make_react_agent(
         {
@@ -306,7 +457,7 @@ async def test_handler_injects_recent_history_summary_and_relevant_memories() ->
 
     await handler.execute(branch_input)
 
-    messages = react_agent.ainvoke.await_args.args[0]["messages"]
+    messages = react_agent.ainvoke.await_args_list[0].args[0]["messages"]
     assert "用户计划增肌" in messages[0]["content"]
     assert messages[1] == {"role": "user", "content": "我每周练三天"}
     assert messages[2] == {"role": "assistant", "content": "了解"}

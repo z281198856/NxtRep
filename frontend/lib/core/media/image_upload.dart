@@ -286,6 +286,14 @@ class ImageUploadRepository {
         preferredMaxDimension: 1440,
       );
 
+  Future<UploadedImage> uploadNutritionImage(Uint8List source) => _uploadImage(
+    source,
+    purpose: 'nutrition_entry',
+    preferredMaxBytes: 2 * 1024 * 1024,
+    preferredMaxPixels: 2048 * 2048,
+    preferredMaxDimension: 2048,
+  );
+
   Future<UploadedImage> _uploadImage(
     Uint8List source, {
     required String purpose,

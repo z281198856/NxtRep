@@ -11,6 +11,46 @@ class NutritionRepository {
   final ApiClient _apiClient;
   final Uuid _uuid;
 
+  Future<NutritionPhotoDraft> estimatePhoto({
+    required String imageAssetId,
+    required String mealType,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.post(
+        '/nutrition/entry-drafts:estimate-image',
+        timeout: const Duration(seconds: 90),
+        body: {
+          'image_asset_id': imageAssetId,
+          'meal_type': mealType,
+          'eaten_at': DateTime.now().toUtc().toIso8601String(),
+          'notes': null,
+        },
+      ),
+      context: '餐食照片营养估算接口',
+    );
+    return NutritionPhotoDraft.fromJson(json);
+  }
+
+  Future<NutritionEntry> createPhotoEntry(
+    NutritionPhotoEntryInput input,
+  ) async {
+    final json = expectJsonObject(
+      await _apiClient.post(
+        '/nutrition/entries',
+        idempotencyKey: _uuid.v4(),
+        body: {
+          'meal_type': input.mealType,
+          'eaten_at': input.eatenAt.toUtc().toIso8601String(),
+          'items': input.items.map((item) => item.toInputJson()).toList(),
+          'is_flexible_meal': false,
+          'notes': 'AI 照片估算，经用户核对；图片 ID：${input.imageAssetId}',
+        },
+      ),
+      context: '保存照片饮食记录接口',
+    );
+    return NutritionEntry.fromJson(json);
+  }
+
   Future<DailyNutritionSummary> getDailySummary(DateTime date) async {
     final json = expectJsonObject(
       await _apiClient.get(

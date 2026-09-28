@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../domain/training_models.dart';
+import 'active_plan_detail_page.dart';
 import 'custom_plan_page.dart';
 import 'plan_controller.dart';
 import 'template_catalog_page.dart';
@@ -74,6 +75,13 @@ class _PlanPageState extends State<PlanPage> {
       builder: (_) => WorkoutHistoryPage(controller: widget.controller),
     ),
   );
+
+  Future<void> _openActivePlan(ActiveTrainingPlan plan) => Navigator.of(context)
+      .push(
+        MaterialPageRoute<void>(
+          builder: (_) => ActivePlanDetailPage(plan: plan),
+        ),
+      );
 
   Future<void> _openCustomPlan() async {
     final changed = await Navigator.of(context).push<bool>(
@@ -155,7 +163,10 @@ class _PlanPageState extends State<PlanPage> {
                     AppErrorCard(message: message),
                     const SizedBox(height: 14),
                   ],
-                  _PlanSummaryCard(plan: plan),
+                  _PlanSummaryCard(
+                    plan: plan,
+                    onOpen: plan == null ? null : () => _openActivePlan(plan),
+                  ),
                   const SizedBox(height: 12),
                   AppSurface(
                     onTap: widget.controller.submitting
@@ -195,7 +206,7 @@ class _PlanPageState extends State<PlanPage> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '增肌塑形、减脂保肌与力量基础；点开可预览每一天的动作。',
+                      widget.controller.recommendationDescription,
                       style: Theme.of(context).textTheme.bodyMedium
                           ?.copyWith(color: AppColors.muted),
                     ),
@@ -206,6 +217,13 @@ class _PlanPageState extends State<PlanPage> {
                         icon: Icons.event_busy_rounded,
                         title: '暂无官方计划',
                         message: '可以先让 AI 教练根据你的条件生成计划草稿。',
+                      )
+                    else if (!widget.controller.loading &&
+                        widget.controller.recommendedTemplates.isEmpty)
+                      const AppEmptyState(
+                        icon: Icons.tune_rounded,
+                        title: '没有匹配条件的推荐计划',
+                        message: '可以浏览全部计划，或在“我的”调整可用训练器械。',
                       )
                     else
                       ...widget.controller.recommendedTemplates.map(
@@ -232,6 +250,32 @@ class _PlanPageState extends State<PlanPage> {
                         '浏览全部 ${widget.controller.templates.length} 套计划',
                       ),
                     ),
+                    if (widget.controller.recommendedTemplates.isNotEmpty) ...[
+                      const SizedBox(height: 22),
+                      const SectionTitle(title: '适合你的计划'),
+                      const SizedBox(height: 6),
+                      Text(
+                        widget.controller.recommendationDescription,
+                        style: Theme.of(context).textTheme.bodyMedium
+                            ?.copyWith(color: AppColors.muted),
+                      ),
+                      const SizedBox(height: 12),
+                      ...widget.controller.recommendedTemplates
+                          .take(3)
+                          .map(
+                            (template) => Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: _TemplatePlanCard(
+                                template: template,
+                                loading:
+                                    widget.controller.activatingTemplateId ==
+                                    template.id,
+                                enabled: !widget.controller.submitting,
+                                onTap: () => _openTemplateDetail(template),
+                              ),
+                            ),
+                          ),
+                    ],
                   ],
                   const SizedBox(height: 24),
                   _WeekStrip(
@@ -550,13 +594,15 @@ class _HistoryPreviewTile extends StatelessWidget {
 }
 
 class _PlanSummaryCard extends StatelessWidget {
-  const _PlanSummaryCard({required this.plan});
+  const _PlanSummaryCard({required this.plan, required this.onOpen});
 
   final ActiveTrainingPlan? plan;
+  final VoidCallback? onOpen;
 
   @override
   Widget build(BuildContext context) {
     return AppSurface(
+      onTap: onOpen,
       color: AppColors.darkCard,
       borderColor: AppColors.darkCard,
       padding: const EdgeInsets.all(22),
@@ -582,6 +628,27 @@ class _PlanSummaryCard extends StatelessWidget {
             style: Theme.of(context).textTheme.bodyMedium
                 ?.copyWith(color: Colors.white70),
           ),
+          if (plan != null) ...[
+            const SizedBox(height: 18),
+            const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '查看完整计划',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                SizedBox(width: 6),
+                Icon(
+                  Icons.arrow_forward_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );

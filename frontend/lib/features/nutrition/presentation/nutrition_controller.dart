@@ -1,13 +1,15 @@
 import 'package:flutter/foundation.dart';
 
+import '../../../core/media/image_upload.dart';
 import '../../../core/network/api_exception.dart';
 import '../data/nutrition_repository.dart';
 import '../domain/nutrition_models.dart';
 
 class NutritionController extends ChangeNotifier {
-  NutritionController(this._repository);
+  NutritionController(this._repository, {this.imageUploader});
 
   final NutritionRepository _repository;
+  final Future<UploadedImage> Function(Uint8List)? imageUploader;
 
   DailyNutritionSummary? summary;
   WeeklyNutritionSummary? weeklySummary;
@@ -54,6 +56,27 @@ class NutritionController extends ChangeNotifier {
   Future<bool> addFood(FoodServingInput input) async {
     return _runMutation(() => _repository.createFoodEntry(input));
   }
+
+  Future<NutritionPhotoDraft?> estimatePhoto({
+    required Uint8List bytes,
+    required String mealType,
+  }) => _runQuery(() async {
+    final uploader = imageUploader;
+    if (uploader == null) {
+      throw const ApiException(
+        code: 'PHOTO_UPLOAD_UNAVAILABLE',
+        message: '当前无法上传餐食照片',
+      );
+    }
+    final uploaded = await uploader(bytes);
+    return _repository.estimatePhoto(
+      imageAssetId: uploaded.assetId,
+      mealType: mealType,
+    );
+  });
+
+  Future<bool> savePhotoEntry(NutritionPhotoEntryInput input) =>
+      _runMutation(() => _repository.createPhotoEntry(input));
 
   Future<bool> editEntry(
     NutritionEntry entry,

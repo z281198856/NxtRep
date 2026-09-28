@@ -487,20 +487,42 @@ async def submit_plan_draft(
 
 @router.get("/plans/active", response_model=ActivePlanResponse)
 async def get_active_plan(user: CurrentUser, session: DbSession) -> ActivePlanResponse:
-    item = await SqlAlchemyTrainingRepository(session).get_active_plan(user.id)
+    repository = SqlAlchemyTrainingRepository(session)
+    item = await repository.get_active_plan(user.id)
     if item is None:
         raise ApiError(
             status_code=404,
             code="ACTIVE_PLAN_NOT_FOUND",
             message="No active training plan",
         )
+    exercise_ids = {
+        UUID(str(exercise["exercise_id"]))
+        for day in item.days
+        for exercise in day.get("exercises", [])
+    }
+    names = await repository.plan_exercise_names(user.id, exercise_ids)
+    days = [
+        {
+            **day,
+            "exercises": [
+                {
+                    **exercise,
+                    "exercise_name": names.get(
+                        str(exercise["exercise_id"]), "动作已不可用"
+                    ),
+                }
+                for exercise in day.get("exercises", [])
+            ],
+        }
+        for day in item.days
+    ]
     return ActivePlanResponse(
         id=item.id,
         plan_id=item.plan_id,
         name=item.name,
         version=item.version,
         weekly_frequency=item.weekly_frequency,
-        days=item.days,
+        days=days,
         activated_at=item.activated_at,
     )
 

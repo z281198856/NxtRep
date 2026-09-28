@@ -181,7 +181,7 @@ async def test_router_maps_structured_output_failure() -> None:
 
     with pytest.raises(AgentIntentRoutingError, match="structured output"):
         await router.route(
-            message="帮我制定训练计划",
+            message="帮我分析我的近期训练表现",
             images=[],
         )
 
@@ -224,6 +224,54 @@ async def test_router_locally_routes_clear_knowledge_question_without_model() ->
     assert [task.task_type for task in result.tasks] == ["knowledge_retrieval"]
     assert result.tasks[0].confidence == "high"
     structured_model.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_router_prioritizes_explicit_plan_creation_over_why_explanation() -> None:
+    model, structured_model = make_dependencies()
+
+    result = await AgentIntentRouter(model).route(
+        message=(
+            "请根据我的身高、目标和每周可练天数，生成一份三天哑铃力量训练计划草稿，"
+            "说明为什么适合我；先不要启用。"
+        ),
+        images=[],
+    )
+
+    assert [task.task_type for task in result.tasks] == ["training_plan_draft"]
+    assert result.tasks[0].confidence == "high"
+    structured_model.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_router_keeps_how_to_create_a_plan_as_read_only_knowledge() -> None:
+    model, structured_model = make_dependencies()
+
+    result = await AgentIntentRouter(model).route(
+        message="请解释如何制定一份力量训练计划？",
+        images=[],
+    )
+
+    assert [task.task_type for task in result.tasks] == ["knowledge_retrieval"]
+    structured_model.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_router_keeps_multiple_explicit_tasks_for_model_routing() -> None:
+    model, structured_model = make_dependencies()
+    expected = AgentIntentPlan(tasks=[make_task("training_plan_draft", [])])
+    structured_model.ainvoke.return_value = {
+        "raw": None,
+        "parsed": expected,
+        "parsing_error": None,
+    }
+
+    await AgentIntentRouter(model).route(
+        message="请生成一份力量训练计划，同时帮我记录今天饮食。",
+        images=[],
+    )
+
+    structured_model.ainvoke.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -280,7 +328,7 @@ async def test_router_does_not_locally_route_today_training_mutation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_router_does_not_locally_route_plan_mutation() -> None:
+async def test_router_uses_model_for_ambiguous_plan_discussion() -> None:
     model, structured_model = make_dependencies()
     expected = AgentIntentPlan(tasks=[make_task("training_plan_draft", [])])
     structured_model.ainvoke.return_value = {
@@ -290,7 +338,7 @@ async def test_router_does_not_locally_route_plan_mutation() -> None:
     }
 
     result = await AgentIntentRouter(model).route(
-        message="帮我制定一套力量训练计划",
+        message="我可能想制定一套力量训练计划，先聊聊",
         images=[],
     )
 

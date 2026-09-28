@@ -91,6 +91,9 @@ async def test_synthesizer_sends_all_branch_results_to_text_model() -> None:
     assert isinstance(messages[1], HumanMessage)
     assert "Memory 已经生效" in messages[0].content
     assert "其他正式业务数据不得声称已保存" in messages[0].content
+    assert "回答：" in messages[0].content
+    assert "分析：" in messages[0].content
+    assert "Markdown 表格" in messages[0].content
 
     payload = json.loads(messages[1].content)
     assert payload["user_message"] == "分析我的体态和这顿饭"

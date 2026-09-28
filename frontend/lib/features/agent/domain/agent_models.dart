@@ -111,20 +111,30 @@ class AgentConfirmationCard {
     required this.status,
     required this.impact,
     required this.version,
+    this.after,
+    this.draft,
   });
 
-  factory AgentConfirmationCard.fromJson(Map<String, dynamic> json) =>
-      AgentConfirmationCard(
-        id: json['confirmation_id'] as String,
-        operationType: json['operation_type'] as String,
-        status: json['status'] as String,
-        impact: json['impact'] as String,
-        version: json['version'] as int,
-      );
+  factory AgentConfirmationCard.fromJson(
+    Map<String, dynamic> json, {
+    Map<String, dynamic>? draft,
+  }) => AgentConfirmationCard(
+    id: json['confirmation_id'] as String,
+    operationType: json['operation_type'] as String,
+    status: json['status'] as String,
+    impact: json['impact'] as String,
+    version: json['version'] as int,
+    after: json['after'] is Map
+        ? Map<String, dynamic>.from(json['after'] as Map)
+        : null,
+    draft: draft,
+  );
 
   final String id;
   final String operationType;
   final String status;
   final String impact;
   final int version;
+  final Map<String, dynamic>? after;
+  final Map<String, dynamic>? draft;
 }

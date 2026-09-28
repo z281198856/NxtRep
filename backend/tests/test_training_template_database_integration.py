@@ -86,6 +86,13 @@ async def test_generate_validate_and_activate_equipment_plans_via_api(equipment)
                 )
                 assert approval.status_code == 200, approval.text
                 assert approval.json()["status"] == "succeeded"
+                active = await client.get("/api/v1/training/plans/active")
+                assert active.status_code == 200, active.text
+                assert all(
+                    exercise["exercise_name"] == exercises[exercise["exercise_id"]].name_zh
+                    for day in active.json()["days"]
+                    for exercise in day["exercises"]
+                )
                 calendar = await client.get(
                     "/api/v1/calendar",
                     params={

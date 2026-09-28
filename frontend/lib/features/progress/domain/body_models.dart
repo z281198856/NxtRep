@@ -99,6 +99,79 @@ class BodyMeasurementInput {
       bodyFatPercent != null;
 }
 
+class NavyProfileDefaults {
+  const NavyProfileDefaults({this.sex, this.heightCm});
+
+  final String? sex;
+  final double? heightCm;
+}
+
+class NavyBodyFatInput {
+  const NavyBodyFatInput({
+    required this.sex,
+    required this.heightCm,
+    required this.waistCm,
+    required this.neckCm,
+    this.hipCm,
+  });
+
+  final String sex;
+  final double heightCm;
+  final double waistCm;
+  final double neckCm;
+  final double? hipCm;
+
+  Map<String, Object?> toJson({required bool save}) => {
+    'sex': sex,
+    'height_cm': heightCm,
+    'waist_cm': waistCm,
+    'neck_cm': neckCm,
+    'hip_cm': sex == 'female' ? hipCm : null,
+    'save': save,
+  };
+}
+
+class NavyBodyFatResult {
+  const NavyBodyFatResult({
+    required this.valuePercent,
+    required this.rangeMinPercent,
+    required this.rangeMaxPercent,
+    required this.disclaimer,
+  });
+
+  factory NavyBodyFatResult.fromJson(Map<String, dynamic> json) =>
+      NavyBodyFatResult(
+        valuePercent: _decimal(json['value_percent']),
+        rangeMinPercent: _decimal(json['range_min_percent']),
+        rangeMaxPercent: _decimal(json['range_max_percent']),
+        disclaimer: json['disclaimer'] as String? ?? '仅供观察趋势，不是医学测量',
+      );
+
+  final double valuePercent;
+  final double rangeMinPercent;
+  final double rangeMaxPercent;
+  final String disclaimer;
+}
+
+class SavedBodyFatEstimate {
+  const SavedBodyFatEstimate({
+    required this.calculatedAt,
+    required this.method,
+    required this.result,
+  });
+
+  factory SavedBodyFatEstimate.fromJson(Map<String, dynamic> json) =>
+      SavedBodyFatEstimate(
+        calculatedAt: DateTime.parse(json['calculated_at'] as String),
+        method: json['method'] as String,
+        result: NavyBodyFatResult.fromJson(json),
+      );
+
+  final DateTime calculatedAt;
+  final String method;
+  final NavyBodyFatResult result;
+}
+
 class TrainingProgressSummary {
   const TrainingProgressSummary({
     required this.workoutCount,

@@ -12,6 +12,7 @@ class ProgressController extends ChangeNotifier {
   List<BodyMeasurement> measurements = const [];
   List<BodyTrendPoint> trend = const [];
   List<PersonalRecord> personalRecords = const [];
+  List<SavedBodyFatEstimate> bodyFatEstimates = const [];
   ProgressOverview? overview;
   BodyMetric selectedMetric = BodyMetric.weight;
   int selectedDays = 30;
@@ -31,11 +32,13 @@ class ProgressController extends ChangeNotifier {
         _repository.getOverview(days: selectedDays),
         _repository.getBodyTrend(metric: selectedMetric, days: selectedDays),
         _repository.listPersonalRecords(),
+        _repository.listBodyFatEstimates(),
       ]);
       measurements = values[0] as List<BodyMeasurement>;
       overview = values[1] as ProgressOverview;
       trend = values[2] as List<BodyTrendPoint>;
       personalRecords = values[3] as List<PersonalRecord>;
+      bodyFatEstimates = values[4] as List<SavedBodyFatEstimate>;
     } on ApiException catch (error) {
       errorMessage = _messageFor(error);
     } finally {
@@ -102,6 +105,37 @@ class ProgressController extends ChangeNotifier {
     } on ApiException catch (error) {
       errorMessage = _messageFor(error);
       return false;
+    } finally {
+      submitting = false;
+      notifyListeners();
+    }
+  }
+
+  Future<NavyProfileDefaults?> loadNavyDefaults() async {
+    try {
+      return await _repository.getNavyProfileDefaults();
+    } on ApiException catch (error) {
+      errorMessage = _messageFor(error);
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<NavyBodyFatResult?> calculateNavy(
+    NavyBodyFatInput input, {
+    bool save = false,
+  }) async {
+    if (submitting) return null;
+    submitting = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final result = await _repository.calculateNavyBodyFat(input, save: save);
+      if (save) await refresh();
+      return result;
+    } on ApiException catch (error) {
+      errorMessage = _messageFor(error);
+      return null;
     } finally {
       submitting = false;
       notifyListeners();

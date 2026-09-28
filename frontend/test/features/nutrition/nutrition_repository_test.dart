@@ -246,6 +246,104 @@ void main() {
     expect(weekly.totalEntries, 8);
     expect(weekly.dailyAverage.proteinG, 120);
   });
+
+  test('estimates a meal photo and saves reviewed nutrition values', () async {
+    final requests = <http.Request>[];
+    const imageId = '00000000-0000-0000-0000-000000000099';
+    final repository = _repositoryWith(
+      MockClient((request) async {
+        requests.add(request);
+        if (request.url.path.endsWith('/entry-drafts:estimate-image')) {
+          final totals = {
+            'kcal': '300',
+            'protein_g': '20',
+            'carbs_g': '35',
+            'fat_g': '10',
+          };
+          return _utf8Response(
+            jsonEncode({
+              'image_asset_id': imageId,
+              'meal_type': 'lunch',
+              'eaten_at': '2026-09-28T04:00:00Z',
+              'recognition': {
+                'foods': [],
+                'assumptions': ['油量不可见'],
+                'follow_up_questions': [],
+              },
+              'calculation': {
+                'items': [
+                  {
+                    'match': {
+                      'detected': {
+                        'name': '鸡肉饭',
+                        'estimated_amount_g': '250',
+                        'amount_min_g': '200',
+                        'amount_max_g': '300',
+                        'confidence': 'medium',
+                      },
+                      'status': 'matched',
+                    },
+                    'nutrition': {
+                      'minimum': totals,
+                      'estimated': totals,
+                      'maximum': totals,
+                    },
+                    'assumptions': [],
+                    'follow_up_questions': [],
+                  },
+                ],
+                'totals': {
+                  'minimum': totals,
+                  'estimated': totals,
+                  'maximum': totals,
+                },
+                'is_complete': true,
+              },
+            }),
+            200,
+          );
+        }
+        return _utf8Response(jsonEncode(_entryJson()), 201);
+      }),
+    );
+
+    final draft = await repository.estimatePhoto(
+      imageAssetId: imageId,
+      mealType: 'lunch',
+    );
+    await repository.createPhotoEntry(
+      NutritionPhotoEntryInput(
+        mealType: draft.mealType,
+        eatenAt: draft.eatenAt,
+        imageAssetId: draft.imageAssetId,
+        items: const [
+          NutritionEntryItem(
+            name: '鸡肉饭',
+            amountG: 250,
+            basisAmountG: 250,
+            kcal: 300,
+            proteinG: 20,
+            carbsG: 35,
+            fatG: 10,
+            source: 'model_estimated',
+            confidence: 'low',
+          ),
+        ],
+      ),
+    );
+    final estimateBody = jsonDecode(requests[0].body) as Map<String, dynamic>;
+    final saveBody = jsonDecode(requests[1].body) as Map<String, dynamic>;
+    final savedItem =
+        (saveBody['items'] as List<dynamic>).single as Map<String, dynamic>;
+
+    expect(estimateBody['image_asset_id'], imageId);
+    expect(draft.items.single.amountMaxG, 300);
+    expect(draft.totals.estimated.kcal, 300);
+    expect(savedItem['source'], 'model_estimated');
+    expect(savedItem['confidence'], 'low');
+    expect(savedItem['protein_g'], 20.0);
+    expect(requests[1].headers['Idempotency-Key'], isNotEmpty);
+  });
 }
 
 NutritionRepository _repositoryWith(MockClient client) => NutritionRepository(

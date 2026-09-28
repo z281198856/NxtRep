@@ -624,9 +624,9 @@ class WorkoutService:
             evidence = [f"本次完成 {len(sets)} 组"]
             warnings = []
             if rir_values:
-                evidence.append(f"最低 RIR 为 {min(rir_values)}")
+                evidence.append(f"最吃力的一组做完后还可再做约 {min(rir_values)} 次")
             else:
-                warnings.append("缺少 RIR，使用保守建议")
+                warnings.append("未记录每组做完还能再做几次，使用保守建议")
             if has_pain:
                 warnings.append("本次记录了疼痛，暂停加重并优先评估疼痛")
             if was_interrupted:

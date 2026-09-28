@@ -9,6 +9,51 @@ class BodyRepository {
   final ApiClient _apiClient;
   final Uuid _uuid;
 
+  Future<NavyProfileDefaults> getNavyProfileDefaults() async {
+    final json = expectJsonObject(
+      await _apiClient.get('/profile'),
+      context: '身体档案接口',
+    );
+    final sex = json['sex'] as String?;
+    return NavyProfileDefaults(
+      sex: sex == 'male' || sex == 'female' ? sex : null,
+      heightCm: switch (json['height_cm']) {
+        num value => value.toDouble(),
+        String value => double.tryParse(value),
+        _ => null,
+      },
+    );
+  }
+
+  Future<NavyBodyFatResult> calculateNavyBodyFat(
+    NavyBodyFatInput input, {
+    bool save = false,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.post(
+        '/body/body-fat/navy',
+        idempotencyKey: save ? _uuid.v4() : null,
+        body: input.toJson(save: save),
+      ),
+      context: '美军围度法体脂估算接口',
+    );
+    return NavyBodyFatResult.fromJson(json);
+  }
+
+  Future<List<SavedBodyFatEstimate>> listBodyFatEstimates() async {
+    final json = expectJsonObject(
+      await _apiClient.get('/body/body-fat', query: const {'page_size': '20'}),
+      context: '体脂估算记录接口',
+    );
+    return (json['list'] as List<dynamic>)
+        .map(
+          (item) => SavedBodyFatEstimate.fromJson(
+            Map<String, dynamic>.from(item as Map),
+          ),
+        )
+        .toList(growable: false);
+  }
+
   Future<List<BodyMeasurement>> listMeasurements({int pageSize = 50}) async {
     final json = expectJsonObject(
       await _apiClient.get(

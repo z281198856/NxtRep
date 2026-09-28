@@ -210,4 +210,62 @@ void main() {
     expect(updated.version, 3);
     expect(updated.waistCm, 78);
   });
+
+  test(
+    'previews and saves Navy body-fat estimates with explicit save flag',
+    () async {
+      final requests = <http.Request>[];
+      final repository = BodyRepository(
+        ApiClient(
+          config: ApiConfig(
+            baseUri: Uri.parse('https://api.example.test/api/v1'),
+          ),
+          accessTokenProvider: () => 'access',
+          httpClient: MockClient((request) async {
+            requests.add(request);
+            if (request.url.path.endsWith('/profile')) {
+              return http.Response(
+                jsonEncode({'sex': 'female', 'height_cm': '165'}),
+                200,
+              );
+            }
+            return http.Response.bytes(
+              utf8.encode(jsonEncode({
+                'method': 'navy',
+                'value_percent': '25.4',
+                'range_min_percent': '22.4',
+                'range_max_percent': '28.4',
+                'confidence': 'medium',
+                'disclaimer': '仅供观察趋势',
+              })),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }),
+        ),
+      );
+
+      final defaults = await repository.getNavyProfileDefaults();
+      const input = NavyBodyFatInput(
+        sex: 'female',
+        heightCm: 165,
+        waistCm: 75,
+        neckCm: 33,
+        hipCm: 95,
+      );
+      final preview = await repository.calculateNavyBodyFat(input);
+      await repository.calculateNavyBodyFat(input, save: true);
+      final previewBody = jsonDecode(requests[1].body) as Map<String, dynamic>;
+      final saveBody = jsonDecode(requests[2].body) as Map<String, dynamic>;
+
+      expect(defaults.sex, 'female');
+      expect(defaults.heightCm, 165);
+      expect(preview.rangeMinPercent, 22.4);
+      expect(previewBody['save'], isFalse);
+      expect(previewBody['hip_cm'], 95);
+      expect(requests[1].headers['Idempotency-Key'], isNull);
+      expect(saveBody['save'], isTrue);
+      expect(requests[2].headers['Idempotency-Key'], isNotEmpty);
+    },
+  );
 }

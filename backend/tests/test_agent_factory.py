@@ -211,3 +211,4 @@ def test_factory_registers_handlers_and_builds_workflow(
         knowledge_retrieval_builder.assert_not_called()
     assert react_call.kwargs["tool_groups"] == groups_for_task(task)
     assert react_call.kwargs["model"] is text_model
+    assert react_call.kwargs["task_type"] == "general_question"

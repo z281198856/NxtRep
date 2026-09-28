@@ -63,6 +63,20 @@ class SqlAlchemyTrainingRepository:
         )
         return {str(exercise_id): name for exercise_id, name in rows}
 
+    async def plan_exercise_names(
+        self, user_id: UUID, exercise_ids: set[UUID]
+    ) -> dict[str, str]:
+        if not exercise_ids:
+            return {}
+        rows = await self.session.execute(
+            select(Exercise.id, Exercise.name_zh).where(
+                Exercise.id.in_(exercise_ids),
+                Exercise.deleted_at.is_(None),
+                (Exercise.owner_user_id.is_(None) | (Exercise.owner_user_id == user_id)),
+            )
+        )
+        return {str(exercise_id): name for exercise_id, name in rows}
+
     async def visible_exercise_names(self, user_id: UUID) -> list[tuple[UUID, str, str | None]]:
         rows = await self.session.execute(
             select(Exercise.id, Exercise.name_zh, ExerciseAlias.alias)

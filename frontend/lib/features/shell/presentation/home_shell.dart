@@ -68,6 +68,7 @@ class _HomeShellState extends State<HomeShell> {
     );
     _nutritionController = NutritionController(
       NutritionRepository(widget.controller.authRepository.apiClient),
+      imageUploader: _imageUploadRepository.uploadNutritionImage,
     );
     _progressController = ProgressController(
       BodyRepository(widget.controller.authRepository.apiClient),
@@ -79,6 +80,9 @@ class _HomeShellState extends State<HomeShell> {
     _planController = PlanController(
       TrainingRepository(widget.controller.authRepository.apiClient),
       imageUploader: _imageUploadRepository.uploadTrainingPlanImage,
+      profileRepository: ProfileRepository(
+        widget.controller.authRepository.apiClient,
+      ),
     );
     _profileController = ProfileController(
       ProfileRepository(widget.controller.authRepository.apiClient),
@@ -108,7 +112,8 @@ class _HomeShellState extends State<HomeShell> {
       _proactiveController.refresh();
     }
     if (value == 1) _planController.refresh();
-    if (value == 2) _progressController.refresh();
+    if (value == 2) _nutritionController.refresh();
+    if (value == 3) _progressController.refresh();
     setState(() => _index = value);
   }
 
@@ -121,8 +126,8 @@ class _HomeShellState extends State<HomeShell> {
         proactiveController: _proactiveController,
         exerciseRepository: _exerciseRepository,
         onOpenPlan: () => _selectTab(1),
-        onOpenProgress: () => _selectTab(2),
-        onOpenAgent: () => _selectTab(3),
+        onOpenProgress: () => _selectTab(3),
+        onOpenAgent: () => _selectTab(4),
         onDiscussNotice: (notice) async {
           final prompt = switch (notice.kind) {
             'missed_workout' =>
@@ -133,14 +138,10 @@ class _HomeShellState extends State<HomeShell> {
               '昨天没有饮食记录，请帮我核对，但不要假设我没有进食。如需补记或调整，请先提出草稿供我确认。',
             _ => '请根据这条主动建议先核对事实，再讨论是否需要调整；任何变更都请先提出草稿等我确认。',
           };
-          _selectTab(3);
+          _selectTab(4);
           await _agentController.send(prompt);
         },
-        onOpenNutrition: () => Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => NutritionPage(controller: _nutritionController),
-          ),
-        ),
+        onOpenNutrition: () => _selectTab(2),
       ),
       PlanPage(
         controller: _planController,
@@ -151,10 +152,11 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ),
         onAskCoach: (prompt) async {
-          _selectTab(3);
+          _selectTab(4);
           await _agentController.send(prompt);
         },
       ),
+      NutritionPage(controller: _nutritionController, embedded: true),
       ProgressPage(
         controller: _progressController,
         onOpenBodyProgress: () => Navigator.of(context).push(
@@ -193,6 +195,11 @@ class _HomeShellState extends State<HomeShell> {
               icon: Icon(Icons.bolt_outlined),
               selectedIcon: Icon(Icons.bolt_rounded),
               label: '计划',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.restaurant_menu_outlined),
+              selectedIcon: Icon(Icons.restaurant_menu_rounded),
+              label: '饮食',
             ),
             NavigationDestination(
               icon: Icon(Icons.insights_outlined),

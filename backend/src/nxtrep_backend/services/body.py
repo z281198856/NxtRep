@@ -42,6 +42,33 @@ class BodyService:
         self.repository = repository
         self.confirmations = confirmations
 
+    async def recent_measurement_summary(self, user_id: UUID) -> dict[str, str | None]:
+        """Return recorded weight and body-fat baselines without inferring missing values."""
+        measurements, _ = await self.repository.list_measurements(
+            user_id, None, None, 1, 100
+        )
+        weight = next((item for item in measurements if item.weight_kg is not None), None)
+        body_fat = next(
+            (item for item in measurements if item.body_fat_percent is not None), None
+        )
+        return {
+            "weight_kg": (
+                format(weight.weight_kg.normalize(), "f") if weight is not None else None
+            ),
+            "weight_recorded_at": (
+                weight.measured_at.date().isoformat() if weight is not None else None
+            ),
+            "body_fat_percent": (
+                format(body_fat.body_fat_percent.normalize(), "f")
+                if body_fat is not None
+                else None
+            ),
+            "body_fat_recorded_at": (
+                body_fat.measured_at.date().isoformat() if body_fat is not None else None
+            ),
+            "body_fat_method": body_fat.body_fat_method if body_fat is not None else None,
+        }
+
     async def list_personal_records(
         self,
         *,

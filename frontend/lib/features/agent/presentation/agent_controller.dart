@@ -544,6 +544,14 @@ class AgentController extends ChangeNotifier {
             error['code'] == 'VISION_ASSESSMENT_INVALID') {
           return '视觉模型返回不完整，照片已保留，可以直接重新发送';
         }
+        if (error is Map<String, dynamic> &&
+            error['code'] == 'TRAINING_PLAN_DRAFT_INVALID') {
+          return '训练计划草稿未通过校验，请调整要求后重试';
+        }
+        if (error is Map<String, dynamic> &&
+            error['code'] == 'TRAINING_PLAN_DRAFT_NOT_CREATED') {
+          return 'AI 未能创建可确认的训练计划草稿，请稍后重试';
+        }
       }
     }
     return '这次评估没有完成，请稍后重试';
@@ -564,11 +572,33 @@ class AgentController extends ChangeNotifier {
   void _readConfirmations(Map<String, dynamic> response) {
     final cards = response['confirmation_cards'];
     if (cards is! List<dynamic>) return;
+    final draftsByCardId = <String, Map<String, dynamic>>{};
+    final results = response['analysis_results'];
+    if (results is List<dynamic>) {
+      for (final result in results) {
+        if (result is! Map<String, dynamic>) continue;
+        final operations = result['operation_results'];
+        if (operations is! List<dynamic>) continue;
+        for (final operation in operations) {
+          if (operation is! Map<String, dynamic>) continue;
+          final confirmation = operation['confirmation'];
+          final draft = operation['draft'];
+          if (confirmation is! Map<String, dynamic> || draft is! Map) continue;
+          final cardId = confirmation['confirmation_id'];
+          if (cardId is String) {
+            draftsByCardId[cardId] = Map<String, dynamic>.from(draft);
+          }
+        }
+      }
+    }
     confirmations = cards
-        .map(
-          (item) =>
-              AgentConfirmationCard.fromJson(item as Map<String, dynamic>),
-        )
+        .map((item) {
+          final json = item as Map<String, dynamic>;
+          return AgentConfirmationCard.fromJson(
+            json,
+            draft: draftsByCardId[json['confirmation_id']],
+          );
+        })
         .toList(growable: false);
     _notifyListeners();
   }

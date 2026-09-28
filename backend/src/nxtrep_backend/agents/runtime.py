@@ -1,10 +1,11 @@
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from nxtrep_backend.agents.prompts import SYSTEM_PROMPT
+from nxtrep_backend.agents.prompts import SYSTEM_PROMPT, TASK_PROMPTS
 from nxtrep_backend.agents.tools import AgentToolContext, ToolGroup, build_tools
 from nxtrep_backend.core.config import Settings
 from nxtrep_backend.providers.models import build_text_model
+from nxtrep_backend.schemas.agent import AgentTaskType
 
 
 def build_chat_model(settings: Settings) -> BaseChatModel:
@@ -18,6 +19,7 @@ def build_agent(
     tool_context: AgentToolContext | None = None,
     tool_groups: frozenset[ToolGroup] | None = None,
     model: BaseChatModel | None = None,
+    task_type: AgentTaskType | None = None,
 ):
     if tool_context is None and tool_groups is not None:
         raise ValueError("tool_context is required when tool_groups are provided")
@@ -27,6 +29,10 @@ def build_agent(
     return create_agent(
         model=model or build_chat_model(settings),
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=(
+            f"{SYSTEM_PROMPT}\n\n{TASK_PROMPTS[task_type]}"
+            if task_type in TASK_PROMPTS
+            else SYSTEM_PROMPT
+        ),
         name="nxtrep_coach",
     )
