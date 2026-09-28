@@ -1,14 +1,9 @@
-# NxtRep 后端开发设计
+# NxtRep 后端设计与公开接口清单
 
-> 依据：`PRD.md`  
-> 范围：FastAPI + LangChain 后端；暂不开发 Flutter。  
-> 本文保留技术架构、完整接口设计和 Agent/RAG 设计，不包含开发分工。
-> 用户界面遵循 [`SIMPLIFIED_PRODUCT_EXPERIENCE.md`](SIMPLIFIED_PRODUCT_EXPERIENCE.md)：
-> 后端保留同步、版本、审计和 Agent 编排能力，但前端默认隐藏这些技术细节。
->
-> 实施状态（2026-09-12）：后端范围已经实现并通过完整测试；本文的“建议实现顺序”仅保留为
-> 历史设计顺序。当前能力、验证结果和部署前置条件以
-> [`BACKEND_IMPLEMENTATION_STATUS.md`](BACKEND_IMPLEMENTATION_STATUS.md) 为准。
+> 这是历史设计资料，保留架构推导和公开接口清单；清单与当前 OpenAPI 的对应关系由
+> `backend/tests/test_api_documentation_contract.py` 检查。代码和 `/openapi.json` 是当前行为的
+> 准确信息源。项目现状见[仓库首页](../README.md)，简明架构见[架构说明](ARCHITECTURE.md)。
+> 本文后部的开发顺序是历史记录，不代表当前待办。
 
 ## 1. 技术架构
 

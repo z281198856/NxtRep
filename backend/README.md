@@ -1,9 +1,8 @@
 # NxtRep Backend
 
-FastAPI + LangChain/LangGraph 后端。账号、训练、饮食、身体数据、Agent、RAG、
-同步、通知、导出、账户删除、审计和管理接口均已实现；前端不在本阶段范围内。
-当前完成范围、验证结果和部署前置条件见
-[`docs/BACKEND_IMPLEMENTATION_STATUS.md`](../docs/BACKEND_IMPLEMENTATION_STATUS.md)。
+FastAPI + LangChain/LangGraph 后端，承载账号、训练、饮食、身体数据、Agent、RAG、
+同步、通知和主动教练 worker。项目总览与当前边界见[仓库首页](../README.md)，
+模块关系见[架构说明](../docs/ARCHITECTURE.md)。后端尚未正式部署。
 
 ## 本地启动
 
@@ -347,8 +346,8 @@ uv run python -m nxtrep_backend.cli.evaluate_agent \
 
 ## 当前状态
 
-后端功能代码已经完成，OpenAPI 当前包含 169 个路径、204 个操作和 224 个 Schema。
-数据库迁移头为 `e4b7c2a9d851`。训练接口支持暂停/继续、有效训练时长和组间计时恢复。
+主要业务接口、Agent 和 worker 已在代码中实现；当前接口清单以运行中的 `/openapi.json` 为准。
+训练接口支持暂停/继续、有效训练时长和组间计时恢复。
 发布前仍需为目标环境配置 PostgreSQL + pgvector、
 安全 JWT、显式 CORS 来源，以及按需配置模型和 OSS 密钥；外部服务未配置时相关接口会
 安全失败，不影响普通数据库业务接口启动。
