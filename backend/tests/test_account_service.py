@@ -461,6 +461,7 @@ async def test_refresh_tokens_rotates_session() -> None:
     old_refresh_token = "o" * 64
     user = make_login_ready_user()
     old_session = RefreshSession(
+        id=uuid4(),
         user_id=user.id,
         token_hash=hash_opaque_token(old_refresh_token),
         device_name="iPhone",
@@ -485,14 +486,10 @@ async def test_refresh_tokens_rotates_session() -> None:
     assert result.refresh_token != old_refresh_token
     assert decode_access_token(result.access_token, settings) == user.id
     assert old_session.last_used_at is not None
-    assert old_session.revoked_at is not None
-
-    repository.add_refresh_session.assert_awaited_once()
-    new_session = repository.add_refresh_session.await_args.args[0]
-    assert new_session.user_id == user.id
-    assert new_session.device_name == "iPhone"
-    assert new_session.token_hash == hash_opaque_token(result.refresh_token)
-    assert new_session.revoked_at is None
+    assert old_session.revoked_at is None
+    assert old_session.device_name == "iPhone"
+    assert old_session.token_hash == hash_opaque_token(result.refresh_token)
+    repository.add_refresh_session.assert_not_awaited()
 
 
 @pytest.mark.asyncio

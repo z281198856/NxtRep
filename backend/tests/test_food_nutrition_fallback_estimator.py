@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import ValidationError
 
 from nxtrep_backend.agents.nutrition_vision import (
@@ -87,10 +87,8 @@ def make_fallback_result() -> FoodNutritionFallbackResult:
 
 def make_dependencies() -> tuple[MagicMock, MagicMock]:
     model = MagicMock(spec=BaseChatModel)
-    structured_model = MagicMock()
-    structured_model.ainvoke = AsyncMock()
-    model.with_structured_output.return_value = structured_model
-    return model, structured_model
+    model.ainvoke = AsyncMock()
+    return model, model
 
 
 def test_fallback_schema_forces_low_confidence_and_confirmation() -> None:
@@ -109,27 +107,19 @@ def test_fallback_schema_forces_low_confidence_and_confirmation() -> None:
         )
 
 
-def test_fallback_estimator_uses_function_calling_structured_output() -> None:
+def test_fallback_estimator_does_not_use_vision_tool_calling() -> None:
     model, _ = make_dependencies()
 
     GlmFoodNutritionFallbackEstimator(model)
 
-    model.with_structured_output.assert_called_once_with(
-        FoodNutritionFallbackResult,
-        method="function_calling",
-        include_raw=True,
-    )
+    model.with_structured_output.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_fallback_estimator_handles_multiple_unknown_foods_in_one_call() -> None:
     model, structured_model = make_dependencies()
     expected = make_fallback_result()
-    structured_model.ainvoke.return_value = {
-        "raw": None,
-        "parsed": expected,
-        "parsing_error": None,
-    }
+    structured_model.ainvoke.return_value = AIMessage(content=expected.model_dump_json())
     estimator = GlmFoodNutritionFallbackEstimator(model)
     foods = [
         make_detected_food("自制杂粮饼"),
@@ -153,11 +143,11 @@ async def test_fallback_estimator_handles_multiple_unknown_foods_in_one_call() -
 @pytest.mark.asyncio
 async def test_fallback_prompt_contains_names_notes_and_per_100g_boundary() -> None:
     model, structured_model = make_dependencies()
-    structured_model.ainvoke.return_value = {
-        "raw": None,
-        "parsed": FoodNutritionFallbackResult(estimates=[make_fallback_result().estimates[0]]),
-        "parsing_error": None,
-    }
+    structured_model.ainvoke.return_value = AIMessage(
+        content=FoodNutritionFallbackResult(
+            estimates=[make_fallback_result().estimates[0]]
+        ).model_dump_json()
+    )
     estimator = GlmFoodNutritionFallbackEstimator(model)
 
     await estimator.estimate(
@@ -169,7 +159,8 @@ async def test_fallback_prompt_contains_names_notes_and_per_100g_boundary() -> N
     messages = structured_model.ainvoke.await_args.args[0]
     assert len(messages) == 1
     assert isinstance(messages[0], HumanMessage)
-    prompt = messages[0].content[0]["text"]
+    prompt = messages[0].content
+    assert isinstance(prompt, str)
     assert "自制杂粮饼" in prompt
     assert "没有包装标签" in prompt
     assert "每100克" in prompt
@@ -179,11 +170,11 @@ async def test_fallback_prompt_contains_names_notes_and_per_100g_boundary() -> N
 @pytest.mark.asyncio
 async def test_fallback_estimator_rejects_missing_or_extra_food_results() -> None:
     model, structured_model = make_dependencies()
-    structured_model.ainvoke.return_value = {
-        "raw": None,
-        "parsed": FoodNutritionFallbackResult(estimates=[make_fallback_result().estimates[0]]),
-        "parsing_error": None,
-    }
+    structured_model.ainvoke.return_value = AIMessage(
+        content=FoodNutritionFallbackResult(
+            estimates=[make_fallback_result().estimates[0]]
+        ).model_dump_json()
+    )
     estimator = GlmFoodNutritionFallbackEstimator(model)
 
     with pytest.raises(FoodNutritionFallbackError, match="requested foods"):
@@ -200,11 +191,7 @@ async def test_fallback_estimator_rejects_missing_or_extra_food_results() -> Non
 @pytest.mark.asyncio
 async def test_fallback_estimator_reports_structured_output_failure() -> None:
     model, structured_model = make_dependencies()
-    structured_model.ainvoke.return_value = {
-        "raw": None,
-        "parsed": None,
-        "parsing_error": ValueError("invalid nutrition output"),
-    }
+    structured_model.ainvoke.return_value = AIMessage(content="invalid nutrition output")
     estimator = GlmFoodNutritionFallbackEstimator(model)
 
     with pytest.raises(FoodNutritionFallbackError, match="structured output"):

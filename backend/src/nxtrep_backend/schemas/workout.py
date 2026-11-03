@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -88,9 +88,36 @@ class WorkoutExerciseSkipRequest(StrictModel):
     expected_workout_version: int = Field(ge=1)
 
 
+class WorkoutExerciseTargetUpdateRequest(StrictModel):
+    target_sets: int | None = Field(default=None, ge=1, le=20)
+    rest_seconds: int | None = Field(default=None, ge=0, le=1800)
+    expected_workout_version: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def require_target_change(self):
+        fields = self.model_fields_set & {"target_sets", "rest_seconds"}
+        if not fields or any(getattr(self, field) is None for field in fields):
+            raise ValueError("请提供有效的目标组数或休息时长。")
+        return self
+
+
 class WorkoutSetVoidRequest(StrictModel):
     reason: str = Field(min_length=1, max_length=1000)
     expected_version: int = Field(ge=1)
+
+
+class WorkoutSetCorrectionRequest(StrictModel):
+    weight_kg: Decimal | None = Field(default=None, ge=0, max_digits=7, decimal_places=3)
+    reps: int | None = Field(default=None, ge=0, le=1000)
+    expected_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def require_correction(self):
+        fields = self.model_fields_set & {"weight_kg", "reps"}
+        if not fields or any(getattr(self, field) is None for field in fields):
+            raise ValueError("必须提供有效的重量或次数，不能清空。")
+        return self
 
 
 class WorkoutPauseRequest(StrictModel):
@@ -156,6 +183,7 @@ class ExpectedVersionRequest(StrictModel):
 
 class WorkoutSetResponse(BaseModel):
     id: UUID
+    client_generated_id: UUID | None = None
     set_index: int
     weight_kg: Decimal
     reps: int
@@ -190,6 +218,8 @@ class WorkoutRestTimerResponse(BaseModel):
 
 class WorkoutResponse(BaseModel):
     id: UUID
+    calendar_event_id: UUID | None = None
+    plan_day_id: UUID | None = None
     status: str
     started_at: datetime
     ended_at: datetime | None

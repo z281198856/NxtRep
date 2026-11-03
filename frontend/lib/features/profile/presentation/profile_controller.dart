@@ -1,13 +1,15 @@
 import 'package:flutter/foundation.dart';
 
 import '../../../core/network/api_exception.dart';
+import '../../../core/state/lifecycle_notifier.dart';
 import '../data/profile_repository.dart';
 import '../domain/profile_models.dart';
 
-class ProfileController extends ChangeNotifier {
-  ProfileController(this._repository);
+class ProfileController extends LifecycleNotifier {
+  ProfileController(this._repository, {this.onSettingsChanged});
 
   final ProfileDataSource _repository;
+  final ValueChanged<AppSettings>? onSettingsChanged;
 
   UserProfile? profile;
   TrainingPreferences? trainingPreferences;
@@ -33,6 +35,7 @@ class ProfileController extends ChangeNotifier {
       profile = results[0] as UserProfile;
       trainingPreferences = results[1] as TrainingPreferences;
       settings = results[2] as AppSettings;
+      if (!isDisposed) onSettingsChanged?.call(settings!);
     } on ApiException catch (error) {
       errorMessage = _message(error);
     } finally {
@@ -94,6 +97,7 @@ class ProfileController extends ChangeNotifier {
     notifyListeners();
     try {
       settings = await _repository.updateSettings(current, input);
+      if (!isDisposed) onSettingsChanged?.call(settings!);
       return true;
     } on ApiException catch (error) {
       errorMessage = _message(error);

@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,8 @@ from nxtrep_backend.providers.models import (
     build_fallback_intent_router_model,
     build_fallback_text_model,
     build_fallback_vision_model,
+    build_food_fallback_vision_model,
+    build_food_vision_model,
     build_intent_router_model,
     build_text_model,
     build_vision_model,
@@ -42,6 +45,7 @@ from nxtrep_backend.repositories.exercise import (
 from nxtrep_backend.repositories.goals import (
     SqlAlchemyGoalsRepository,
 )
+from nxtrep_backend.repositories.idempotency import SqlAlchemyIdempotencyRepository
 from nxtrep_backend.repositories.media import (
     SqlAlchemyImageAssetRepository,
 )
@@ -87,6 +91,7 @@ from nxtrep_backend.services.agent_handlers.training_plan import (
 from nxtrep_backend.services.agent_media import AgentImageAssetResolver
 from nxtrep_backend.services.agent_planning import AgentRequestPlanner
 from nxtrep_backend.services.agent_run import AgentRunService
+from nxtrep_backend.services.agent_turn import AgentTurnService
 from nxtrep_backend.services.agent_workflow import AgentWorkflowService
 from nxtrep_backend.services.body import BodyService
 from nxtrep_backend.services.body_image import BodyImageWorkflow
@@ -110,7 +115,9 @@ from nxtrep_backend.services.nutrition_image import (
 )
 from nxtrep_backend.services.profile import ProfileService
 from nxtrep_backend.services.training import TrainingService
+from nxtrep_backend.services.web_search import WebSearchService
 from nxtrep_backend.services.workout import WorkoutService
+from nxtrep_backend.services.workout_record import WorkoutRecordService
 
 
 def build_agent_workflow_service(
@@ -159,9 +166,14 @@ def build_agent_workflow_service(
     memory_service = MemoryService(
         SqlAlchemyMemoryRepository(session),
     )
+    run_service = AgentRunService(
+        SqlAlchemyAgentRunRepository(session),
+        stale_after_seconds=max(600, settings.agent_workflow_timeout_seconds + 300),
+    )
     conversation_service = ConversationService(
         SqlAlchemyConversationRepository(session),
         ModelConversationSummarizer(text_model, fallback_text_model),
+        turn_guard=run_service.ensure_available,
     )
 
     planner = AgentRequestPlanner(
@@ -171,11 +183,19 @@ def build_agent_workflow_service(
             fallback_intent_router_model,
         ),
         context_assembler=AgentContextAssembler(memory_service),
+        state_writer=conversation_service.save_task_state,
     )
 
+    food_vision_model = build_food_vision_model(settings)
+    food_fallback_model = build_food_fallback_vision_model(settings)
     nutrition_analysis_service = NutritionImageAnalysisService(
-        recognizer=GlmFoodImageRecognizer(vision_model),
-        fallback_estimator=(GlmFoodNutritionFallbackEstimator(vision_model)),
+        recognizer=GlmFoodImageRecognizer(
+            food_vision_model,
+            food_fallback_model,
+        ),
+        fallback_estimator=GlmFoodNutritionFallbackEstimator(
+            build_text_model(settings, timeout_seconds=20, max_retries=0),
+        ),
         matcher=FoodCatalogMatcher(nutrition_repository),
         calculator=NutritionDraftCalculator(),
     )
@@ -194,18 +214,27 @@ def build_agent_workflow_service(
         training_repository,
         confirmation_repository,
     )
-    nutrition_record_handler = NutritionRecordDraftBranchHandler(
-        nutrition_analysis_service,
-        nutrition_service,
-    )
+
+    from nxtrep_backend.repositories.water import SqlAlchemyWaterRepository
+    from nxtrep_backend.services.water import WaterService
 
     tool_context = AgentToolContext(
+        water_service=WaterService(SqlAlchemyWaterRepository(session), confirmation_repository),
         user_id=user_id,
-        profile_service=ProfileService(SqlAlchemyProfileRepository(session)),
+        profile_service=ProfileService(
+            SqlAlchemyProfileRepository(session),
+            SqlAlchemyBodyRepository(session),
+            confirmation_repository,
+        ),
         goals_service=GoalsService(SqlAlchemyGoalsRepository(session)),
         exercises_service=ExercisesService(SqlAlchemyExercisesRepository(session)),
         training_service=training_service,
         workout_service=workout_service,
+        workout_record_service=WorkoutRecordService(
+            workout_service,
+            confirmation_repository,
+            ExercisesService(SqlAlchemyExercisesRepository(session)),
+        ),
         nutrition_service=nutrition_service,
         body_service=BodyService(
             SqlAlchemyBodyRepository(session),
@@ -215,7 +244,9 @@ def build_agent_workflow_service(
             confirmation_repository,
         ),
         memory_service=memory_service,
+        memory_scope_model=text_model,
         knowledge_retrieval_service=knowledge_retrieval_service,
+        web_search_service=WebSearchService(settings),
         rag_candidate_k=settings.rag_candidate_k,
         rag_top_k=settings.rag_top_k,
     )
@@ -223,10 +254,22 @@ def build_agent_workflow_service(
     def agent_builder(task):
         return build_agent(
             settings,
-            tool_context=tool_context,
+            tool_context=replace(
+                tool_context,
+                memory_scope=tuple(task.memory_instructions),
+                task_id=task.task_id,
+                task_scope={
+                    **task.task_update.entities,
+                    "_task_parameters": task.task_update.parameters,
+                    "_reference_entities": task.task_update.reference_entities,
+                }
+                if task.task_update
+                else {},
+            ),
             tool_groups=groups_for_task(task),
             model=text_model,
             task_type=task.task_type,
+            food_catalog_actions=task.food_catalog_actions,
         )
 
     fallback_agent_builder = None
@@ -235,10 +278,22 @@ def build_agent_workflow_service(
         def fallback_agent_builder(task):
             return build_agent(
                 settings,
-                tool_context=tool_context,
+                tool_context=replace(
+                    tool_context,
+                    memory_scope=tuple(task.memory_instructions),
+                    task_id=task.task_id,
+                    task_scope={
+                        **task.task_update.entities,
+                        "_task_parameters": task.task_update.parameters,
+                        "_reference_entities": task.task_update.reference_entities,
+                    }
+                    if task.task_update
+                    else {},
+                ),
                 tool_groups=groups_for_task(task),
                 model=fallback_text_model,
                 task_type=task.task_type,
+                food_catalog_actions=task.food_catalog_actions,
             )
 
     general_handler = GeneralQuestionBranchHandler(
@@ -246,14 +301,22 @@ def build_agent_workflow_service(
         fallback_agent_builder,
         knowledge_retrieval_enabled=(knowledge_retrieval_service is not None),
         vision_analyzer=GlmVisionAnalyzer(vision_model, fallback_vision_model),
+        tool_context=tool_context,
+        knowledge_preflight=lambda request: knowledge_handler.execute(request),
     )
-    knowledge_handler = general_handler
-    if knowledge_retrieval_service is not None:
-        knowledge_handler = KnowledgeRetrievalBranchHandler(
-            knowledge_retrieval_service,
-            candidate_k=settings.rag_candidate_k,
-            top_k=settings.rag_top_k,
-        )
+    nutrition_record_handler = NutritionRecordDraftBranchHandler(
+        nutrition_analysis_service,
+        nutrition_service,
+        text_handler=general_handler,
+    )
+    knowledge_handler = KnowledgeRetrievalBranchHandler(
+        knowledge_retrieval_service,
+        candidate_k=settings.rag_candidate_k,
+        top_k=settings.rag_top_k,
+        tool_context=tool_context,
+        web_handler=general_handler,
+        coverage_model=text_model,
+    )
     training_plan_handler = TrainingPlanBranchHandler(general_handler, tool_context)
     structured_data_handler = TodayTrainingQueryBranchHandler(
         training_service,
@@ -271,11 +334,25 @@ def build_agent_workflow_service(
             "general_question": general_handler,
             "body_progress_comparison": body_progress_handler,
             "body_measurement_draft": general_handler,
+            "water_record_draft": general_handler,
+            "profile_update_draft": general_handler,
+            "workout_set_update_draft": general_handler,
+            "workout_set_void_draft": general_handler,
+            "workout_record_draft": general_handler,
+            "workout_record_update_draft": general_handler,
+            "workout_record_void_draft": general_handler,
+            "nutrition_entry_update_draft": general_handler,
+            "nutrition_entry_delete_draft": general_handler,
             "memory_write": general_handler,
+            "food_catalog_draft": general_handler,
+            "confirmation_cancel": general_handler,
             "body_assessment": body_handler,
             "nutrition_analysis": nutrition_handler,
             "nutrition_record_draft": nutrition_record_handler,
+            "nutrition_target_draft": general_handler,
             "training_plan_draft": training_plan_handler,
+            "schedule_change_draft": general_handler,
+            "training_progression_draft": general_handler,
             "structured_data_query": structured_data_handler,
             "knowledge_retrieval": knowledge_handler,
         },
@@ -293,5 +370,14 @@ def build_agent_workflow_service(
     return AgentWorkflowService(
         graph,
         conversation_service,
-        AgentRunService(SqlAlchemyAgentRunRepository(session)),
+        run_service,
+        timeout_seconds=settings.agent_workflow_timeout_seconds,
+        tool_journal_provider=tool_context.journal.snapshot,
+        turn_service=AgentTurnService(
+            SqlAlchemyIdempotencyRepository(session),
+            SqlAlchemyAgentRunRepository(session),
+            stale_after_seconds=max(600, settings.agent_workflow_timeout_seconds + 300),
+            workflow_timeout_seconds=settings.agent_workflow_timeout_seconds,
+        ),
+        trace_context=tool_context.trace_context,
     )

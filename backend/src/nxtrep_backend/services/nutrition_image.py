@@ -13,6 +13,7 @@ from nxtrep_backend.schemas.media import ImagePurpose
 from nxtrep_backend.schemas.nutrition import (
     FoodCatalogMatchResult,
     FoodImageCandidate,
+    FoodImageRecognitionResult,
     FoodNutritionDraftItem,
     FoodNutritionFallbackEstimate,
     FoodResponse,
@@ -317,6 +318,7 @@ class NutritionImageAnalysisService:
         user_id: UUID,
         images: Sequence[ResolvedAgentImage],
         notes: str | None,
+        reviewed_foods: Sequence[FoodImageCandidate] | None = None,
     ) -> NutritionImageAnalysisResult:
         if not images:
             raise ValueError("At least one resolved nutrition image is required")
@@ -329,10 +331,20 @@ class NutritionImageAnalysisService:
         if any(image.purpose not in allowed_purposes for image in images):
             raise NutritionImagePurposeError("Images must be nutrition entries or chat attachments")
 
-        recognition = await self._recognizer.recognize(
-            images=images,
-            notes=notes,
-        )
+        if reviewed_foods is not None:
+            if not reviewed_foods:
+                raise ValueError("Reviewed foods must not be empty")
+            # User corrections are authoritative names/portions, not instructions
+            # to re-guess the same photo. Reuse matching/estimation/calculation below.
+            recognition = FoodImageRecognitionResult(
+                foods=list(reviewed_foods),
+                assumptions=["已按本次修订的食物名称和份量重新估算；份量不代表实际称重。"],
+            )
+        else:
+            recognition = await self._recognizer.recognize(
+                images=images,
+                notes=notes,
+            )
 
         matches = await self._matcher.match(
             user_id=user_id,
@@ -390,6 +402,7 @@ class NutritionImageDraftEstimator:
             user_id=user_id,
             images=images,
             notes=body.notes,
+            **({"reviewed_foods": body.reviewed_foods} if body.reviewed_foods is not None else {}),
         )
 
         return NutritionImageDraftResponse(

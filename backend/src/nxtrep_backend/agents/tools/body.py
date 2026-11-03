@@ -16,6 +16,14 @@ from nxtrep_backend.schemas.body import (
 
 def build_body_read_tools(context: AgentToolContext) -> list[BaseTool]:
     @tool
+    async def read_recovery_status(day: date) -> dict:
+        """Read today's sleep/energy check and recent fatigue/pain, not a diagnosis."""
+        return {
+            "status": "available",
+            **json_safe(await context.body_service.recovery_status(context.user_id, day)),
+        }
+
+    @tool
     async def read_body_progress(
         start_date: date,
         end_date: date,
@@ -121,6 +129,7 @@ def build_body_read_tools(context: AgentToolContext) -> list[BaseTool]:
         read_body_progress,
         read_personal_records,
         calculate_navy_body_fat_range,
+        read_recovery_status,
     ]
 
 

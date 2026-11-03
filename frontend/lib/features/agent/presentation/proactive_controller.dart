@@ -85,6 +85,42 @@ class ProactiveController extends ChangeNotifier {
     }
   }
 
+  Future<void> setTiming(Map<String, dynamic> config) async {
+    final current = settings;
+    if (current == null || updating || loading) return;
+    updating = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      settings = await _repository.setTiming(current, config);
+      if (enabled) await _repository.review();
+      notices = enabled
+          ? _visibleNotices(await _repository.listUnread())
+          : const [];
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+    } finally {
+      updating = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> snooze(ProactiveNotice notice, Duration delay) async {
+    if (updating) return;
+    updating = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      await _repository.snooze(notice.id, DateTime.now().add(delay));
+      notices = notices.where((item) => item.id != notice.id).toList();
+    } on ApiException catch (error) {
+      errorMessage = error.message;
+    } finally {
+      updating = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> markRead(ProactiveNotice notice) async {
     try {
       await _repository.markRead(notice.id);

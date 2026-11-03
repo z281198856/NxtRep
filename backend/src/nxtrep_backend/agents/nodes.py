@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 
 from langgraph.types import StreamWriter
@@ -13,6 +14,7 @@ from nxtrep_backend.services.agent_planning import (
     AgentRequestPlanner,
 )
 from nxtrep_backend.services.agent_safety import AgentExecutionSafetyValidator
+from nxtrep_backend.services.agent_task_state import TaskStateManager
 from nxtrep_backend.services.conversation import AgentConversationContext
 
 
@@ -57,6 +59,7 @@ class AgentGraphNodes:
 
         return {
             "planned_request": planned_request,
+            "conversation_context": planned_request.conversation_context,
         }
 
     async def execute_branches(
@@ -89,8 +92,30 @@ class AgentGraphNodes:
         execution_bundle = state.get("execution_bundle")
         if execution_bundle is None:
             raise AgentGraphStateError("Safety validation requires execution_bundle")
+        bundle = self._safety_validator.validate(execution_bundle)
+        context = state.get("conversation_context", AgentConversationContext())
+        task_state = TaskStateManager.load(context.task_state)
+        for branch in bundle.branch_results:
+            if task_state.active_task and branch.task_type == task_state.active_task.task_type:
+                payloads = list(branch.operation_results)
+                if branch.result:
+                    payloads.extend(branch.result.get("task_tool_results", []))
+                    if isinstance(branch.result.get("review"), dict):
+                        payloads.append(branch.result["review"])
+                task_state = TaskStateManager.commit_results(
+                    task_state,
+                    payloads,
+                    branch.confirmation_cards,
+                    last_tool_call=branch.tool_runs[-1] if branch.tool_runs else None,
+                )
+                if branch.status == "needs_input":
+                    task_state.active_task.missing_fields = branch.missing_fields
+                    task_state.active_task.status = "collecting"
+                elif branch.status == "failed":
+                    task_state.active_task.status = "failed"
         return {
-            "execution_bundle": self._safety_validator.validate(execution_bundle),
+            "execution_bundle": bundle,
+            "conversation_context": replace(context, task_state=task_state.model_dump(mode="json")),
         }
 
     async def synthesize_response(
@@ -105,7 +130,9 @@ class AgentGraphNodes:
         if request is None or execution_bundle is None:
             raise AgentGraphStateError("Response synthesis requires request and execution_bundle")
 
-        direct_answer = self._direct_failure_answer(execution_bundle)
+        direct_answer = self._direct_task_answer(execution_bundle)
+        if direct_answer is None:
+            direct_answer = self._direct_failure_answer(execution_bundle)
         if direct_answer is None:
             direct_answer = self._direct_training_plan_answer(execution_bundle)
         if direct_answer is None:
@@ -115,6 +142,9 @@ class AgentGraphNodes:
         if direct_answer is None:
             direct_answer = self._direct_read_only_answer(execution_bundle)
         if direct_answer is not None:
+            direct_answer += AgentResponseSynthesizer._web_source_suffix(
+                direct_answer, execution_bundle
+            )
             if state.get("streaming", False):
                 writer(
                     {
@@ -182,18 +212,20 @@ class AgentGraphNodes:
         name = " ".join(str(draft.get("name") or "训练计划").split())[:80]
         frequency = draft.get("weekly_frequency")
         days = draft.get("days")
-        frequency_text = f"，每周 {frequency} 次" if type(frequency) is int else ""
-        day_count = len(days) if isinstance(days, list) else 0
-        durations = [
-            day["estimated_minutes"]
-            for day in days if isinstance(day, dict)
-            and type(day.get("estimated_minutes")) is int
-        ] if isinstance(days, list) else []
-        context = (
-            branch.result.get("personal_context")
-            if isinstance(branch.result, dict)
-            else None
+        frequency_text = (
+            f"按每周 {frequency} 次安排" if type(frequency) is int else "的训练安排如下"
         )
+        day_count = len(days) if isinstance(days, list) else 0
+        durations = (
+            [
+                day["estimated_minutes"]
+                for day in days
+                if isinstance(day, dict) and type(day.get("estimated_minutes")) is int
+            ]
+            if isinstance(days, list)
+            else []
+        )
+        context = branch.result.get("personal_context") if isinstance(branch.result, dict) else None
         analysis = AgentGraphNodes._training_plan_analysis(
             context if isinstance(context, dict) else {},
             frequency=frequency if type(frequency) is int else None,
@@ -201,9 +233,8 @@ class AgentGraphNodes:
             duration_range=(min(durations), max(durations)) if durations else None,
         )
         return (
-            f"回答：已生成「{name}」训练计划草稿{frequency_text}。"
-            "请先查看下方的训练日与动作，确认后才会启用。\n\n"
-            f"分析：{analysis}"
+            f"「{name}」{frequency_text}。\n\n"
+            f"{analysis}"
         )
 
     @staticmethod
@@ -222,7 +253,7 @@ class AgentGraphNodes:
                 if shortest == longest
                 else f"，每次约 {shortest}–{longest} 分钟"
             )
-        parts = [f"草稿包含 {day_count} 个训练日{duration_text}，已通过基础校验。"]
+        parts = [f"包含 {day_count} 个训练日{duration_text}。"]
         profile = context.get("profile")
         profile = profile if isinstance(profile, dict) else {}
         goal_labels = {
@@ -245,7 +276,7 @@ class AgentGraphNodes:
             else:
                 parts.append(
                     f"你填写的每周可训练 {available_days} 天，"
-                    f"这份计划安排 {frequency} 天，确认前请核对是否可执行。"
+                    f"这份计划安排 {frequency} 天，可以按实际空闲时间调整。"
                 )
         preferred_minutes = profile.get("session_duration_minutes")
         if type(preferred_minutes) is int and duration_range is not None:
@@ -255,7 +286,7 @@ class AgentGraphNodes:
             else:
                 parts.append(
                     f"你填写的单次可训练约 {preferred_minutes} 分钟，"
-                    "这份计划可能超时，确认前请核对。"
+                    "这份计划可能超时，可以适当减少动作或组数。"
                 )
 
         measurements = context.get("measurements")
@@ -266,14 +297,10 @@ class AgentGraphNodes:
             metrics.append(f"身高 {height} cm")
         weight = measurements.get("weight_kg")
         if weight is not None:
-            metrics.append(f"体重 {weight} kg（{measurements.get('weight_recorded_at')} 记录）")
+            metrics.append(f"体重 {weight} kg")
         body_fat = measurements.get("body_fat_percent")
         if body_fat is not None:
-            method = measurements.get("body_fat_method")
-            source = "手动记录，" if method == "manual" else ""
-            metrics.append(
-                f"体脂 {body_fat}%（{source}{measurements.get('body_fat_recorded_at')} 记录）"
-            )
+            metrics.append(f"体脂 {body_fat}%")
         if metrics:
             parts.append(
                 f"已读取{'、'.join(metrics)}；"
@@ -296,7 +323,7 @@ class AgentGraphNodes:
         if missing and context:
             parts.append(f"尚无{'、'.join(missing)}记录，这部分无法做个人判断。")
         if not context:
-            parts.append("确认前请核对目标、可训练天数和具体动作是否符合你的情况。")
+            parts.append("可以按你的目标、空闲时间和动作熟悉程度继续调整。")
         return "".join(parts)
 
     @staticmethod
@@ -309,11 +336,23 @@ class AgentGraphNodes:
             return False
 
     @staticmethod
+    def _direct_task_answer(bundle: AgentExecutionBundle) -> str | None:
+        if len(bundle.branch_results) != 1:
+            return None
+        branch = bundle.branch_results[0]
+        result = branch.result or {}
+        answer = result.get("task_answer")
+        return answer if isinstance(answer, str) and answer.strip() else None
+
+    @staticmethod
     def _direct_failure_answer(
         execution_bundle: AgentExecutionBundle,
     ) -> str | None:
         branch_results = execution_bundle.branch_results
         if not branch_results or any(branch.status != "failed" for branch in branch_results):
+            return None
+        if any(branch.unpersisted_suggestion for branch in branch_results):
+            # The synthesizer can retain useful advice, but must not claim it was saved.
             return None
 
         error_codes = {branch.error.code for branch in branch_results if branch.error is not None}
@@ -325,7 +364,14 @@ class AgentGraphNodes:
             return "训练计划草稿未通过校验，请调整要求后重试。"
         if "TRAINING_PLAN_DRAFT_NOT_CREATED" in error_codes:
             return "AI 未能创建可确认的训练计划草稿，请稍后重试。"
-        return "这次处理没有完成，请稍后重试。"
+        if "NUTRITION_TARGET_DRAFT_NOT_CREATED" in error_codes:
+            return "饮食目标暂未保存成功，现有目标没有变化。你可以重新生成草稿。"
+        messages = list(
+            dict.fromkeys(
+                branch.error.message for branch in branch_results if branch.error is not None
+            )
+        )
+        return "\n\n".join(messages) or "这次请求暂时无法处理，请核对记录后重试。"
 
     @staticmethod
     def _direct_read_only_answer(
@@ -357,6 +403,10 @@ class AgentGraphNodes:
         if branch.task_type != "knowledge_retrieval":
             return None
         if branch.status == "completed" and branch.result is not None:
+            if branch.result.get("personal_context"):
+                # Combine retrieved evidence with current facts, rather than returning
+                # generic excerpts for a question about this user's measurements.
+                return None
             answer = branch.result.get("answer")
             if isinstance(answer, str) and answer.strip():
                 return answer.strip()

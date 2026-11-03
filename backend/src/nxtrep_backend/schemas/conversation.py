@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from nxtrep_backend.schemas.agent import AgentContextHints
+from nxtrep_backend.schemas.agent import AgentConfirmationCard, AgentContextHints
 
 
 class AgentConversationCreateRequest(BaseModel):
@@ -24,6 +24,7 @@ class AgentConversationMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: str = Field(min_length=1, max_length=8_000)
+    client_turn_id: UUID | None = None
     image_asset_ids: list[UUID] = Field(default_factory=list, max_length=4)
     context_hints: AgentContextHints = Field(default_factory=AgentContextHints)
 
@@ -40,12 +41,18 @@ class AgentConversationResponse(BaseModel):
 
     id: UUID
     title: str | None
+    title_source: str = "legacy"
     status: str
     summary: str | None
     last_message_at: datetime | None
     version: int
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("title_source", mode="before")
+    @classmethod
+    def default_legacy_title_source(cls, value):
+        return value or "legacy"
 
 
 class AgentConversationListResponse(BaseModel):
@@ -91,3 +98,14 @@ class AgentMessageListResponse(BaseModel):
     list: list[AgentMessageResponse]
     next_sequence: int | None
     has_more: bool
+
+
+class ConversationConfirmationCard(AgentConfirmationCard):
+    draft: dict | None = None
+    message_sequence: int | None = Field(default=None, ge=1)
+
+
+class ConversationConfirmationResponse(BaseModel):
+    confirmation_cards: list[ConversationConfirmationCard]
+    completed_cards: list[ConversationConfirmationCard] = Field(default_factory=list)
+    resolved_counts: dict[str, int]

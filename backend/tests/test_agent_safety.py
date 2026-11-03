@@ -50,3 +50,16 @@ def test_confirmation_card_sets_requires_confirmation() -> None:
     result = AgentExecutionSafetyValidator().validate(bundle)
 
     assert result.branch_results[0].requires_confirmation is True
+
+
+def test_wrong_confirmation_operation_is_rejected():
+    card = AgentConfirmationCard(
+        confirmation_id=uuid4(), operation_type="nutrition_entry_create", status="pending",
+        impact="保存饮食", expires_at="2026-10-06T00:00:00+08:00", version=1,
+    )
+    branch = AgentBranchResult(
+        task_type="training_plan_draft", status="completed", result={"answer": "计划已创建"},
+        confirmation_cards=[card], requires_confirmation=True,
+    )
+    result = AgentExecutionSafetyValidator().validate(AgentExecutionBundle(branch_results=[branch]))
+    assert result.branch_results[0].error.code == "CONFIRMATION_OPERATION_MISMATCH"

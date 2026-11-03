@@ -180,6 +180,7 @@ class FakeDailySummaryRepository:
     async def list_entries(self, user_id, day):
         return [
             SimpleNamespace(
+                meal_type="lunch",
                 totals={
                     "kcal": "1650",
                     "protein_g": "112",

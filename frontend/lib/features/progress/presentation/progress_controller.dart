@@ -1,10 +1,10 @@
-import 'package:flutter/foundation.dart';
+import '../../../core/state/lifecycle_notifier.dart';
 
 import '../../../core/network/api_exception.dart';
 import '../data/body_repository.dart';
 import '../domain/body_models.dart';
 
-class ProgressController extends ChangeNotifier {
+class ProgressController extends LifecycleNotifier {
   ProgressController(this._repository);
 
   final BodyRepository _repository;
@@ -20,6 +20,7 @@ class ProgressController extends ChangeNotifier {
   bool trendLoading = false;
   bool submitting = false;
   String? errorMessage;
+  bool savedLocally = false;
 
   Future<void> refresh() async {
     if (loading) return;
@@ -75,6 +76,7 @@ class ProgressController extends ChangeNotifier {
   Future<bool> add(BodyMeasurementInput input) async {
     if (submitting) return false;
     submitting = true;
+    savedLocally = false;
     errorMessage = null;
     notifyListeners();
     try {
@@ -82,6 +84,10 @@ class ProgressController extends ChangeNotifier {
       await refresh();
       return true;
     } on ApiException catch (error) {
+      if (error.code == 'RECORD_SAVED_LOCALLY') {
+        savedLocally = true;
+        return true;
+      }
       errorMessage = _messageFor(error);
       return false;
     } finally {
@@ -96,6 +102,7 @@ class ProgressController extends ChangeNotifier {
   ) async {
     if (submitting) return false;
     submitting = true;
+    savedLocally = false;
     errorMessage = null;
     notifyListeners();
     try {

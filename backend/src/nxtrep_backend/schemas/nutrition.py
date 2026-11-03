@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -23,6 +23,19 @@ class FoodCreateRequest(StrictModel):
     fat_g: Decimal = Field(ge=0, max_digits=8, decimal_places=3)
 
 
+class CustomFoodDraftRequest(FoodCreateRequest):
+    source: Literal["user_provided", "model_estimated", "web_reference"] = "model_estimated"
+    confidence: Literal["low", "medium", "high"] = "low"
+    notes: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("name")
+    @classmethod
+    def require_food_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must not be blank")
+        return value.strip()
+
+
 class FoodResponse(BaseModel):
     id: UUID
     food_version_id: UUID
@@ -41,6 +54,36 @@ class FoodResponse(BaseModel):
 
 class FoodUpdateRequest(FoodCreateRequest):
     expected_version: int = Field(ge=1)
+
+
+class CustomFoodPatchRequest(StrictModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    brand: str | None = Field(default=None, max_length=120)
+    barcode: str | None = Field(
+        default=None, min_length=4, max_length=64, pattern=r"^[0-9A-Za-z-]+$"
+    )
+    basis_amount_g: Decimal | None = Field(default=None, gt=0, max_digits=8, decimal_places=3)
+    kcal: Decimal | None = Field(default=None, ge=0, max_digits=9, decimal_places=2)
+    protein_g: Decimal | None = Field(default=None, ge=0, max_digits=8, decimal_places=3)
+    carbs_g: Decimal | None = Field(default=None, ge=0, max_digits=8, decimal_places=3)
+    fat_g: Decimal | None = Field(default=None, ge=0, max_digits=8, decimal_places=3)
+    source: (
+        Literal["user_provided", "model_estimated", "web_reference", "user_confirmed"] | None
+    ) = None
+    confidence: Literal["low", "medium", "high"] | None = None
+    notes: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def require_explicit_change(self) -> "CustomFoodPatchRequest":
+        business = self.model_fields_set - {"source", "confidence", "notes"}
+        if not business:
+            raise ValueError("at least one food field must change")
+        for field in business - {"brand", "barcode"}:
+            if getattr(self, field) is None:
+                raise ValueError(f"{field} must not be null")
+        if self.name is not None and not self.name.strip():
+            raise ValueError("name must not be blank")
+        return self
 
 
 class FrequentFoodResponse(FoodResponse):
@@ -66,6 +109,7 @@ class NutritionItemInput(StrictModel):
     fat_g: Decimal | None = Field(default=None, ge=0)
     source: str | None = Field(default=None, max_length=40)
     confidence: str | None = Field(default=None, max_length=20)
+    estimate_assumptions: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
     def validate_source(self) -> "NutritionItemInput":
@@ -100,6 +144,140 @@ class NutritionEntryCreateRequest(StrictModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("eaten_at must include a timezone offset")
         return value
+
+
+class NutritionEntryCopyRequest(StrictModel):
+    expected_version: int = Field(ge=1)
+    meal_type: Literal["breakfast", "lunch", "dinner", "snack", "other"]
+    eaten_at: datetime
+
+    @field_validator("eaten_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("eaten_at must include a timezone offset")
+        return value
+
+
+class NutritionEstimateCorrection(StrictModel):
+    """Nutrient totals for the resulting eaten portion, never per 100 grams."""
+
+    kcal: Decimal = Field(ge=0, max_digits=10, decimal_places=3)
+    protein_g: Decimal = Field(ge=0, max_digits=8, decimal_places=3)
+    carbs_g: Decimal = Field(ge=0, max_digits=8, decimal_places=3)
+    fat_g: Decimal = Field(ge=0, max_digits=8, decimal_places=3)
+    assumptions: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("assumptions")
+    @classmethod
+    def require_basis(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("请说明本次重估采用的食材、做法或份量依据。")
+        return value.strip()
+
+
+class NutritionPortionChange(StrictModel):
+    item_index: int = Field(ge=0)
+    amount_g: Decimal | None = Field(default=None, gt=0, max_digits=8, decimal_places=3)
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    nutrition_estimate: NutritionEstimateCorrection | None = None
+    replacement: NutritionItemInput | None = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "NutritionPortionChange":
+        if self.replacement is not None:
+            if any(
+                value is not None for value in (self.amount_g, self.name, self.nutrition_estimate)
+            ):
+                raise ValueError("替换食物请只提供replacement中的新食物、份量和营养依据。")
+        elif self.amount_g is None and self.nutrition_estimate is None and self.name is None:
+            raise ValueError("请指定份量、名称或有依据的营养重估。")
+        return self
+
+
+class NutritionPendingEntryRevisionRequest(StrictModel):
+    expected_version: int = Field(ge=1)
+    changes: list[NutritionPortionChange] = Field(default_factory=list, max_length=50)
+    additions: list[NutritionItemInput] = Field(default_factory=list, max_length=50)
+    remove_item_indices: list[Annotated[int, Field(ge=0)]] = Field(
+        default_factory=list, max_length=50
+    )
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def unique_items(self) -> "NutritionPendingEntryRevisionRequest":
+        indices = [change.item_index for change in self.changes]
+        if len(indices) != len(set(indices)):
+            raise ValueError("Each item can be changed only once")
+        if len(set(self.remove_item_indices)) != len(self.remove_item_indices):
+            raise ValueError("同一食物不能重复移除。")
+        if set(indices) & set(self.remove_item_indices):
+            raise ValueError("同一食物不能同时修改和移除。")
+        if not (self.changes or self.additions or self.remove_item_indices):
+            raise ValueError("请指定要修改、新增或移除的食物。")
+        return self
+
+
+class NutritionSavedPortionChange(StrictModel):
+    item_index: int = Field(ge=0)
+    amount_g: Decimal | None = Field(default=None, gt=0, max_digits=8, decimal_places=3)
+    nutrition_estimate: NutritionEstimateCorrection | None = None
+    replacement: NutritionItemInput | None = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "NutritionSavedPortionChange":
+        if self.replacement is not None:
+            if self.amount_g is not None or self.nutrition_estimate is not None:
+                raise ValueError(
+                    "替换食物请在replacement中提供新食物和份量，不同时更正原食物营养。"
+                )
+        elif self.amount_g is None and self.nutrition_estimate is None:
+            raise ValueError("请指定份量、有依据的营养重估或替换食物。")
+        return self
+
+
+class NutritionSavedEntryRevisionRequest(StrictModel):
+    expected_version: int = Field(ge=1)
+    changes: list[NutritionSavedPortionChange] = Field(default_factory=list, max_length=50)
+    remove_item_indices: list[Annotated[int, Field(ge=0)]] = Field(
+        default_factory=list, max_length=50
+    )
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def unique_items(self):
+        indices = [change.item_index for change in self.changes]
+        if len(indices) != len(set(indices)):
+            raise ValueError("同一食物不能重复更正份量。")
+        removals = self.remove_item_indices
+        if len(removals) != len(set(removals)):
+            raise ValueError("同一食物不能重复移除。")
+        if set(indices) & set(removals):
+            raise ValueError("同一食物不能同时更正份量和移除。")
+        if not indices and not removals:
+            raise ValueError("请指定需要更正份量或移除的食物。")
+        return self
+
+
+class NutritionDateChangeEntry(StrictModel):
+    entry_id: UUID
+    expected_version: int = Field(ge=1)
+
+
+class NutritionDateChangeRequest(StrictModel):
+    source_date: date
+    target_date: date
+    entries: list[NutritionDateChangeEntry] = Field(min_length=1, max_length=50)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_move(self):
+        if self.source_date == self.target_date:
+            raise ValueError("原日期和目标日期相同，无需更正。")
+        ids = [entry.entry_id for entry in self.entries]
+        if len(ids) != len(set(ids)):
+            raise ValueError("同一餐食不能重复移动。")
+        return self
 
 
 class NutritionEntryUpdateRequest(StrictModel):
@@ -219,6 +397,8 @@ class ExpectedVersionRequest(StrictModel):
 
 
 class DailyNutritionSummaryResponse(BaseModel):
+    water_ml: int = 0
+    recorded_meals: list[str] = Field(default_factory=list)
     date: date
     target: dict | None
     consumed: NutritionTotals
@@ -319,6 +499,23 @@ class FlexibleMealResponse(BaseModel):
     version: int
 
 
+class FoodImageCandidate(StrictModel):
+    name: str = Field(min_length=1, max_length=160)
+    estimated_amount_g: Decimal = Field(gt=0)
+    amount_min_g: Decimal = Field(gt=0)
+    amount_max_g: Decimal = Field(gt=0)
+    confidence: Literal["low", "medium", "high"]
+    visual_evidence: str | None = Field(default=None, max_length=500)
+    portion_basis: str | None = Field(default=None, max_length=500)
+    portion_confidence: Literal["low", "medium", "high"] = "low"
+
+    @model_validator(mode="after")
+    def validate_amount_range(self) -> "FoodImageCandidate":
+        if not (self.amount_min_g <= self.estimated_amount_g <= self.amount_max_g):
+            raise ValueError("estimated amount must be within amount range")
+        return self
+
+
 class NutritionImageEstimateRequest(StrictModel):
     image_asset_id: UUID
     meal_type: Literal[
@@ -330,6 +527,9 @@ class NutritionImageEstimateRequest(StrictModel):
     ]
     eaten_at: datetime
     notes: str | None = Field(default=None, max_length=2000)
+    reviewed_foods: list[FoodImageCandidate] | None = Field(
+        default=None, min_length=1, max_length=20
+    )
 
     @field_validator("eaten_at")
     @classmethod
@@ -337,20 +537,6 @@ class NutritionImageEstimateRequest(StrictModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("eaten_at must include a timezone offset")
         return value
-
-
-class FoodImageCandidate(StrictModel):
-    name: str = Field(min_length=1, max_length=160)
-    estimated_amount_g: Decimal = Field(gt=0)
-    amount_min_g: Decimal = Field(gt=0)
-    amount_max_g: Decimal = Field(gt=0)
-    confidence: Literal["low", "medium", "high"]
-
-    @model_validator(mode="after")
-    def validate_amount_range(self) -> "FoodImageCandidate":
-        if not (self.amount_min_g <= self.estimated_amount_g <= self.amount_max_g):
-            raise ValueError("estimated amount must be within amount range")
-        return self
 
 
 class FoodImageRecognitionResult(StrictModel):

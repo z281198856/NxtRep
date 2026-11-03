@@ -23,6 +23,8 @@ class AgentConversation(IdMixin, TimestampMixin, Base):
     """A user-scoped durable Agent conversation and its rolling summary."""
 
     __tablename__ = "agent_conversations"
+    # Refresh server-generated timestamps during UPDATE, before Pydantic reads them.
+    __mapper_args__ = {"eager_defaults": True}
     __table_args__ = (
         CheckConstraint("status IN ('active', 'archived')", name="status"),
         CheckConstraint(
@@ -47,6 +49,9 @@ class AgentConversation(IdMixin, TimestampMixin, Base):
         server_default="active",
     )
     summary: Mapped[str | None] = mapped_column(Text)
+    task_state: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     summary_through_sequence: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
@@ -61,6 +66,12 @@ class AgentConversation(IdMixin, TimestampMixin, Base):
     )
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     title: Mapped[str | None] = mapped_column(String(120))
+    title_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="legacy", server_default="legacy"
+    )
+    title_through_sequence: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(
         Integer,

@@ -1,3 +1,5 @@
+import '../../../core/settings/app_preferences.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -102,7 +104,10 @@ class _HistorySummary extends StatelessWidget {
           ),
           const _SummaryDivider(),
           Expanded(
-            child: _SummaryMetric(label: '训练容量', value: _compactVolume(volume)),
+            child: _SummaryMetric(
+              label: '训练容量',
+              value: _compactVolume(context, volume),
+            ),
           ),
         ],
       ),
@@ -197,13 +202,13 @@ class _HistoryCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  item.status == 'finished' ? '训练已完成' : '训练已结束',
+                  item.status == 'completed' ? '训练已完成' : '训练已结束',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 4),
                 Text(
                   '${item.completedSets} 组 · ${_formatDuration(item.durationSeconds)} · '
-                  '${item.totalVolumeKg.toStringAsFixed(0)} kg',
+                  '${AppPreferencesScope.unitsOf(context).formatWeight(item.totalVolumeKg, decimals: 0)}',
                   style: Theme.of(context).textTheme.bodyMedium
                       ?.copyWith(color: AppColors.muted),
                 ),
@@ -263,7 +268,7 @@ class WorkoutHistoryDetailPage extends StatelessWidget {
                 Text(
                   '${historyItem.completedSets} 组 · '
                   '${_formatDuration(historyItem.durationSeconds)} · '
-                  '${historyItem.totalVolumeKg.toStringAsFixed(1)} kg',
+                  '${AppPreferencesScope.unitsOf(context).formatWeight(historyItem.totalVolumeKg)}',
                   style: Theme.of(context).textTheme.bodyMedium
                       ?.copyWith(color: Colors.white70),
                 ),
@@ -327,7 +332,10 @@ class _ExerciseHistoryCard extends StatelessWidget {
                   children: [
                     SizedBox(width: 44, child: Text('第 ${set.setIndex} 组')),
                     Expanded(
-                      child: Text('${set.weightKg.toStringAsFixed(1)} kg'),
+                      child: Text(
+                        AppPreferencesScope.unitsOf(context)
+                            .formatWeight(set.weightKg),
+                      ),
                     ),
                     Text('${set.reps} 次'),
                   ],
@@ -351,7 +359,9 @@ String _formatDuration(int? seconds) {
       : '${duration.inHours} 小时 $remainder 分';
 }
 
-String _compactVolume(double value) {
+String _compactVolume(BuildContext context, double value) {
+  final units = AppPreferencesScope.unitsOf(context);
+  if (units.imperial) return units.formatWeight(value, decimals: 0);
   if (value >= 1000) return '${(value / 1000).toStringAsFixed(1)}t';
   return '${value.toStringAsFixed(0)}kg';
 }

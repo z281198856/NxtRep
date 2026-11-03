@@ -8,6 +8,8 @@ class AgentConversation {
     this.status = 'active',
     this.summary,
     this.lastMessageAt,
+    this.createdAt,
+    this.titleSource = 'legacy',
   });
 
   factory AgentConversation.fromJson(Map<String, dynamic> json) =>
@@ -17,6 +19,10 @@ class AgentConversation {
         title: json['title'] as String?,
         status: json['status'] as String? ?? 'active',
         summary: json['summary'] as String?,
+        titleSource: json['title_source'] as String? ?? 'legacy',
+        createdAt: json['created_at'] == null
+            ? null
+            : DateTime.parse(json['created_at'] as String),
         lastMessageAt: json['last_message_at'] == null
             ? null
             : DateTime.parse(json['last_message_at'] as String),
@@ -25,6 +31,11 @@ class AgentConversation {
   final String id;
   final int version;
   final String? title;
+  final String titleSource;
+  final DateTime? createdAt;
+  DateTime? get activityAt => lastMessageAt ?? createdAt;
+  String get displayTitle =>
+      title?.trim().isNotEmpty == true ? title!.trim() : '新对话';
   final String status;
   final String? summary;
   final DateTime? lastMessageAt;
@@ -104,6 +115,58 @@ class AgentMessage {
   );
 }
 
+class AgentRun {
+  const AgentRun({
+    required this.id,
+    required this.conversationId,
+    required this.status,
+    this.resultPayload,
+    this.errorCode,
+    this.errorMessage,
+  });
+
+  factory AgentRun.fromJson(Map<String, dynamic> json) {
+    final id = json['id'];
+    final conversationId = json['conversation_id'];
+    final status = json['status'];
+    final result = json['result_payload'];
+    if (id is! String ||
+        id.isEmpty ||
+        conversationId is! String ||
+        conversationId.isEmpty ||
+        status is! String ||
+        !{
+          'running',
+          'cancel_requested',
+          'succeeded',
+          'failed',
+          'cancelled',
+        }.contains(status) ||
+        (result != null && result is! Map) ||
+        (json['error_code'] != null && json['error_code'] is! String) ||
+        (json['error_message'] != null && json['error_message'] is! String)) {
+      throw const FormatException('Invalid agent run');
+    }
+    return AgentRun(
+      id: id,
+      conversationId: conversationId,
+      status: status,
+      resultPayload: result == null ? null : Map<String, dynamic>.from(result),
+      errorCode: json['error_code'] as String?,
+      errorMessage: json['error_message'] as String?,
+    );
+  }
+
+  final String id;
+  final String conversationId;
+  final String status;
+  final Map<String, dynamic>? resultPayload;
+  final String? errorCode;
+  final String? errorMessage;
+
+  bool get isRunning => status == 'running' || status == 'cancel_requested';
+}
+
 class AgentConfirmationCard {
   const AgentConfirmationCard({
     required this.id,
@@ -111,8 +174,10 @@ class AgentConfirmationCard {
     required this.status,
     required this.impact,
     required this.version,
+    this.before,
     this.after,
     this.draft,
+    this.messageSequence,
   });
 
   factory AgentConfirmationCard.fromJson(
@@ -124,10 +189,18 @@ class AgentConfirmationCard {
     status: json['status'] as String,
     impact: json['impact'] as String,
     version: json['version'] as int,
+    messageSequence: json['message_sequence'] as int?,
+    before: json['before'] is Map
+        ? Map<String, dynamic>.from(json['before'] as Map)
+        : null,
     after: json['after'] is Map
         ? Map<String, dynamic>.from(json['after'] as Map)
         : null,
-    draft: draft,
+    draft:
+        draft ??
+        (json['draft'] is Map
+            ? Map<String, dynamic>.from(json['draft'] as Map)
+            : null),
   );
 
   final String id;
@@ -136,5 +209,32 @@ class AgentConfirmationCard {
   final String impact;
   final int version;
   final Map<String, dynamic>? after;
+  final Map<String, dynamic>? before;
   final Map<String, dynamic>? draft;
+  final int? messageSequence;
+
+  AgentConfirmationCard copyWith({String? status, int? messageSequence}) =>
+      AgentConfirmationCard(
+        id: id,
+        operationType: operationType,
+        status: status ?? this.status,
+        impact: impact,
+        version: version,
+        before: before,
+        after: after,
+        draft: draft,
+        messageSequence: messageSequence ?? this.messageSequence,
+      );
+}
+
+class ConversationConfirmations {
+  const ConversationConfirmations({
+    required this.cards,
+    required this.resolvedCounts,
+    this.completedCards = const [],
+  });
+
+  final List<AgentConfirmationCard> cards;
+  final List<AgentConfirmationCard> completedCards;
+  final Map<String, int> resolvedCounts;
 }

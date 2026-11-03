@@ -1,13 +1,17 @@
+import '../../../core/settings/app_preferences.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../domain/training_models.dart';
 import 'active_plan_detail_page.dart';
+import 'calendar_event_detail_page.dart';
 import 'custom_plan_page.dart';
 import 'plan_controller.dart';
 import 'template_catalog_page.dart';
 import 'workout_history_page.dart';
+import 'training_calendar.dart';
 
 class PlanPage extends StatefulWidget {
   const PlanPage({
@@ -15,11 +19,17 @@ class PlanPage extends StatefulWidget {
     required this.controller,
     required this.onAskCoach,
     required this.onOpenExerciseLibrary,
+    this.selectedDate,
+    this.onDateSelected,
+    this.onOpenNutrition,
   });
 
   final PlanController controller;
   final Future<void> Function(String prompt) onAskCoach;
   final VoidCallback onOpenExerciseLibrary;
+  final DateTime? selectedDate;
+  final ValueChanged<DateTime>? onDateSelected;
+  final VoidCallback? onOpenNutrition;
 
   @override
   State<PlanPage> createState() => _PlanPageState();
@@ -27,25 +37,60 @@ class PlanPage extends StatefulWidget {
 
 class _PlanPageState extends State<PlanPage> {
   late DateTime _selectedDate;
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
     super.initState();
     final now = DateTime.now();
-    _selectedDate = DateTime(now.year, now.month, now.day);
+    _selectedDate =
+        widget.selectedDate ??
+        (DateUtils.isSameMonth(widget.controller.calendarMonth, now)
+            ? DateUtils.dateOnly(now)
+            : widget.controller.calendarMonth);
+    widget.controller.calendarMonth = DateTime(
+      _selectedDate.year,
+      _selectedDate.month,
+    );
     widget.controller.refresh();
   }
 
-  CalendarEvent? _selectedEvent(List<CalendarEvent> events) {
-    for (final event in events) {
-      final date = event.scheduledDate.toLocal();
-      if (date.year == _selectedDate.year &&
-          date.month == _selectedDate.month &&
-          date.day == _selectedDate.day) {
-        return event;
-      }
+  @override
+  void didUpdateWidget(covariant PlanPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final date = widget.selectedDate;
+    if (date != null && !DateUtils.isSameDay(date, _selectedDate)) {
+      _selectedDate = date;
+      widget.controller.showCalendarMonth(date);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scroll.hasClients) _scroll.jumpTo(0);
+      });
     }
-    return null;
+  }
+
+  void _selectDate(DateTime date) {
+    setState(() => _selectedDate = DateUtils.dateOnly(date));
+    widget.onDateSelected?.call(_selectedDate);
+  }
+
+  List<CalendarEvent> _selectedEvents(List<CalendarEvent> events) {
+    return events.where((event) {
+      final date = event.scheduledDate.toLocal();
+      return date.year == _selectedDate.year &&
+          date.month == _selectedDate.month &&
+          date.day == _selectedDate.day;
+    }).toList();
+  }
+
+  Future<void> _showMonth(DateTime date) async {
+    _selectDate(date);
+    await widget.controller.showCalendarMonth(date);
   }
 
   Future<void> _askForPlan(String mode) =>
@@ -73,6 +118,15 @@ class _PlanPageState extends State<PlanPage> {
   Future<void> _openHistory() => Navigator.of(context).push(
     MaterialPageRoute<void>(
       builder: (_) => WorkoutHistoryPage(controller: widget.controller),
+    ),
+  );
+
+  Future<void> _openEvent(CalendarEvent event) => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => CalendarEventDetailPage(
+        controller: widget.controller,
+        eventId: event.id,
+      ),
     ),
   );
 
@@ -140,22 +194,47 @@ class _PlanPageState extends State<PlanPage> {
           listenable: widget.controller,
           builder: (context, _) {
             final plan = widget.controller.activePlan;
-            final event = _selectedEvent(widget.controller.events);
+            final selectedEvents = _selectedEvents(widget.controller.events);
+            final upcoming = widget.controller.events
+                .where(
+                  (item) =>
+                      item.status == 'planned' &&
+                      !item.scheduledDate.isBefore(
+                        DateUtils.dateOnly(DateTime.now()),
+                      ) &&
+                      !selectedEvents.contains(item),
+                )
+                .toList();
             return RefreshIndicator(
               onRefresh: widget.controller.refresh,
               child: ListView(
+                controller: _scroll,
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: const EdgeInsets.fromLTRB(20, 22, 20, 30),
                 children: [
                   AppPageHeader(
                     title: '训练计划',
-                    subtitle: '把每次训练安排得清楚、可执行',
-                    trailing: IconButton.filledTonal(
-                      tooltip: '刷新',
-                      onPressed: widget.controller.loading
-                          ? null
-                          : widget.controller.refresh,
-                      icon: const Icon(Icons.refresh_rounded),
+                    subtitle: '安排好每次训练',
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: widget.onOpenExerciseLibrary,
+                          icon: const Icon(
+                            Icons.fitness_center_rounded,
+                            size: 18,
+                          ),
+                          label: const Text('动作库'),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton.filledTonal(
+                          tooltip: '刷新',
+                          onPressed: widget.controller.loading
+                              ? null
+                              : widget.controller.refresh,
+                          icon: const Icon(Icons.refresh_rounded),
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(height: 22),
@@ -163,6 +242,57 @@ class _PlanPageState extends State<PlanPage> {
                     AppErrorCard(message: message),
                     const SizedBox(height: 14),
                   ],
+                  TrainingMonthCalendar(
+                    month: widget.controller.calendarMonth,
+                    selectedDate: _selectedDate,
+                    events: widget.controller.events,
+                    loading: widget.controller.calendarLoading,
+                    onSelected: _selectDate,
+                    onMonthChanged: _showMonth,
+                  ),
+                  const SizedBox(height: 16),
+                  SectionTitle(
+                    title: '当日安排',
+                    action: Text(
+                      '${_selectedDate.month} 月 ${_selectedDate.day} 日',
+                      style: Theme.of(context).textTheme.labelLarge
+                          ?.copyWith(color: AppColors.muted),
+                    ),
+                  ),
+                  const SizedBox(height: 11),
+                  if (widget.controller.calendarLoading)
+                    const AppSurface(
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else if (widget.controller.calendarErrorMessage
+                      case final message?)
+                    AppErrorCard(message: '$message，请点击顶部刷新重试')
+                  else if (selectedEvents.isEmpty)
+                    _DayPlanCard(
+                      event: null,
+                      onCreate: () => _askForPlan('适合当前条件的'),
+                      onCreateManual: _createCalendarEvent,
+                      onAdjust: null,
+                    )
+                  else
+                    for (final event in selectedEvents)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _DayPlanCard(
+                          event: event,
+                          onCreate: () => _askForPlan('适合当前条件的'),
+                          onCreateManual: _createCalendarEvent,
+                          onAdjust: () => _adjustEvent(event),
+                          onOpen: () => _openEvent(event),
+                        ),
+                      ),
+                  if (widget.onOpenNutrition != null)
+                    OutlinedButton.icon(
+                      onPressed: widget.onOpenNutrition,
+                      icon: const Icon(Icons.restaurant_menu_rounded),
+                      label: const Text('查看当天饮食'),
+                    ),
+                  const SizedBox(height: 24),
                   _PlanSummaryCard(
                     plan: plan,
                     onOpen: plan == null ? null : () => _openActivePlan(plan),
@@ -216,7 +346,7 @@ class _PlanPageState extends State<PlanPage> {
                       const AppEmptyState(
                         icon: Icons.event_busy_rounded,
                         title: '暂无官方计划',
-                        message: '可以先让 AI 教练根据你的条件生成计划草稿。',
+                        message: '可以先让 AI 私人教练根据你的条件生成计划草稿。',
                       )
                     else if (!widget.controller.loading &&
                         widget.controller.recommendedTemplates.isEmpty)
@@ -277,83 +407,6 @@ class _PlanPageState extends State<PlanPage> {
                           ),
                     ],
                   ],
-                  const SizedBox(height: 24),
-                  _WeekStrip(
-                    selectedDate: _selectedDate,
-                    events: widget.controller.events,
-                    onSelected: (date) => setState(() => _selectedDate = date),
-                  ),
-                  const SizedBox(height: 22),
-                  SectionTitle(
-                    title: '当日安排',
-                    action: Text(
-                      '${_selectedDate.month} 月 ${_selectedDate.day} 日',
-                      style: Theme.of(context).textTheme.labelLarge
-                          ?.copyWith(color: AppColors.muted),
-                    ),
-                  ),
-                  const SizedBox(height: 11),
-                  if (widget.controller.loading && plan == null)
-                    const AppSurface(
-                      child: Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(24),
-                          child: CircularProgressIndicator(),
-                        ),
-                      ),
-                    )
-                  else
-                    _DayPlanCard(
-                      event: event,
-                      onCreate: () => _askForPlan('适合当前条件的'),
-                      onCreateManual: _createCalendarEvent,
-                      onAdjust: event == null
-                          ? null
-                          : () => _adjustEvent(event),
-                    ),
-                  const SizedBox(height: 24),
-                  AppSurface(
-                    onTap: widget.onOpenExerciseLibrary,
-                    padding: const EdgeInsets.all(17),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 52,
-                          height: 52,
-                          decoration: BoxDecoration(
-                            color: AppColors.indigoSoft,
-                            borderRadius: BorderRadius.circular(17),
-                          ),
-                          child: const Icon(
-                            Icons.accessibility_new_rounded,
-                            color: AppColors.indigo,
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '动作库',
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                '查看动作步骤、替代动作和历史训练',
-                                style: Theme.of(context).textTheme.bodyMedium
-                                    ?.copyWith(color: AppColors.muted),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Icon(
-                          Icons.chevron_right_rounded,
-                          color: AppColors.muted,
-                        ),
-                      ],
-                    ),
-                  ),
                   const SizedBox(height: 28),
                   const SectionTitle(title: '选择训练方式'),
                   const SizedBox(height: 6),
@@ -378,14 +431,11 @@ class _PlanPageState extends State<PlanPage> {
                     color: AppColors.indigo,
                     onTap: () => _askForPlan('健身房器械'),
                   ),
-                  if (widget.controller.events.length > 1) ...[
+                  if (upcoming.isNotEmpty) ...[
                     const SizedBox(height: 28),
                     const SectionTitle(title: '接下来'),
                     const SizedBox(height: 12),
-                    ...widget.controller.events
-                        .where((item) => item != event)
-                        .take(4)
-                        .map(_UpcomingEventTile.new),
+                    ...upcoming.take(4).map(_UpcomingEventTile.new),
                   ],
                   const SizedBox(height: 28),
                   SectionTitle(
@@ -580,7 +630,7 @@ class _HistoryPreviewTile extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text(
                   '${item.completedSets} 组 · ${_formatHistoryDuration(item.durationSeconds)} · '
-                  '${item.totalVolumeKg.toStringAsFixed(0)} kg',
+                  '${AppPreferencesScope.unitsOf(context).formatWeight(item.totalVolumeKg, decimals: 0)}',
                   style: Theme.of(context).textTheme.labelMedium,
                 ),
               ],
@@ -623,7 +673,7 @@ class _PlanSummaryCard extends StatelessWidget {
           const SizedBox(height: 7),
           Text(
             plan == null
-                ? '选择一种训练方式，让 AI 教练为你生成可确认的计划草稿。'
+                ? '选择一种训练方式，让 AI 私人教练为你生成可确认的计划草稿。'
                 : '每周 ${plan!.weeklyFrequency} 次 · 按日历稳步完成',
             style: Theme.of(context).textTheme.bodyMedium
                 ?.copyWith(color: Colors.white70),
@@ -655,136 +705,25 @@ class _PlanSummaryCard extends StatelessWidget {
   }
 }
 
-class _WeekStrip extends StatelessWidget {
-  const _WeekStrip({
-    required this.selectedDate,
-    required this.events,
-    required this.onSelected,
-  });
-
-  final DateTime selectedDate;
-  final List<CalendarEvent> events;
-  final ValueChanged<DateTime> onSelected;
-
-  bool _hasEvent(DateTime day) => events.any((event) {
-    final date = event.scheduledDate.toLocal();
-    return date.year == day.year &&
-        date.month == day.month &&
-        date.day == day.day;
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final start = today.subtract(Duration(days: today.weekday - 1));
-    const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
-    return AppSurface(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-      child: Row(
-        children: [
-          for (var index = 0; index < 7; index++)
-            Expanded(
-              child: _DayChip(
-                weekday: weekdays[index],
-                date: start.add(Duration(days: index)),
-                selected: _sameDay(
-                  selectedDate,
-                  start.add(Duration(days: index)),
-                ),
-                hasEvent: _hasEvent(start.add(Duration(days: index))),
-                onTap: onSelected,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DayChip extends StatelessWidget {
-  const _DayChip({
-    required this.weekday,
-    required this.date,
-    required this.selected,
-    required this.hasEvent,
-    required this.onTap,
-  });
-
-  final String weekday;
-  final DateTime date;
-  final bool selected;
-  final bool hasEvent;
-  final ValueChanged<DateTime> onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: '${date.month}月${date.day}日${hasEvent ? '，有训练安排' : ''}',
-      child: InkWell(
-        onTap: () => onTap(date),
-        borderRadius: BorderRadius.circular(16),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(vertical: 9),
-          decoration: BoxDecoration(
-            color: selected ? AppColors.primarySoft : Colors.transparent,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            children: [
-              Text(
-                weekday,
-                style: TextStyle(
-                  color: selected ? AppColors.primary : AppColors.muted,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 5),
-              Text(
-                '${date.day}',
-                style: TextStyle(
-                  color: selected ? AppColors.primary : AppColors.ink,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 5),
-              Container(
-                width: 5,
-                height: 5,
-                decoration: BoxDecoration(
-                  color: hasEvent ? AppColors.primary : Colors.transparent,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _DayPlanCard extends StatelessWidget {
   const _DayPlanCard({
     required this.event,
     required this.onCreate,
     required this.onCreateManual,
     required this.onAdjust,
+    this.onOpen,
   });
 
   final CalendarEvent? event;
   final VoidCallback onCreate;
   final VoidCallback onCreateManual;
   final VoidCallback? onAdjust;
+  final VoidCallback? onOpen;
 
   @override
   Widget build(BuildContext context) {
     return AppSurface(
+      onTap: onOpen,
       padding: const EdgeInsets.all(20),
       child: event == null
           ? Column(
@@ -805,7 +744,7 @@ class _DayPlanCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 9),
                 Text(
-                  '这一天还没有训练，可以休息或让 AI 教练补充计划。',
+                  '这一天还没有训练，可以休息或让 AI 私人教练补充计划。',
                   style: Theme.of(context).textTheme.bodyMedium
                       ?.copyWith(color: AppColors.muted),
                 ),
@@ -851,6 +790,8 @@ class _DayPlanCard extends StatelessWidget {
                         style: Theme.of(context).textTheme.bodyMedium
                             ?.copyWith(color: AppColors.muted),
                       ),
+                      const SizedBox(height: 4),
+                      const Text('查看动作详情', style: TextStyle(fontSize: 12)),
                     ],
                   ),
                 ),
@@ -1158,9 +1099,6 @@ class _UpcomingEventTile extends StatelessWidget {
     );
   }
 }
-
-bool _sameDay(DateTime a, DateTime b) =>
-    a.year == b.year && a.month == b.month && a.day == b.day;
 
 String _formatHistoryDuration(int? seconds) {
   if (seconds == null) return '未记录时长';

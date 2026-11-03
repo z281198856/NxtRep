@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nxtrep_backend.agents.nutrition_vision import (
     FoodImageRecognitionError,
     FoodNutritionFallbackError,
+    FoodVisionUnavailableError,
 )
 from nxtrep_backend.api.deps import get_current_user
 from nxtrep_backend.api.routes import nutrition as nutrition_route
@@ -18,6 +19,7 @@ from nxtrep_backend.core.config import StorageConfigurationError
 from nxtrep_backend.db.models import User
 from nxtrep_backend.db.session import get_db_session
 from nxtrep_backend.main import app
+from nxtrep_backend.providers.model_errors import VisionModelBusyError
 from nxtrep_backend.providers.models import ModelConfigurationError
 from nxtrep_backend.providers.storage import StorageProviderError
 from nxtrep_backend.schemas.nutrition import (
@@ -141,6 +143,9 @@ def test_estimate_image_route_returns_editable_nutrition_draft(
         (StorageProviderError(), 503, "IMAGE_STORAGE_UNAVAILABLE"),
         (FoodImageRecognitionError(), 502, "VISION_MODEL_INVALID_RESPONSE"),
         (FoodNutritionFallbackError(), 502, "VISION_MODEL_INVALID_RESPONSE"),
+        (VisionModelBusyError(), 503, "VISION_MODEL_BUSY"),
+        (FoodVisionUnavailableError(), 503, "NUTRITION_IMAGE_UNAVAILABLE"),
+        (TimeoutError(), 504, "NUTRITION_IMAGE_TIMEOUT"),
         (ModelConfigurationError(), 503, "NUTRITION_IMAGE_NOT_CONFIGURED"),
         (StorageConfigurationError(), 503, "NUTRITION_IMAGE_NOT_CONFIGURED"),
     ],

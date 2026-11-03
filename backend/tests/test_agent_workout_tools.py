@@ -88,6 +88,7 @@ async def test_recent_workouts_tool_returns_bounded_summary() -> None:
         status=None,
         page=1,
         page_size=100,
+        timezone="Asia/Shanghai",
     )
     assert result["period"] == {
         "days": 14,
@@ -145,15 +146,55 @@ async def test_recent_workouts_tool_clamps_date_window(
     assert service.list_history.await_args.kwargs["start_date"] == (expected_start)
 
 
-def test_recent_workouts_tool_only_exposes_days_to_model() -> None:
+def test_recent_workouts_tool_exposes_period_without_user_id() -> None:
     workout_tool = build_workout_tool(
         user_id=uuid4(),
         workout_service=make_workout_service(),
     )
 
     properties = workout_tool.args_schema.model_json_schema()["properties"]
-    assert set(properties) == {"days"}
+    assert set(properties) == {"days", "start_date", "end_date", "period", "timezone"}
     assert "user_id" not in properties
+
+
+@pytest.mark.asyncio
+async def test_workout_comparison_queries_exact_separate_periods():
+    service = make_workout_service()
+    service.list_history.return_value = make_history()
+    tool = build_workout_tool(user_id=uuid4(), workout_service=service)
+    for start, end in [("2026-09-21", "2026-09-27"), ("2026-09-28", "2026-10-04")]:
+        result = await tool.ainvoke({"start_date": start, "end_date": end})
+        assert result["period"]["days"] == 7
+        assert service.list_history.await_args.kwargs["start_date"] == date.fromisoformat(start)
+        assert service.list_history.await_args.kwargs["end_date"] == date.fromisoformat(end)
+
+
+@pytest.mark.asyncio
+async def test_invalid_workout_period_does_not_access_database():
+    service = make_workout_service()
+    tool = build_workout_tool(user_id=uuid4(), workout_service=service)
+    result = await tool.ainvoke({"start_date": "2026-10-05", "end_date": "2026-10-04"})
+    assert result["status"] == "invalid_request"
+    service.list_history.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "period,start,end",
+    [
+        ("this_week", "2026-10-05", "2026-10-05"),
+        ("last_week", "2026-09-28", "2026-10-04"),
+    ],
+)
+async def test_calendar_weeks_are_computed_on_the_server(period, start, end):
+    service = make_workout_service()
+    service.list_history.return_value = make_history()
+    tool = build_workout_tool(user_id=uuid4(), workout_service=service)
+    with patch("nxtrep_backend.agents.tools.workout.datetime") as clock:
+        clock.now.return_value = datetime(2026, 10, 5, 0, 30, tzinfo=CHINA_TIMEZONE)
+        result = await tool.ainvoke({"period": period})
+    assert result["period"]["start_date"] == start
+    assert result["period"]["end_date"] == end
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from nxtrep_backend.schemas.agent import (
     AgentContextHints,
     AgentIntentTask,
 )
+from nxtrep_backend.schemas.agent_task import AgentTaskUpdate
 from nxtrep_backend.schemas.media import ImagePurpose
 from nxtrep_backend.schemas.nutrition import (
     FoodCatalogMatchResult,
@@ -24,6 +26,7 @@ from nxtrep_backend.schemas.nutrition import (
     NutritionTotals,
 )
 from nxtrep_backend.services.agent_execution import AgentBranchInput
+from nxtrep_backend.services.agent_handlers.general import GeneralQuestionBranchHandler
 from nxtrep_backend.services.agent_handlers.nutrition_record import (
     NutritionRecordDraftBranchHandler,
 )
@@ -132,7 +135,77 @@ def make_handler() -> tuple[
 
 
 @pytest.mark.asyncio
-async def test_record_draft_reuses_prior_analysis_and_returns_confirmation_card() -> None:
+async def test_text_meal_delegates_without_photo_or_vision_and_preserves_context():
+    handler, vision, nutrition = make_handler()
+    text = MagicMock(spec=GeneralQuestionBranchHandler)
+    text.execute = AsyncMock(
+        return_value=AgentBranchResult(
+            task_type="nutrition_record_draft",
+            status="needs_input",
+            missing_fields=["food_details"],
+        )
+    )
+    handler._text_handler = text
+    original = make_input()
+    branch = replace(
+        original,
+        images=(),
+        message="帮我记录今天午餐两颗鸡蛋和一碗米饭",
+        task=original.task.model_copy(
+            update={
+                "asset_ids": [],
+                "missing_fields": ["food_images", "meal_type", "eaten_at"],
+            }
+        ),
+    )
+    await handler.execute(branch)
+    delegated = text.execute.await_args.args[0]
+    assert delegated.message == branch.message
+    assert delegated.user_id == branch.user_id
+    assert delegated.context_hints == branch.context_hints
+    assert delegated.task.missing_fields == []
+    vision.analyze.assert_not_awaited()
+    nutrition.propose_entry.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saved", [False, True])
+async def test_photo_correction_uses_scoped_revision_path_instead_of_creating_new_meal(saved):
+    handler, analysis, nutrition = make_handler()
+    text = MagicMock(spec=GeneralQuestionBranchHandler)
+    text.execute = AsyncMock(
+        return_value=AgentBranchResult(
+            task_type="nutrition_record_draft", status="completed", result={"answer": "修订草稿"}
+        )
+    )
+    handler._text_handler = text
+    original = make_input()
+    entities = {"confirmation_id": str(uuid4())}
+    if saved:
+        entities["entry_id"] = str(uuid4())
+    branch = replace(
+        original,
+        message="这是刚才那餐的照片，其实没那么油",
+        task=original.task.model_copy(
+            update={
+                "task_update": AgentTaskUpdate(transition="correct", entities=entities),
+            }
+        ),
+    )
+    await handler.execute(branch)
+    delegated = text.execute.await_args.args[0]
+    assert delegated.images == original.images
+    assert delegated.task.task_update.entities == entities
+    assert delegated.task.task_type == (
+        "nutrition_entry_update_draft" if saved else "nutrition_record_draft"
+    )
+    nutrition.propose_entry.assert_not_awaited()
+    analysis.analyze.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fields", [[], ["age", "body_fat_percent", "weight_kg"]])
+async def test_record_draft_reuses_prior_analysis_and_returns_confirmation_card(fields) -> None:
     analysis = make_analysis()
     branch_input = make_input(
         prior_results=[
@@ -145,6 +218,7 @@ async def test_record_draft_reuses_prior_analysis_and_returns_confirmation_card(
         ]
     )
     branch_input.prior_results[0].asset_ids = [branch_input.images[0].asset_id]
+    branch_input.task.missing_fields = fields
     handler, analysis_service, nutrition_service = make_handler()
     confirmation_id = uuid4()
     nutrition_service.propose_entry.return_value = SimpleNamespace(

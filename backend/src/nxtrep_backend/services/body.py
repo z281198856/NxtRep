@@ -44,13 +44,8 @@ class BodyService:
 
     async def recent_measurement_summary(self, user_id: UUID) -> dict[str, str | None]:
         """Return recorded weight and body-fat baselines without inferring missing values."""
-        measurements, _ = await self.repository.list_measurements(
-            user_id, None, None, 1, 100
-        )
-        weight = next((item for item in measurements if item.weight_kg is not None), None)
-        body_fat = next(
-            (item for item in measurements if item.body_fat_percent is not None), None
-        )
+        weight = await self.repository.latest_measurement(user_id, "weight_kg")
+        body_fat = await self.repository.latest_measurement(user_id, "body_fat_percent")
         return {
             "weight_kg": (
                 format(weight.weight_kg.normalize(), "f") if weight is not None else None
@@ -59,9 +54,7 @@ class BodyService:
                 weight.measured_at.date().isoformat() if weight is not None else None
             ),
             "body_fat_percent": (
-                format(body_fat.body_fat_percent.normalize(), "f")
-                if body_fat is not None
-                else None
+                format(body_fat.body_fat_percent.normalize(), "f") if body_fat is not None else None
             ),
             "body_fat_recorded_at": (
                 body_fat.measured_at.date().isoformat() if body_fat is not None else None
@@ -409,6 +402,49 @@ class BodyService:
                 }
             )
         return {"points": points, "scale": "0-100", "data_points": len(points)}
+
+    async def recovery_status(self, user_id: UUID, day: date) -> dict:
+        workouts, _, _, _, _ = await self.repository.progress_rows(
+            user_id, day - timedelta(days=6), day
+        )
+        ordered = sorted(workouts, key=lambda item: item.started_at, reverse=True)
+        latest = ordered[0] if ordered else None
+        current = next(
+            (item for item in ordered if item.started_at.astimezone(CHINA_TIMEZONE).date() == day),
+            None,
+        )
+        check = dict(current.pre_check or {}) if current else {}
+        pain = [flag for item in ordered for flag in (item.pain or [])]
+        pain.extend(flag for item in ordered for flag in (item.pre_check or {}).get("pain", []))
+        fatigue = latest.fatigue if latest else None
+        low_check = any(
+            check.get(key) is not None and check[key] <= 2 for key in ("sleep_quality", "energy")
+        )
+        handling = (
+            "review_pain"
+            if pain
+            else "consider_lighter"
+            if low_check or fatigue is not None and fatigue >= 4
+            else "insufficient_data"
+            if not check and fatigue is None
+            else "usual_plan"
+        )
+        return {
+            "date": day.isoformat(),
+            "recorded_workouts": len(ordered),
+            "today_check": check or None,
+            "latest_record_at": latest.started_at.isoformat() if latest else None,
+            "recent_fatigue": fatigue,
+            "pain_records": pain,
+            "suggested_handling": handling,
+            "missing_fields": [
+                key for key in ("sleep_quality", "energy") if check.get(key) is None
+            ],
+            "limitations": [
+                "最近记录不代表当前状态，缺失时只问必要的当日感受。",
+                "这是保守的训练安排提示，不是医学评估或诊断。",
+            ],
+        }
 
     async def correlations(self, user_id: UUID, start_date: date, end_date: date) -> dict:
         workouts, entries, measurements, _, _ = await self.repository.progress_rows(

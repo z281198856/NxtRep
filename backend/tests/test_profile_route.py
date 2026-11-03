@@ -19,7 +19,15 @@ from nxtrep_backend.services.profile import (
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
+def client(monkeypatch) -> Iterator[TestClient]:
+    monkeypatch.setattr(
+        profile_route.BodyService,
+        "recent_measurement_summary",
+        AsyncMock(
+            return_value={"weight_kg": None, "weight_recorded_at": None},
+        ),
+    )
+
     async def override_db_session() -> AsyncIterator[AsyncSession]:
         yield MagicMock(spec=AsyncSession)
 
@@ -76,6 +84,8 @@ def test_get_profile_returns_current_user_profile(
         "sex": "female",
         "birth_date": "2000-01-01",
         "height_cm": "165.50",
+        "weight_kg": None,
+        "weight_recorded_at": None,
         "experience_level": "beginner",
         "weekly_training_days": 3,
         "session_duration_minutes": 60,

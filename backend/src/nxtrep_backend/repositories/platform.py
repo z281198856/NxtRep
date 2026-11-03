@@ -1,6 +1,7 @@
+from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nxtrep_backend.db.models import (
@@ -16,6 +17,7 @@ from nxtrep_backend.db.models import (
     SyncConflict,
     SyncResource,
 )
+from nxtrep_backend.services.notification_timing import coach_paused, coach_quiet
 
 
 class SqlAlchemyPlatformRepository:
@@ -46,6 +48,23 @@ class SqlAlchemyPlatformRepository:
             conditions.append(AppNotification.read_at.is_(None))
         if category is not None:
             conditions.append(AppNotification.category == category)
+        now = datetime.now(UTC)
+        settings = await self.get_notification_settings(user_id)
+        if settings is not None and (
+            not settings.enabled
+            or not settings.categories.get("proactive_coach", False)
+            or coach_paused(settings.quiet_hours, now)
+            or coach_quiet(settings.quiet_hours, now)
+        ):
+            conditions.append(AppNotification.category != "proactive_coach")
+        else:
+            conditions.append(
+                or_(
+                    AppNotification.category != "proactive_coach",
+                    AppNotification.data["snoozed_until"].as_string().is_(None),
+                    AppNotification.data["snoozed_until"].as_string() <= now.isoformat(),
+                )
+            )
         total = await self.session.scalar(
             select(func.count()).select_from(AppNotification).where(*conditions)
         )

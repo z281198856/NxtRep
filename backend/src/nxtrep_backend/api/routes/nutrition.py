@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date
 from typing import Annotated
 from uuid import UUID
@@ -8,9 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nxtrep_backend.agents.nutrition_vision import (
     FoodImageRecognitionError,
     FoodNutritionFallbackError,
+    FoodVisionUnavailableError,
     GlmFoodImageRecognizer,
     GlmFoodNutritionFallbackEstimator,
 )
+from nxtrep_backend.agents.tools.common import confirmation_payload
 from nxtrep_backend.api.deps import CurrentUser, DbSession
 from nxtrep_backend.api.errors import ApiError
 from nxtrep_backend.api.idempotency import (
@@ -24,9 +27,12 @@ from nxtrep_backend.core.config import (
     StorageConfigurationError,
     get_settings,
 )
+from nxtrep_backend.providers.model_errors import VisionModelBusyError
 from nxtrep_backend.providers.models import (
     ModelConfigurationError,
-    build_vision_model,
+    build_food_fallback_vision_model,
+    build_food_vision_model,
+    build_text_model,
 )
 from nxtrep_backend.providers.storage import (
     StorageProviderError,
@@ -37,6 +43,7 @@ from nxtrep_backend.repositories.media import (
     SqlAlchemyImageAssetRepository,
 )
 from nxtrep_backend.repositories.nutrition import SqlAlchemyNutritionRepository
+from nxtrep_backend.repositories.water import SqlAlchemyWaterRepository
 from nxtrep_backend.schemas.confirmation import ConfirmationSubmitResponse
 from nxtrep_backend.schemas.nutrition import (
     DailyNutritionSummaryResponse,
@@ -52,6 +59,7 @@ from nxtrep_backend.schemas.nutrition import (
     FrequentFoodResponse,
     NutritionAdviceRequest,
     NutritionAdviceResponse,
+    NutritionEntryCopyRequest,
     NutritionEntryCreateRequest,
     NutritionEntryDeleteRequest,
     NutritionEntryDraftResponse,
@@ -60,6 +68,7 @@ from nxtrep_backend.schemas.nutrition import (
     NutritionEntryUpdateRequest,
     NutritionImageDraftResponse,
     NutritionImageEstimateRequest,
+    NutritionPendingEntryRevisionRequest,
     NutritionTargetDraftRequest,
     NutritionTargetDraftResponse,
     NutritionTargetVersionResponse,
@@ -70,6 +79,7 @@ from nxtrep_backend.schemas.nutrition import (
     RecipeUpdateRequest,
     WeeklyNutritionSummaryResponse,
 )
+from nxtrep_backend.schemas.water import WaterEntryCreateRequest, WaterEntryResponse
 from nxtrep_backend.services.agent_media import (
     AgentImageAssetNotFoundError,
     AgentImageAssetNotReadyError,
@@ -90,6 +100,22 @@ from nxtrep_backend.services.nutrition_image import (
 
 foods_router = APIRouter()
 nutrition_router = APIRouter()
+
+
+@nutrition_router.post("/pending-entries/{confirmation_id}/portions")
+async def revise_pending_meal_portions(
+    confirmation_id: UUID,
+    body: NutritionPendingEntryRevisionRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> dict:
+    try:
+        item = await _service(session).revise_pending_entry(user.id, confirmation_id, body)
+        return confirmation_payload(item)
+    except RuntimeError as exc:
+        _raise_nutrition_error(exc)
+
+
 recipes_router = APIRouter()
 EntryDate = Annotated[date, Query(alias="date")]
 
@@ -112,10 +138,16 @@ def _build_nutrition_image_estimator(
         storage,
     )
 
-    vision_model = build_vision_model(settings)
-
-    recognizer = GlmFoodImageRecognizer(vision_model)
-    fallback_estimator = GlmFoodNutritionFallbackEstimator(vision_model)
+    # At most 45s recognition + optional 15s explicit fallback + 20s nutrition.
+    # Do not abort reasoning models at 20s and silently use the older vision model.
+    vision_model = build_food_vision_model(settings)
+    fallback_model = build_food_fallback_vision_model(settings)
+    recognizer = GlmFoodImageRecognizer(vision_model, fallback_model)
+    # Once food names are known, common nutrition values are a text knowledge
+    # task. Sending the photo again confuses portion grams with a 100g basis.
+    fallback_estimator = GlmFoodNutritionFallbackEstimator(
+        build_text_model(settings, timeout_seconds=20, max_retries=0)
+    )
 
     matcher = FoodCatalogMatcher(SqlAlchemyNutritionRepository(session))
     calculator = NutritionDraftCalculator()
@@ -331,6 +363,37 @@ async def list_nutrition_entries(
     return [_entry_response(item) for item in items]
 
 
+@nutrition_router.get("/entries/recent", response_model=list[NutritionEntryResponse])
+async def list_recent_nutrition_entries(
+    date_value: EntryDate, user: CurrentUser, session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+) -> list[NutritionEntryResponse]:
+    entries = await SqlAlchemyNutritionRepository(session).list_recent_entries(
+        user.id, date_value, limit
+    )
+    return [_entry_response(entry) for entry in entries]
+
+
+@nutrition_router.post("/entries/{entry_id}/copy", response_model=NutritionEntryResponse,
+                       status_code=201)
+async def copy_nutrition_entry(
+    entry_id: UUID, body: NutritionEntryCopyRequest, idempotency_key: IdempotencyKey,
+    user: CurrentUser, session: DbSession,
+) -> NutritionEntryResponse:
+    idem, decision = await begin_idempotent(
+        session, user.id, idempotency_key, f"POST /nutrition/entries/{entry_id}/copy",
+        body.model_dump(mode="json"),
+    )
+    if replayed := replay_response(decision, NutritionEntryResponse, 201):
+        return replayed
+    try:
+        response = _entry_response(await _service(session).copy_entry(user.id, entry_id, body))
+    except RuntimeError as exc:
+        _raise_nutrition_error(exc)
+    await complete_idempotent(idem, decision, response, 201)
+    return response
+
+
 @nutrition_router.get("/entries/{entry_id}", response_model=NutritionEntryResponse)
 async def get_nutrition_entry(
     entry_id: UUID,
@@ -378,9 +441,48 @@ async def delete_nutrition_entry(
 async def get_daily_summary(
     date_value: EntryDate, user: CurrentUser, session: DbSession
 ) -> DailyNutritionSummaryResponse:
-    return DailyNutritionSummaryResponse.model_validate(
-        await _service(session).daily_summary(user.id, date_value)
+    summary = await _service(session).daily_summary(user.id, date_value)
+    water = await SqlAlchemyWaterRepository(session).list_entries(user.id, date_value)
+    return DailyNutritionSummaryResponse.model_validate({
+        **summary, "water_ml": sum(entry.amount_ml for entry in water),
+    })
+
+
+@nutrition_router.get("/water", response_model=list[WaterEntryResponse])
+async def list_water_entries(
+    date_value: EntryDate, user: CurrentUser, session: DbSession,
+) -> list[WaterEntryResponse]:
+    entries = await SqlAlchemyWaterRepository(session).list_entries(user.id, date_value)
+    return [WaterEntryResponse.model_validate(entry) for entry in entries]
+
+
+@nutrition_router.post("/water", response_model=WaterEntryResponse, status_code=201)
+async def create_water_entry(
+    body: WaterEntryCreateRequest,
+    idempotency_key: IdempotencyKey,
+    user: CurrentUser,
+    session: DbSession,
+) -> WaterEntryResponse:
+    idem, decision = await begin_idempotent(
+        session, user.id, idempotency_key, "POST /nutrition/water", body.model_dump(mode="json")
     )
+    if replayed := replay_response(decision, WaterEntryResponse, 201):
+        return replayed
+    entry = await SqlAlchemyWaterRepository(session).create(
+        user.id, body.amount_ml, body.consumed_at
+    )
+    response = WaterEntryResponse.model_validate(entry)
+    await complete_idempotent(idem, decision, response, 201)
+    return response
+
+
+@nutrition_router.delete("/water/{entry_id}", status_code=204)
+async def delete_water_entry(
+    entry_id: UUID, user: CurrentUser, session: DbSession,
+) -> Response:
+    if not await SqlAlchemyWaterRepository(session).delete(user.id, entry_id):
+        raise ApiError(status_code=404, code="WATER_ENTRY_NOT_FOUND", message="这条饮水记录不存在")
+    return Response(status_code=204)
 
 
 @nutrition_router.get("/weekly-summary", response_model=WeeklyNutritionSummaryResponse)
@@ -730,10 +832,19 @@ async def estimate_nutrition_image_draft(
     try:
         estimator = _build_nutrition_image_estimator(session)
 
-        return await estimator.estimate(
-            user_id=user.id,
-            body=body,
-        )
+        # Bound the whole recognition + nutrition calculation, not just each
+        # model call. Leave time for a useful error before the app's 90s limit.
+        async with asyncio.timeout(80):
+            return await estimator.estimate(
+                user_id=user.id,
+                body=body,
+            )
+    except TimeoutError as exc:
+        raise ApiError(
+            status_code=504,
+            code="NUTRITION_IMAGE_TIMEOUT",
+            message="这次识别等待超时，照片已保留，请稍后重新识别。",
+        ) from exc
     except AgentImageAssetNotFoundError as exc:
         raise ApiError(
             status_code=404,
@@ -765,7 +876,20 @@ async def estimate_nutrition_image_draft(
         raise ApiError(
             status_code=502,
             code="VISION_MODEL_INVALID_RESPONSE",
-            message="Vision model returned an invalid response",
+            message="这次未能解析食物识别结果，请重新识别。",
+        ) from exc
+    except VisionModelBusyError as exc:
+        raise ApiError(
+            status_code=503,
+            code="VISION_MODEL_BUSY",
+            message="食物识别服务当前繁忙，请稍后重试。",
+            headers={"Retry-After": "5"},
+        ) from exc
+    except FoodVisionUnavailableError as exc:
+        raise ApiError(
+            status_code=503,
+            code="NUTRITION_IMAGE_UNAVAILABLE",
+            message="食物识别服务响应超时或连接中断，请重新识别。",
         ) from exc
     except (
         ModelConfigurationError,

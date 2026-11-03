@@ -173,7 +173,126 @@ void main() {
   });
 
   group('request timeout contract', () {
-    test('maps a stalled request to a network error', () async {
+    for (final status in [401, 503]) {
+      test(
+        'stalled SSE error body $status is bounded and aborts the connection',
+        () async {
+          final bytes = StreamController<List<int>>();
+          final aborted = Completer<void>();
+          final client = ApiClient(
+            config: ApiConfig(
+              baseUri: Uri.parse('https://api.example.test/api/v1'),
+            ),
+            accessTokenProvider: () => null,
+            requestTimeout: const Duration(milliseconds: 25),
+            httpClient: _SseClient((request) async {
+              unawaited(
+                (request as http.AbortableRequest).abortTrigger!.then((_) {
+                  aborted.complete();
+                  unawaited(bytes.close());
+                }),
+              );
+              return http.StreamedResponse(bytes.stream, status);
+            }),
+          );
+          addTearDown(client.close);
+          await expectLater(
+            client.postSse('/agent/chat/stream', body: {}).toList(),
+            throwsA(
+              isA<ApiException>().having(
+                (e) => e.code,
+                'code',
+                'REQUEST_TIMEOUT',
+              ),
+            ),
+          );
+          await aborted.future.timeout(const Duration(seconds: 1));
+        },
+      );
+    }
+
+    test(
+      'invalid stream text remains a protocol error instead of a network error',
+      () async {
+        final client = ApiClient(
+          config: ApiConfig(
+            baseUri: Uri.parse('https://api.example.test/api/v1'),
+          ),
+          accessTokenProvider: () => null,
+          httpClient: _SseClient(
+            (_) async => http.StreamedResponse(
+              Stream.value([0xff]),
+              200,
+              headers: {'content-type': 'text/event-stream'},
+            ),
+          ),
+        );
+        addTearDown(client.close);
+        await expectLater(
+          client.postSse('/agent/chat/stream', body: {}).toList(),
+          throwsA(isA<FormatException>()),
+        );
+      },
+    );
+
+    test(
+      'SSE heartbeats cannot keep a stalled reply waiting forever',
+      () async {
+        final bytes = StreamController<List<int>>();
+        final aborted = Completer<void>();
+        final client = ApiClient(
+          config: ApiConfig(
+            baseUri: Uri.parse('https://api.example.test/api/v1'),
+          ),
+          accessTokenProvider: () => null,
+          streamProgressTimeout: const Duration(milliseconds: 30),
+          httpClient: _SseClient((request) async {
+            if (request is http.AbortableRequest) {
+              unawaited(
+                request.abortTrigger?.then((_) {
+                  aborted.complete();
+                  unawaited(bytes.close());
+                }),
+              );
+            }
+            return http.StreamedResponse(
+              bytes.stream,
+              200,
+              headers: {'content-type': 'text/event-stream'},
+            );
+          }),
+        );
+        bytes.add(
+          utf8.encode('event: message_delta\ndata: {"delta":"已收到"}\n\n'),
+        );
+        final heartbeat = Timer.periodic(const Duration(milliseconds: 5), (_) {
+          if (!bytes.isClosed) bytes.add(utf8.encode(': heartbeat\n\n'));
+        });
+        final received = <String>[];
+        try {
+          await expectLater(
+            client
+                .postSse('/agent/chat/stream', body: {})
+                .forEach((event) => received.add(event.data)),
+            throwsA(
+              isA<ApiException>().having(
+                (error) => error.code,
+                'code',
+                'REQUEST_TIMEOUT',
+              ),
+            ),
+          );
+          expect(received, [contains('已收到')]);
+          await aborted.future.timeout(const Duration(seconds: 1));
+        } finally {
+          heartbeat.cancel();
+          await bytes.close();
+          client.close();
+        }
+      },
+    );
+
+    test('maps a stalled request to a distinct timeout error', () async {
       final stalled = Completer<http.Response>();
       final client = buildClient(
         MockClient((_) => stalled.future),
@@ -186,7 +305,7 @@ void main() {
           isA<ApiException>().having(
             (error) => error.code,
             'code',
-            'NETWORK_ERROR',
+            'REQUEST_TIMEOUT',
           ),
         ),
       );
@@ -210,4 +329,14 @@ void main() {
       expect(result, <String, dynamic>{});
     });
   });
+}
+
+class _SseClient extends http.BaseClient {
+  _SseClient(this.respond);
+
+  final Future<http.StreamedResponse> Function(http.BaseRequest) respond;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) =>
+      respond(request);
 }

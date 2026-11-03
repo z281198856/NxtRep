@@ -8,6 +8,7 @@ from langchain_core.tools import BaseTool
 from nxtrep_backend.agents.tools.common import confirmation_payload, json_safe
 from nxtrep_backend.agents.tools.context import AgentToolContext
 from nxtrep_backend.schemas.training import (
+    CompressionDraftCreateRequest,
     PlanDayInput,
     PlanDraftCreateRequest,
     RescheduleDraftCreateRequest,
@@ -133,17 +134,28 @@ def build_training_draft_tools(context: AgentToolContext) -> list[BaseTool]:
         strategy: Literal["shift", "merge", "skip"],
         target_date: date | None = None,
         reason: str | None = None,
+        replaces_confirmation_id: UUID | None = None,
+        expected_version: int | None = None,
     ) -> dict:
-        """Propose shifting, merging, or skipping a missed workout."""
-        draft = await context.training_service.create_reschedule_draft(
-            context.user_id,
-            RescheduleDraftCreateRequest(
-                missed_event_id=missed_event_id,
-                strategy=strategy,
-                target_date=target_date,
-                reason=reason,
-            ),
+        """Propose shifting, merging, or skipping an uncompleted workout.
+
+        To revise a pending reschedule, read its real ID/version and original event,
+        then pass replaces_confirmation_id and expected_version. A successful new
+        draft invalidates the old card; validation failure preserves it.
+        """
+        body = RescheduleDraftCreateRequest(
+            missed_event_id=missed_event_id, strategy=strategy,
+            target_date=target_date, reason=reason,
         )
+        confirmation = None
+        if replaces_confirmation_id is not None:
+            if expected_version is None:
+                raise ValueError("expected_version is required for replacement")
+            draft, confirmation = await context.training_service.revise_pending_reschedule(
+                context.user_id, replaces_confirmation_id, expected_version, body
+            )
+        else:
+            draft = await context.training_service.create_reschedule_draft(context.user_id, body)
         draft_result = {
             "id": str(draft.id),
             "status": draft.status,
@@ -161,11 +173,10 @@ def build_training_draft_tools(context: AgentToolContext) -> list[BaseTool]:
                 "draft": draft_result,
                 "confirmation": None,
             }
-        confirmation = await context.training_service.submit_reschedule(
-            context.user_id,
-            draft.id,
-            draft.version,
-        )
+        if confirmation is None:
+            confirmation = await context.training_service.submit_reschedule(
+                context.user_id, draft.id, draft.version,
+            )
         draft_result["version"] = draft.version
         draft_result["status"] = draft.status
         return {
@@ -174,4 +185,52 @@ def build_training_draft_tools(context: AgentToolContext) -> list[BaseTool]:
             "confirmation": confirmation_payload(confirmation),
         }
 
-    return [propose_training_plan, propose_schedule_change]
+    @tool
+    async def propose_recovery_adjustment(
+        event_id: UUID,
+        target_minutes: Literal[15, 30, 45],
+        reason: str,
+    ) -> dict:
+        """Propose a shorter unstarted training session using recorded recovery and calendar facts.
+
+        First read the calendar/recovery. Existing pain records require review or
+        moving/skipping the session instead; compression is not pain treatment.
+        """
+        event = await context.training_service.repository.get_calendar_event(
+            context.user_id, event_id
+        )
+        if event is None:
+            return {"status": "not_found", "message": "没有找到对应训练安排。"}
+        recovery = await context.body_service.recovery_status(context.user_id, event.scheduled_date)
+        if recovery["pain_records"]:
+            return {
+                "status": "needs_review",
+                "message": "存在疼痛记录，先核对状态；不能仅缩短训练来处理疼痛。",
+                "recovery": json_safe(recovery),
+            }
+        draft = await context.training_service.create_compression_draft(
+            context.user_id,
+            CompressionDraftCreateRequest(
+                event_id=event_id, target_minutes=target_minutes, reason=reason
+            ),
+        )
+        confirmation = await context.training_service.submit_reschedule(
+            context.user_id,
+            draft.id,
+            draft.version,
+        )
+        return {
+            "status": "confirmation_required",
+            "draft": {
+                "strategy": "compression",
+                "before_events": json_safe(draft.before_events),
+                "after_events": json_safe(draft.after_events),
+                "duration_change_minutes": draft.duration_change_minutes,
+                "volume_change_percent": str(draft.volume_change_percent),
+                "recovery": json_safe(recovery),
+                "warnings": draft.warnings,
+            },
+            "confirmation": confirmation_payload(confirmation),
+        }
+
+    return [propose_training_plan, propose_schedule_change, propose_recovery_adjustment]

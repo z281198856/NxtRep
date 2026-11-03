@@ -12,8 +12,12 @@ def make_repository() -> MagicMock:
     repository = MagicMock(spec=SqlAlchemyAgentRunRepository)
     repository.add = AsyncMock(side_effect=lambda item: item)
     repository.refresh = AsyncMock()
+    repository.refresh_locked = AsyncMock()
     repository.flush = AsyncMock()
     repository.commit = AsyncMock()
+    repository.rollback = AsyncMock()
+    repository.lock_conversation = AsyncMock(return_value=True)
+    repository.list_active = AsyncMock(return_value=[])
     return repository
 
 
@@ -65,8 +69,9 @@ async def test_check_cancelled_refreshes_running_run_without_writing() -> None:
     result = await AgentRunService(repository).check_cancelled(run=run)
 
     assert result is run
-    repository.refresh.assert_awaited_once_with(run)
+    assert repository.refresh.await_count == 1
     repository.commit.assert_not_awaited()
+    repository.refresh_locked.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -83,7 +88,7 @@ async def test_check_cancelled_rejects_already_cancelled_run_without_writing() -
     with pytest.raises(AgentRunCancelledError):
         await AgentRunService(repository).check_cancelled(run=run)
 
-    repository.refresh.assert_awaited_once_with(run)
+    assert repository.refresh.await_count == 2
     repository.commit.assert_not_awaited()
 
 

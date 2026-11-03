@@ -1,16 +1,21 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langchain.tools import tool
 from langchain_core.tools import BaseTool
 
 from nxtrep_backend.agents.tools.common import confirmation_payload, json_safe
 from nxtrep_backend.agents.tools.context import AgentToolContext
-from nxtrep_backend.core.timezones import CHINA_TIMEZONE
 from nxtrep_backend.repositories.workout import WorkoutAggregate
-from nxtrep_backend.schemas.workout import ProgressionDraftCreateRequest
-from nxtrep_backend.services.workout import WorkoutNotFoundError
+from nxtrep_backend.schemas.workout import (
+    ProgressionDraftCreateRequest,
+    WorkoutSetCorrectionRequest,
+    WorkoutSetVoidRequest,
+)
+from nxtrep_backend.services.workout import WorkoutConflictError, WorkoutNotFoundError
 
 
 def _aggregate_payload(aggregate: WorkoutAggregate) -> dict:
@@ -34,6 +39,8 @@ def _aggregate_payload(aggregate: WorkoutAggregate) -> dict:
                 "target": json_safe(item.target_snapshot),
                 "sets": [
                     {
+                        "id": str(workout_set.id),
+                        "version": workout_set.version,
                         "set_index": workout_set.set_index,
                         "weight_kg": str(workout_set.weight_kg),
                         "reps": workout_set.reps,
@@ -52,11 +59,31 @@ def _aggregate_payload(aggregate: WorkoutAggregate) -> dict:
 
 def build_workout_read_tools(context: AgentToolContext) -> list[BaseTool]:
     @tool
-    async def read_recent_workouts(days: int = 14) -> dict:
-        """Read a summary of the current user's recent workouts."""
+    async def read_recent_workouts(
+        days: int = 14,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        period: Literal["this_week", "last_week"] | None = None,
+        timezone: str = "Asia/Shanghai",
+    ) -> dict:
+        """Read workouts. Use period=this_week or last_week for calendar weeks (Monday start)."""
+        try:
+            zone = ZoneInfo(timezone)
+        except ZoneInfoNotFoundError:
+            return {"status": "invalid_request", "message": "无法识别查询时区，请核对时区。"}
+        today = datetime.now(zone).date()
+        if period is not None:
+            if start_date is not None or end_date is not None:
+                return {"status": "invalid_request", "message": "周区间与自定义日期只能选择一种。"}
+            monday = today - timedelta(days=today.weekday())
+            start_date = monday if period == "this_week" else monday - timedelta(days=7)
+            end_date = today if period == "this_week" else monday - timedelta(days=1)
         safe_days = min(max(days, 1), 90)
-        end_date = datetime.now(CHINA_TIMEZONE).date()
-        start_date = end_date - timedelta(days=safe_days - 1)
+        end_date = end_date or today
+        start_date = start_date or end_date - timedelta(days=safe_days - 1)
+        if start_date > end_date or (end_date - start_date).days > 89:
+            return {"status": "invalid_request", "message": "训练查询范围须为 1 至 90 天。"}
+        safe_days = (end_date - start_date).days + 1
         history = await context.workout_service.list_history(
             user_id=context.user_id,
             start_date=start_date,
@@ -64,6 +91,7 @@ def build_workout_read_tools(context: AgentToolContext) -> list[BaseTool]:
             status=None,
             page=1,
             page_size=100,
+            timezone=timezone,
         )
         total_sets = sum(item.completed_sets for item in history.list)
         total_volume = sum(
@@ -183,6 +211,16 @@ def build_workout_draft_tools(context: AgentToolContext) -> list[BaseTool]:
             workout_id,
             ProgressionDraftCreateRequest(exercise_ids=exercise_ids),
         )
+        if not draft.suggestions:
+            return {
+                "status": "needs_review",
+                "draft": {
+                    "id": str(draft.id),
+                    "suggestions": [],
+                    "warnings": ["没有可用于递增的有效训练组，请先完成并记录训练。"],
+                },
+                "confirmation": None,
+            }
         confirmation = await context.workout_service.submit_progression(
             context.user_id,
             workout_id,
@@ -201,3 +239,124 @@ def build_workout_draft_tools(context: AgentToolContext) -> list[BaseTool]:
         }
 
     return [propose_progression]
+
+
+def build_workout_correction_tools(context: AgentToolContext) -> list[BaseTool]:
+    read_versions: dict[tuple[UUID, UUID], int] = {}
+    proposals: dict[str, dict] = {}
+
+    @tool
+    async def read_workout_set_for_change(
+        exercise_name: str,
+        set_index: int | None = None,
+        workout_date: date | None = None,
+        workout_id: UUID | None = None,
+    ) -> dict:
+        """Locate owned sets by workout/date, exercise and group; ask on ambiguity."""
+        if workout_id is None and workout_date is None:
+            return {"status": "needs_review", "message": "请先确定是哪一天或哪次训练的记录。"}
+        if not exercise_name.strip() or (set_index is not None and set_index < 1):
+            return {"status": "needs_review", "message": "请核对动作名称和训练组数。"}
+        if workout_id is None:
+            history = await context.workout_service.list_history(
+                user_id=context.user_id,
+                start_date=workout_date,
+                end_date=workout_date,
+                status=None,
+                page=1,
+                page_size=20,
+                timezone="Asia/Shanghai",
+            )
+            if history.has_more:
+                return {"status": "needs_review", "message": "当天有多次训练，请先明确哪次训练。"}
+            workout_ids = [item.id for item in history.list]
+        else:
+            workout_ids = [workout_id]
+        candidates = []
+        keyword = "".join(exercise_name.casefold().split())
+        for identifier in workout_ids:
+            try:
+                aggregate = await context.workout_service.get_aggregate(context.user_id, identifier)
+            except WorkoutNotFoundError:
+                continue
+            local_date = aggregate.workout.started_at.astimezone(ZoneInfo("Asia/Shanghai")).date()
+            if workout_date is not None and local_date != workout_date:
+                continue
+            for exercise in aggregate.exercises:
+                normalized = "".join(exercise.name_snapshot.casefold().split())
+                if keyword not in normalized:
+                    continue
+                for item in aggregate.sets_by_exercise.get(exercise.id, []):
+                    if set_index is not None and item.set_index != set_index:
+                        continue
+                    candidates.append(
+                        {
+                            "workout_id": str(identifier),
+                            "set_id": str(item.id),
+                            "version": item.version,
+                            "date": local_date.isoformat(),
+                            "exercise_name": exercise.name_snapshot,
+                            "set_index": item.set_index,
+                            "weight_kg": str(item.weight_kg),
+                            "reps": item.reps,
+                        }
+                    )
+        exact = [
+            item
+            for item in candidates
+            if "".join(item["exercise_name"].casefold().split()) == keyword
+        ]
+        candidates = exact or candidates
+        if len(candidates) != 1:
+            return {
+                "status": "needs_review",
+                "candidates": candidates,
+                "message": "有多个可能的训练组，请选择具体动作、训练或第几组。"
+                if candidates
+                else "未找到对应有效训练组，请核对日期、动作及组数。",
+            }
+        selected = candidates[0]
+        read_versions[(UUID(selected["workout_id"]), UUID(selected["set_id"]))] = selected[
+            "version"
+        ]
+        return {"status": "available", "selected_set": selected}
+
+    async def propose(workout_id, set_id, body):
+        if read_versions.get((workout_id, set_id)) != body.expected_version:
+            return {"status": "needs_review", "message": "请先读取并核对该训练组的最新内容。"}
+        key = f"{type(body).__name__}:{workout_id}:{set_id}:" + body.model_dump_json(
+            exclude_unset=True
+        )
+        if key in proposals:
+            return proposals[key]
+        try:
+            confirmation = await context.workout_service.propose_set_change(
+                context.user_id, workout_id, set_id, body
+            )
+        except (WorkoutNotFoundError, WorkoutConflictError):
+            return {
+                "status": "needs_review",
+                "message": "记录不存在、已作废或版本变化，请重新读取核对。",
+            }
+        payload = {
+            "status": "confirmation_required",
+            "confirmation": confirmation_payload(confirmation),
+        }
+        proposals[key] = payload
+        return payload
+
+    @tool
+    async def propose_workout_set_update(
+        workout_id: UUID, set_id: UUID, changes: WorkoutSetCorrectionRequest
+    ) -> dict:
+        """Draft a read and selected recorded set's weight/reps correction; approval required."""
+        return await propose(workout_id, set_id, changes)
+
+    @tool
+    async def propose_workout_set_void(
+        workout_id: UUID, set_id: UUID, request: WorkoutSetVoidRequest
+    ) -> dict:
+        """Draft voiding one selected mistaken set; preserve history and require approval."""
+        return await propose(workout_id, set_id, request)
+
+    return [read_workout_set_for_change, propose_workout_set_update, propose_workout_set_void]

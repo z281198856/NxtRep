@@ -4,6 +4,7 @@ class ProactiveSettings {
     required this.categories,
     required this.frequency,
     required this.version,
+    this.quietHours,
   });
 
   factory ProactiveSettings.fromJson(Map<String, dynamic> json) =>
@@ -12,12 +13,16 @@ class ProactiveSettings {
         categories: Map<String, dynamic>.from(json['categories'] as Map? ?? {}),
         frequency: json['frequency'] as String? ?? 'important_only',
         version: json['version'] as int,
+        quietHours: json['quiet_hours'] == null
+            ? null
+            : Map<String, dynamic>.from(json['quiet_hours'] as Map),
       );
 
   final bool enabled;
   final Map<String, dynamic> categories;
   final String frequency;
   final int version;
+  final Map<String, dynamic>? quietHours;
 
   bool get coachEnabled => enabled && categories['proactive_coach'] == true;
 }

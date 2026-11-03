@@ -1,3 +1,4 @@
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -10,6 +11,44 @@ from nxtrep_backend.services.profile import (
     ProfileService,
     ProfileVersionConflictError,
 )
+
+
+@pytest.mark.asyncio
+async def test_profile_weight_is_new_history_entry_and_version_protects_retry():
+    user = uuid4()
+    profile = Profile(user_id=user, version=1)
+    repository = MagicMock(spec=SqlAlchemyProfileRepository)
+    repository.get_by_user_id = AsyncMock(return_value=profile)
+    body = MagicMock()
+    body.add_measurement = AsyncMock()
+    service = ProfileService(repository, body)
+    result = await service.update_profile(
+        user_id=user,
+        changes={"height_cm": Decimal("173"), "weight_kg": Decimal("70.5")},
+        expected_version=1,
+    )
+    assert result.version == 2 and result.height_cm == Decimal("173")
+    measurement = body.add_measurement.await_args.args[0]
+    assert measurement.user_id == user and measurement.weight_kg == Decimal("70.5")
+    assert measurement.source == "profile" and measurement.measured_at.tzinfo is not None
+    with pytest.raises(ProfileVersionConflictError):
+        await service.update_profile(
+            user_id=user, changes={"weight_kg": Decimal("70.5")}, expected_version=1
+        )
+    assert body.add_measurement.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_blank_weight_does_not_delete_measurement_history():
+    user = uuid4()
+    repository = MagicMock(spec=SqlAlchemyProfileRepository)
+    repository.get_by_user_id = AsyncMock(return_value=Profile(user_id=user, version=1))
+    body = MagicMock()
+    body.add_measurement = AsyncMock()
+    await ProfileService(repository, body).update_profile(
+        user_id=user, changes={"weight_kg": None}, expected_version=1
+    )
+    body.add_measurement.assert_not_awaited()
 
 
 @pytest.mark.asyncio

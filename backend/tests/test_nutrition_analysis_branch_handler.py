@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from test_nutrition_record_draft_branch_handler import make_analysis as complete_analysis
 
 from nxtrep_backend.schemas.agent import AgentIntentTask
 from nxtrep_backend.schemas.media import ImagePurpose
@@ -151,10 +152,24 @@ async def test_handler_returns_multiple_foods_and_confirmation_flag() -> None:
         images=(image,),
         notes=branch_input.message,
     )
-    assert result.status == "completed"
+    assert result.status == "needs_input"
+    assert result.missing_fields == ["food_selection"]
     assert result.result == analysis.model_dump(mode="json")
     assert len(result.result["recognition"]["foods"]) == 2
-    assert result.requires_confirmation is True
+    assert result.requires_confirmation is False
+    assert result.result["calculation"]["requires_confirmation"] is True
+
+
+@pytest.mark.asyncio
+async def test_completed_photo_analysis_resolves_observed_fields_and_optional_profile():
+    service = make_service()
+    service.analyze.return_value = complete_analysis()
+    result = await NutritionAnalysisBranchHandler(service).execute(make_input(
+        images=[make_image()], missing_fields=[
+            "food_images", "food_selection", "amount_g", "age", "weight_kg", "body_fat_percent",
+        ],
+    ))
+    assert result.status == "completed" and not result.missing_fields
 
 
 @pytest.mark.asyncio

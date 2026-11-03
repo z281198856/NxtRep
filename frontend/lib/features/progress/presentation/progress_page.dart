@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/offline/form_draft.dart';
+import '../../../core/settings/app_preferences.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../domain/body_models.dart';
 import 'navy_body_fat_sheet.dart';
@@ -30,22 +32,12 @@ class _ProgressPageState extends State<ProgressPage> {
     widget.controller.refresh();
   }
 
-  Future<void> _openMeasurement([BodyMeasurement? measurement]) async {
-    final input = await showModalBottomSheet<BodyMeasurementInput>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (_) => _MeasurementSheet(initial: measurement),
-    );
-    if (input == null) return;
-    final saved = measurement == null
-        ? await widget.controller.add(input)
-        : await widget.controller.update(measurement, input);
-    if (!mounted || !saved) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(measurement == null ? '身体数据已记录' : '身体数据已更新')),
-    );
-  }
+  Future<void> _openMeasurement([BodyMeasurement? measurement]) =>
+      showBodyMeasurementEntry(
+        context,
+        widget.controller,
+        measurement: measurement,
+      );
 
   Future<void> _openNavyEstimator() async {
     final saved = await showModalBottomSheet<bool>(
@@ -83,12 +75,12 @@ class _ProgressPageState extends State<ProgressPage> {
                   AppPageHeader(
                     title: '进展',
                     subtitle: '看趋势，不被单次波动影响',
-                    trailing: IconButton.filled(
-                      tooltip: '记录身体数据',
+                    trailing: FilledButton.icon(
                       onPressed: controller.submitting
                           ? null
                           : () => _openMeasurement(),
                       icon: const Icon(Icons.add_rounded),
+                      label: const Text('记体重 / 体脂'),
                     ),
                   ),
                   const SizedBox(height: 18),
@@ -386,10 +378,21 @@ class _TrendSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final metric = controller.selectedMetric;
     final points = controller.trend;
-    final latest = points.isEmpty ? null : points.last.smoothedValue;
+    final units = AppPreferencesScope.unitsOf(context);
+    double convert(double value) => switch (metric) {
+      BodyMetric.weight => units.weight(value),
+      BodyMetric.waist => units.length(value),
+      BodyMetric.bodyFat => value,
+    };
+    final unit = switch (metric) {
+      BodyMetric.weight => units.weightLabel,
+      BodyMetric.waist => units.lengthLabel,
+      BodyMetric.bodyFat => '%',
+    };
+    final latest = points.isEmpty ? null : convert(points.last.smoothedValue);
     final change = points.length < 2
         ? null
-        : points.last.smoothedValue - points.first.smoothedValue;
+        : convert(points.last.smoothedValue - points.first.smoothedValue);
     final color = _metricColor(metric);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -439,7 +442,7 @@ class _TrendSection extends StatelessWidget {
                             style: Theme.of(context).textTheme.headlineMedium,
                             children: [
                               TextSpan(
-                                text: ' ${metric.unit}',
+                                text: ' $unit',
                                 style: Theme.of(context).textTheme.labelMedium,
                               ),
                             ],
@@ -451,7 +454,7 @@ class _TrendSection extends StatelessWidget {
                   if (change != null)
                     StatusPill(
                       label:
-                          '${change >= 0 ? '+' : ''}${change.toStringAsFixed(1)} ${metric.unit}',
+                          '${change >= 0 ? '+' : ''}${change.toStringAsFixed(1)} $unit',
                       color: color,
                       icon: change >= 0
                           ? Icons.trending_up_rounded
@@ -489,7 +492,7 @@ class _TrendSection extends StatelessWidget {
               else ...[
                 Semantics(
                   label:
-                      '${metric.label}趋势，共 ${points.length} 个数据点，最新 ${latest?.toStringAsFixed(1)} ${metric.unit}',
+                      '${metric.label}趋势，共 ${points.length} 个数据点，最新 ${latest?.toStringAsFixed(1)} $unit',
                   child: SizedBox(
                     width: double.infinity,
                     height: 150,
@@ -652,15 +655,15 @@ class _MeasurementTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final values = <String>[
       if (measurement.weightKg case final value?)
-        '${value.toStringAsFixed(1)} kg',
+        AppPreferencesScope.unitsOf(context).formatWeight(value),
       if (measurement.waistCm case final value?)
-        '腰围 ${value.toStringAsFixed(1)} cm',
+        '腰围 ${AppPreferencesScope.unitsOf(context).formatLength(value)}',
       if (measurement.bodyFatPercent case final value?)
         '手填体脂 ${value.toStringAsFixed(1)}%',
       if (measurement.neckCm case final value?)
-        '颈围 ${value.toStringAsFixed(1)} cm',
+        '颈围 ${AppPreferencesScope.unitsOf(context).formatLength(value)}',
       if (measurement.hipCm case final value?)
-        '臀围 ${value.toStringAsFixed(1)} cm',
+        '臀围 ${AppPreferencesScope.unitsOf(context).formatLength(value)}',
     ];
     return AppSurface(
       onTap: onTap,
@@ -795,7 +798,8 @@ class _PersonalRecordTile extends StatelessWidget {
           ),
           Text(
             isWeight
-                ? '${record.value.toStringAsFixed(1)} kg'
+                ? AppPreferencesScope.unitsOf(context)
+                      .formatWeight(record.value)
                 : '${record.value.toStringAsFixed(0)} 次',
             style: Theme.of(context).textTheme.titleMedium
                 ?.copyWith(color: AppColors.amber),
@@ -818,6 +822,7 @@ class _MeasurementSheet extends StatefulWidget {
 class _MeasurementSheetState extends State<_MeasurementSheet> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _weight;
+  late final MeasurementUnits _units;
   late final TextEditingController _waist;
   late final TextEditingController _neck;
   late final TextEditingController _hip;
@@ -826,25 +831,64 @@ class _MeasurementSheetState extends State<_MeasurementSheet> {
   late final TextEditingController _notes;
   late DateTime _date;
   String? _error;
+  late final FormDraft _formDraft;
 
   @override
   void initState() {
     super.initState();
     final initial = widget.initial;
-    _weight = TextEditingController(text: _initialValue(initial?.weightKg));
-    _waist = TextEditingController(text: _initialValue(initial?.waistCm));
-    _neck = TextEditingController(text: _initialValue(initial?.neckCm));
-    _hip = TextEditingController(text: _initialValue(initial?.hipCm));
+    _units = AppPreferencesScope.readUnits(context);
+    _weight = TextEditingController(
+      text: _units.weightInput(initial?.weightKg),
+    );
+    _waist = TextEditingController(text: _units.lengthInput(initial?.waistCm));
+    _neck = TextEditingController(text: _units.lengthInput(initial?.neckCm));
+    _hip = TextEditingController(text: _units.lengthInput(initial?.hipCm));
     _bodyFat = TextEditingController(
       text: _initialValue(initial?.bodyFatPercent),
     );
     _conditions = TextEditingController(text: initial?.conditions ?? '');
     _notes = TextEditingController(text: initial?.notes ?? '');
     _date = initial?.measuredAt.toLocal() ?? DateTime.now();
+    _formDraft = FormDraft(
+      records: LocalRecordsScope.read(context),
+      key: 'measurement:${initial?.id ?? 'new'}',
+      label: initial == null ? '身体数据' : '修改身体数据',
+      fields: {
+        'weight': _weight,
+        'waist': _waist,
+        'neck': _neck,
+        'hip': _hip,
+        'fat': _bodyFat,
+        'conditions': _conditions,
+        'notes': _notes,
+      },
+      isActive: () => mounted,
+      extras: () => {
+        'date': _date.toIso8601String(),
+        'imperial': _units.imperial,
+      },
+      restoreExtras: (data) {
+        _date = DateTime.tryParse(data['date'] as String? ?? '') ?? _date;
+        final previous = MeasurementUnits(imperial: data['imperial'] == true);
+        if (previous.imperial != _units.imperial) {
+          final weight = previous.parseWeight(_weight.text);
+          if (weight != null) _weight.text = _units.weightInput(weight);
+          for (final field in [_waist, _neck, _hip]) {
+            final cm = previous.parseLength(field.text);
+            if (cm != null) field.text = _units.lengthInput(cm);
+          }
+        }
+      },
+      onRestored: () {
+        if (mounted) setState(() {});
+      },
+    );
   }
 
   @override
   void dispose() {
+    _formDraft.dispose();
     for (final controller in [
       _weight,
       _waist,
@@ -878,7 +922,10 @@ class _MeasurementSheetState extends State<_MeasurementSheet> {
       firstDate: DateTime(2020),
       lastDate: DateTime.now(),
     );
-    if (value != null) setState(() => _date = value);
+    if (value != null) {
+      setState(() => _date = value);
+      _formDraft.save();
+    }
   }
 
   void _submit() {
@@ -893,10 +940,16 @@ class _MeasurementSheetState extends State<_MeasurementSheet> {
     );
     final input = BodyMeasurementInput(
       measuredAt: measuredAt,
-      weightKg: _value(_weight),
-      waistCm: _value(_waist),
-      neckCm: _value(_neck),
-      hipCm: _value(_hip),
+      weightKg: _units.parseWeight(
+        _weight.text,
+        original: widget.initial?.weightKg,
+      ),
+      waistCm: _units.parseLength(
+        _waist.text,
+        original: widget.initial?.waistCm,
+      ),
+      neckCm: _units.parseLength(_neck.text, original: widget.initial?.neckCm),
+      hipCm: _units.parseLength(_hip.text, original: widget.initial?.hipCm),
       bodyFatPercent: _value(_bodyFat),
       conditions: _text(_conditions),
       notes: _text(_notes),
@@ -905,6 +958,7 @@ class _MeasurementSheetState extends State<_MeasurementSheet> {
       setState(() => _error = '请至少填写一项身体数据');
       return;
     }
+    _formDraft.dispose();
     Navigator.pop(context, input);
   }
 
@@ -938,17 +992,41 @@ class _MeasurementSheetState extends State<_MeasurementSheet> {
               const SizedBox(height: 14),
               Row(
                 children: [
-                  Expanded(child: _measurementField(_weight, '体重（kg）', 500)),
+                  Expanded(
+                    child: _measurementField(
+                      _weight,
+                      '体重（${_units.weightLabel}）',
+                      _units.weight(500),
+                    ),
+                  ),
                   const SizedBox(width: 10),
-                  Expanded(child: _measurementField(_waist, '腰围（cm）', 400)),
+                  Expanded(
+                    child: _measurementField(
+                      _waist,
+                      '腰围（${_units.lengthLabel}）',
+                      _units.length(400),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 11),
               Row(
                 children: [
-                  Expanded(child: _measurementField(_hip, '臀围（cm）', 400)),
+                  Expanded(
+                    child: _measurementField(
+                      _hip,
+                      '臀围（${_units.lengthLabel}）',
+                      _units.length(400),
+                    ),
+                  ),
                   const SizedBox(width: 10),
-                  Expanded(child: _measurementField(_neck, '颈围（cm）', 200)),
+                  Expanded(
+                    child: _measurementField(
+                      _neck,
+                      '颈围（${_units.lengthLabel}）',
+                      _units.length(200),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 11),
@@ -1038,4 +1116,35 @@ String _shortDate(DateTime raw) {
 String _dateLabel(DateTime raw) {
   final date = raw.toLocal();
   return '${date.year} 年 ${date.month} 月 ${date.day} 日';
+}
+
+Future<void> showBodyMeasurementEntry(
+  BuildContext context,
+  ProgressController controller, {
+  BodyMeasurement? measurement,
+}) async {
+  final input = await showModalBottomSheet<BodyMeasurementInput>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (_) => _MeasurementSheet(initial: measurement),
+  );
+  if (input == null) return;
+  final saved = measurement == null
+      ? await controller.add(input)
+      : await controller.update(measurement, input);
+  if (!context.mounted || !saved) return;
+  await clearSubmittedDraft(context, 'measurement:${measurement?.id ?? 'new'}');
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(
+        controller.savedLocally
+            ? '已保存在本机，联网后同步'
+            : measurement == null
+            ? '身体数据已记录'
+            : '身体数据已更新',
+      ),
+    ),
+  );
 }

@@ -1,3 +1,5 @@
+import '../../../core/settings/app_preferences.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -36,7 +38,7 @@ class ActivePlanDetailPage extends StatelessWidget {
             const AppEmptyState(
               icon: Icons.event_busy_outlined,
               title: '当前计划暂无训练日',
-              message: '请刷新计划页，或联系 AI 教练检查计划。',
+              message: '请刷新计划页，或联系 AI 私人教练检查计划。',
             )
           else
             for (final day in days)
@@ -63,7 +65,7 @@ class ActivePlanDetailPage extends StatelessWidget {
                           index < day.exercises.length;
                           index++
                         )
-                          _ExerciseRow(
+                          PlanExerciseRow(
                             number: index + 1,
                             exercise: day.exercises[index],
                           ),
@@ -78,8 +80,12 @@ class ActivePlanDetailPage extends StatelessWidget {
   }
 }
 
-class _ExerciseRow extends StatelessWidget {
-  const _ExerciseRow({required this.number, required this.exercise});
+class PlanExerciseRow extends StatelessWidget {
+  const PlanExerciseRow({
+    super.key,
+    required this.number,
+    required this.exercise,
+  });
 
   final int number;
   final Map<String, dynamic> exercise;
@@ -93,7 +99,8 @@ class _ExerciseRow extends StatelessWidget {
     final reps = repMin == repMax ? '$repMin' : '$repMin–$repMax';
     final details = <String>[
       if (sets != null && repMin != null && repMax != null) '$sets 组 × $reps 次',
-      if (exercise['target_load_kg'] case final load?) '目标重量 $load kg',
+      if (double.tryParse('${exercise['target_load_kg']}') case final load?)
+        '目标重量 ${AppPreferencesScope.unitsOf(context).formatWeight(load)}',
       if (exercise['target_rir'] case final reserve?) '每组做完还能再做约 $reserve 次',
       if (exercise['rest_seconds'] case final rest?) '组间休息 $rest 秒',
     ];

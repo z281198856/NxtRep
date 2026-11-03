@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from secrets import token_urlsafe
@@ -36,6 +37,8 @@ def _get_jwt_secret(settings: Settings) -> str:
 def create_access_token(
     user_id: UUID,
     settings: Settings | None = None,
+    *,
+    session_id: UUID | None = None,
 ) -> str:
     configuration = settings or get_settings()
     secret = _get_jwt_secret(configuration)
@@ -49,6 +52,8 @@ def create_access_token(
         "exp": expires_at,
         "jti": str(uuid4()),
     }
+    if session_id is not None:
+        payload["sid"] = str(session_id)
 
     return jwt.encode(
         payload,
@@ -57,10 +62,17 @@ def create_access_token(
     )
 
 
-def decode_access_token(
+@dataclass(frozen=True, slots=True)
+class AccessTokenClaims:
+    user_id: UUID
+    session_id: UUID | None
+    issued_at: int
+
+
+def decode_access_token_claims(
     token: str,
     settings: Settings | None = None,
-) -> UUID:
+) -> AccessTokenClaims:
     configuration = settings or get_settings()
     secret = _get_jwt_secret(configuration)
 
@@ -89,9 +101,14 @@ def decode_access_token(
         raise InvalidAccessTokenError("Invalid access token identifier")
 
     try:
-        return UUID(subject)
-    except ValueError as exc:
+        session_id = UUID(payload["sid"]) if "sid" in payload else None
+        return AccessTokenClaims(UUID(subject), session_id, int(payload["iat"]))
+    except (ValueError, TypeError, AttributeError) as exc:
         raise InvalidAccessTokenError("Invalid access token subject") from exc
+
+
+def decode_access_token(token: str, settings: Settings | None = None) -> UUID:
+    return decode_access_token_claims(token, settings).user_id
 
 
 def create_opaque_token() -> str:

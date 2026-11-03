@@ -113,8 +113,9 @@ backend/src/nxtrep_backend/
 | POST | `/auth/refresh` | 轮换 refresh token | M0 |
 | POST | `/auth/logout` | 撤销当前 refresh session | M0 |
 | POST | `/auth/password/setup` | 预创建账号首次设置密码 | M0 |
-| POST | `/auth/password/change` | 修改密码并可撤销其他设备 session | M0 |
-| GET | `/auth/sessions` | 查看当前账号登录设备 | M3 |
+| POST | `/auth/password/change` | 修改密码并退出旧登录，返回本机新令牌 | M0 |
+| GET | `/auth/sessions` | 查看登录设备及服务端标记的当前设备 | M3 |
+| POST | `/auth/sessions/revoke-others` | 保留当前登录，撤销其他设备登录 | M3 |
 | DELETE | `/auth/sessions/{id}` | 撤销指定设备 session | M3 |
 | GET | `/me` | 当前账号、初始化状态与权限 | M0 |
 | GET | `/profile` | 获取个人档案、目标和限制 | M0 |
@@ -196,6 +197,7 @@ backend/src/nxtrep_backend/
 | GET | `/workouts/{id}` | 训练详情和快照 | M0 |
 | PATCH | `/workouts/{id}/pre-check` | 睡眠、精力、酸痛、疼痛、时间 | M0 |
 | POST | `/workouts/{id}/exercises` | 临时添加动作 | M0 |
+| PATCH | `/workouts/{id}/exercises/{item_id}/target` | 调整本次训练目标组数和组间休息，不改原计划 | M0 |
 | POST | `/workouts/{id}/exercises/{item_id}/replace` | 替换当前动作并记录原因 | M0 |
 | POST | `/workouts/{id}/exercises/{item_id}/skip` | 跳过动作 | M0 |
 | POST | `/workouts/{id}/sets` | 幂等记录一组并立即提交 | M0 |
@@ -235,6 +237,11 @@ backend/src/nxtrep_backend/
 | GET | `/nutrition/entries/{id}` | 饮食记录详情 | M1 |
 | PATCH | `/nutrition/entries/{id}` | 修改并保留 revision | M1 |
 | DELETE | `/nutrition/entries/{id}` | 删除确认流程 | M1 |
+| GET | `/nutrition/entries/recent` | 查看可复制的最近餐食记录 | M1 |
+| POST | `/nutrition/entries/{id}/copy` | 复制餐食到指定日期与餐次 | M1 |
+| GET | `/nutrition/water` | 查看指定日期的饮水记录 | M1 |
+| POST | `/nutrition/water` | 新增饮水记录 | M1 |
+| DELETE | `/nutrition/water/{id}` | 删除误记饮水 | M1 |
 | GET | `/nutrition/daily-summary` | 目标范围、已摄入和剩余量 | M1 |
 | GET | `/nutrition/weekly-summary` | 周平均、记录完整度和自由餐 | M1 |
 | POST | `/nutrition/advice` | 回答能不能吃、吃多少 | M1 |
@@ -316,6 +323,7 @@ backend/src/nxtrep_backend/
 | PATCH | `/agent/conversations/{id}` | 重命名、置顶、归档 | M2 |
 | DELETE | `/agent/conversations/{id}` | 删除会话，不删除全局 Memory | M2 |
 | GET | `/agent/conversations/{id}/messages` | 当前会话消息历史 | M2 |
+| GET | `/agent/conversations/{id}/confirmations` | 恢复当前会话有效待确认草稿及已结束状态，追踪调整后的替换卡 | M2 |
 | POST | `/agent/conversations/{id}/messages` | 发送消息并通过 SSE 返回 Agent 事件 | M2 |
 | POST | `/agent/runs/{id}:cancel` | 请求取消运行 | M2 |
 | GET | `/agent/runs/{id}` | 查询运行、工具和错误状态 | M2 |
@@ -598,3 +606,15 @@ Memory 保存当前用户明确且稳定的长期信息：长期目标、器械�
 5. 饮食、身体数据、趋势、PR 和周报。
 6. Agent 完整工具、Memory 和 RAG。
 7. 离线同步、主动消息、导出删除和图片分析能力。
+
+
+### 本地 Agent 份量与提醒控制补充
+
+| 方法 | 路径 | 功能 |
+| --- | --- | --- |
+| POST | `/nutrition/pending-entries/{confirmation_id}/portions` | 校验归属、待确认状态和 expected_version；替换份量，旧卡失效、新卡仍需确认 |
+| POST | `/agent/proactive/notices/{notification_id}/snooze` | 用户自己的未读提醒延后，until 必须带时区且在未来七天以内 |
+
+`PATCH /notification-settings` 的 quiet_hours 复用 JSON 设置：enabled、start/end (HH:MM)、timezone、pause_until。
+免打扰只隐藏主动提醒并保留通知；暂停期间停止产生新提醒；延后及免打扰结束后刷新列表可见。
+公共联网搜索缓存最长十五分钟、最多128条，最新查询 refresh=true 绕过缓存，保留真实 searched_at。

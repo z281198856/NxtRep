@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hmac import compare_digest
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.exc import IntegrityError
 
@@ -180,28 +180,7 @@ class AccountService:
 
         user.password_setup_required = False
 
-        access_token = create_access_token(
-            user.id,
-            self._settings,
-        )
-        refresh_token = create_opaque_token()
-        refresh_token_expires_at = now + timedelta(days=self._settings.refresh_token_expire_days)
-
-        refresh_session = RefreshSession(
-            user_id=user.id,
-            token_hash=hash_opaque_token(refresh_token),
-            expires_at=refresh_token_expires_at,
-        )
-
-        await self._repository.add_refresh_session(refresh_session)
-
-        return IssuedTokenPair(
-            user=user,
-            access_token=access_token,
-            refresh_token=refresh_token,
-            expires_in=self._settings.access_token_expire_minutes * 60,
-            refresh_expires_in=self._settings.refresh_token_expire_days * 24 * 60 * 60,
-        )
+        return await self._issue_session_tokens(user)
 
     async def login(
         self,
@@ -246,29 +225,7 @@ class AccountService:
         credential.locked_until = None
         user.last_login_at = now
 
-        access_token = create_access_token(
-            user.id,
-            self._settings,
-        )
-        refresh_token = create_opaque_token()
-        refresh_token_expires_at = now + timedelta(days=self._settings.refresh_token_expire_days)
-
-        refresh_session = RefreshSession(
-            user_id=user.id,
-            token_hash=hash_opaque_token(refresh_token),
-            device_name=device_name,
-            expires_at=refresh_token_expires_at,
-        )
-
-        await self._repository.add_refresh_session(refresh_session)
-
-        return IssuedTokenPair(
-            user=user,
-            access_token=access_token,
-            refresh_token=refresh_token,
-            expires_in=self._settings.access_token_expire_minutes * 60,
-            refresh_expires_in=self._settings.refresh_token_expire_days * 24 * 60 * 60,
-        )
+        return await self._issue_session_tokens(user, device_name)
 
     async def refresh_tokens(
         self,
@@ -297,31 +254,19 @@ class AccountService:
         if user.password_setup_required:
             raise InvalidRefreshTokenError("Invalid or expired refresh token")
 
-        # 旧 Refresh Token 使用一次后立即失效。
+        # Rotate the secret under the row lock while preserving the login's
+        # identity, original creation time, and existing access-token binding.
         refresh_session.last_used_at = now
-        refresh_session.revoked_at = now
-
-        access_token = create_access_token(
-            user.id,
-            self._settings,
-        )
         new_refresh_token = create_opaque_token()
-        new_refresh_token_expires_at = now + timedelta(
-            days=self._settings.refresh_token_expire_days
-        )
-
-        new_refresh_session = RefreshSession(
-            user_id=user.id,
-            token_hash=hash_opaque_token(new_refresh_token),
-            device_name=refresh_session.device_name,
-            expires_at=new_refresh_token_expires_at,
-        )
-
-        await self._repository.add_refresh_session(new_refresh_session)
-
+        refresh_session.token_hash = hash_opaque_token(new_refresh_token)
+        refresh_session.expires_at = now + timedelta(days=self._settings.refresh_token_expire_days)
+        if refresh_session.id is None:
+            raise InvalidRefreshTokenError("Invalid login session")
         return IssuedTokenPair(
             user=user,
-            access_token=access_token,
+            access_token=create_access_token(
+                user.id, self._settings, session_id=refresh_session.id
+            ),
             refresh_token=new_refresh_token,
             expires_in=self._settings.access_token_expire_minutes * 60,
             refresh_expires_in=self._settings.refresh_token_expire_days * 24 * 60 * 60,
@@ -355,7 +300,16 @@ class AccountService:
         credential = user.credential
         if user.password_setup_required or credential.password_hash is None:
             raise PasswordSetupRequiredError("Password setup is required")
+        if credential.locked_until is not None and credential.locked_until > now:
+            raise AccountLockedError("Account is temporarily locked")
+        if credential.locked_until is not None:
+            credential.failed_login_attempts = 0
+            credential.locked_until = None
         if not verify_password(current_password, credential.password_hash):
+            credential.failed_login_attempts += 1
+            if credential.failed_login_attempts >= self.max_failed_login_attempts:
+                credential.locked_until = now + self.lockout_duration
+                raise AccountLockedError("Account is temporarily locked")
             raise InvalidCredentialsError("Invalid current password")
         if verify_password(new_password, credential.password_hash):
             raise PasswordReuseError("New password must differ from current password")
@@ -369,22 +323,45 @@ class AccountService:
             revoked_at=now,
         )
 
-        access_token = create_access_token(user.id, self._settings)
+        return await self._issue_session_tokens(user, device_name)
+
+    async def _issue_session_tokens(
+        self, user: User, device_name: str | None = None
+    ) -> IssuedTokenPair:
+        now = datetime.now(UTC)
         refresh_token = create_opaque_token()
-        await self._repository.add_refresh_session(
-            RefreshSession(
-                user_id=user.id,
-                token_hash=hash_opaque_token(refresh_token),
-                device_name=device_name,
-                expires_at=(now + timedelta(days=self._settings.refresh_token_expire_days)),
-            )
+        refresh_session = RefreshSession(
+            id=uuid4(),
+            user_id=user.id,
+            token_hash=hash_opaque_token(refresh_token),
+            device_name=device_name,
+            last_used_at=now,
+            expires_at=now + timedelta(days=self._settings.refresh_token_expire_days),
         )
+        await self._repository.add_refresh_session(refresh_session)
         return IssuedTokenPair(
             user=user,
-            access_token=access_token,
+            access_token=create_access_token(
+                user.id, self._settings, session_id=refresh_session.id
+            ),
             refresh_token=refresh_token,
             expires_in=self._settings.access_token_expire_minutes * 60,
             refresh_expires_in=self._settings.refresh_token_expire_days * 24 * 60 * 60,
+        )
+
+    async def revoke_other_sessions(self, *, user_id: UUID, current_session_id: UUID) -> None:
+        # Serialize bulk account changes in the same order as password changes.
+        user = await self._repository.get_by_id(user_id, for_update=True)
+        current = await self._repository.get_active_refresh_session_by_id(
+            user_id=user_id,
+            session_id=current_session_id,
+        )
+        if user is None or current is None:
+            raise RefreshSessionNotFoundError("Current login session has ended")
+        await self._repository.revoke_active_refresh_sessions(
+            user_id=user_id,
+            revoked_at=datetime.now(UTC),
+            except_session_id=current_session_id,
         )
 
     async def list_sessions(self, *, user_id: UUID) -> list[RefreshSession]:

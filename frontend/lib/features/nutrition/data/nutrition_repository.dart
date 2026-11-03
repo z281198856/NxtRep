@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/network/api_exception.dart';
 import '../domain/nutrition_models.dart';
+import '../domain/water_entry.dart';
 
 class NutritionRepository {
   NutritionRepository(this._apiClient, {Uuid? uuid})
@@ -11,9 +12,50 @@ class NutritionRepository {
   final ApiClient _apiClient;
   final Uuid _uuid;
 
+  Future<List<WaterEntry>> listWater(DateTime date) async {
+    final value = await _apiClient.get(
+      '/nutrition/water',
+      query: {'date': _dateOnly(date)},
+    );
+    if (value is! List<dynamic>) {
+      throw const ApiException(
+        code: 'INVALID_SUCCESS_RESPONSE',
+        message: '饮水记录返回格式不正确',
+      );
+    }
+    return value
+        .map(
+          (item) => WaterEntry.fromJson(Map<String, dynamic>.from(item as Map)),
+        )
+        .toList();
+  }
+
+  Future<void> addWater(
+    int amountMl,
+    DateTime consumedAt, {
+    String? draftKey,
+  }) async {
+    await _apiClient.post(
+      '/nutrition/water',
+      idempotencyKey: _uuid.v4(),
+      localDraftKey: draftKey,
+      body: {
+        'amount_ml': amountMl,
+        'consumed_at': consumedAt.toUtc().toIso8601String(),
+      },
+    );
+  }
+
+  Future<void> deleteWater(String id) async {
+    await _apiClient.delete('/nutrition/water/$id');
+  }
+
   Future<NutritionPhotoDraft> estimatePhoto({
     required String imageAssetId,
     required String mealType,
+    DateTime? eatenAt,
+    String? notes,
+    List<Map<String, dynamic>>? reviewedFoods,
   }) async {
     final json = expectJsonObject(
       await _apiClient.post(
@@ -22,8 +64,9 @@ class NutritionRepository {
         body: {
           'image_asset_id': imageAssetId,
           'meal_type': mealType,
-          'eaten_at': DateTime.now().toUtc().toIso8601String(),
-          'notes': null,
+          'eaten_at': (eatenAt ?? DateTime.now()).toUtc().toIso8601String(),
+          'notes': notes,
+          'reviewed_foods': ?reviewedFoods,
         },
       ),
       context: '餐食照片营养估算接口',
@@ -32,12 +75,14 @@ class NutritionRepository {
   }
 
   Future<NutritionEntry> createPhotoEntry(
-    NutritionPhotoEntryInput input,
-  ) async {
+    NutritionPhotoEntryInput input, {
+    String? draftKey,
+  }) async {
     final json = expectJsonObject(
       await _apiClient.post(
         '/nutrition/entries',
         idempotencyKey: _uuid.v4(),
+        localDraftKey: draftKey,
         body: {
           'meal_type': input.mealType,
           'eaten_at': input.eatenAt.toUtc().toIso8601String(),
@@ -287,14 +332,54 @@ class NutritionRepository {
     return RecipeSummary.fromJson(json);
   }
 
-  Future<NutritionEntry> createManualEntry(ManualNutritionInput input) async {
+  Future<List<NutritionEntry>> recentEntries(DateTime through) async {
+    final value = await _apiClient.get(
+      '/nutrition/entries/recent',
+      query: {'date': _dateOnly(through)},
+    );
+    if (value is! List) {
+      throw const ApiException(
+        code: 'INVALID_SUCCESS_RESPONSE',
+        message: '最近餐食返回格式不正确',
+      );
+    }
+    return value
+        .map(
+          (item) =>
+              NutritionEntry.fromJson(Map<String, dynamic>.from(item as Map)),
+        )
+        .toList();
+  }
+
+  Future<void> copyEntry(
+    NutritionEntry source,
+    String mealType,
+    DateTime eatenAt,
+  ) async {
+    await _apiClient.post(
+      '/nutrition/entries/${source.id}/copy',
+      idempotencyKey: _uuid.v4(),
+      body: {
+        'expected_version': source.version,
+        'meal_type': mealType,
+        'eaten_at': eatenAt.toUtc().toIso8601String(),
+      },
+    );
+  }
+
+  Future<NutritionEntry> createManualEntry(
+    ManualNutritionInput input, {
+    DateTime? eatenAt,
+    String? draftKey,
+  }) async {
     final json = expectJsonObject(
       await _apiClient.post(
         '/nutrition/entries',
         idempotencyKey: _uuid.v4(),
+        localDraftKey: draftKey,
         body: {
           'meal_type': input.mealType,
-          'eaten_at': DateTime.now().toUtc().toIso8601String(),
+          'eaten_at': (eatenAt ?? DateTime.now()).toUtc().toIso8601String(),
           'items': [
             {
               'food_version_id': null,
@@ -318,14 +403,17 @@ class NutritionRepository {
     return NutritionEntry.fromJson(json);
   }
 
-  Future<NutritionEntry> createFoodEntry(FoodServingInput input) async {
+  Future<NutritionEntry> createFoodEntry(
+    FoodServingInput input, {
+    DateTime? eatenAt,
+  }) async {
     final json = expectJsonObject(
       await _apiClient.post(
         '/nutrition/entries',
         idempotencyKey: _uuid.v4(),
         body: {
           'meal_type': input.mealType,
-          'eaten_at': DateTime.now().toUtc().toIso8601String(),
+          'eaten_at': (eatenAt ?? DateTime.now()).toUtc().toIso8601String(),
           'items': [
             {
               'food_version_id': input.food.foodVersionId,

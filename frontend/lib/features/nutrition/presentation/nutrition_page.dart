@@ -2,23 +2,32 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/offline/form_draft.dart';
 import '../../../core/widgets/app_widgets.dart';
+import '../../../core/widgets/day_selector.dart';
 import '../domain/nutrition_models.dart';
+import '../domain/nutrition_date.dart';
+import 'nutrition_copy_sheet.dart';
 import 'food_library_page.dart';
 import 'nutrition_controller.dart';
 import 'nutrition_photo_page.dart';
 import 'nutrition_tools_page.dart';
 import 'widgets/food_line_art.dart';
+import 'water_entry_sheet.dart';
 
 class NutritionPage extends StatefulWidget {
   const NutritionPage({
     super.key,
     required this.controller,
     this.embedded = false,
+    this.onDateSelected,
+    this.onOpenPlan,
   });
 
   final NutritionController controller;
   final bool embedded;
+  final ValueChanged<DateTime>? onDateSelected;
+  final VoidCallback? onOpenPlan;
 
   @override
   State<NutritionPage> createState() => _NutritionPageState();
@@ -31,37 +40,54 @@ class _NutritionPageState extends State<NutritionPage> {
     widget.controller.refresh();
   }
 
-  Future<void> _add([String mealType = 'lunch']) async {
-    final input = await showModalBottomSheet<ManualNutritionInput>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _NutritionEntrySheet(initialMealType: mealType),
-    );
-    if (input != null) {
-      await widget.controller.add(input);
+  void _selectDate(DateTime date) {
+    final callback = widget.onDateSelected;
+    if (callback != null) {
+      callback(date);
+    } else {
+      widget.controller.selectDate(date);
     }
   }
 
+  Future<void> _add([String mealType = 'lunch']) => showManualNutritionEntry(
+    context,
+    widget.controller,
+    widget.controller.selectedDate,
+    mealType,
+  );
+
   Future<void> _openFoods([String mealType = 'lunch']) async {
+    final date = widget.controller.selectedDate;
     final food = await Navigator.of(context).push<FoodItem>(
       MaterialPageRoute<FoodItem>(
         builder: (_) => FoodLibraryPage(controller: widget.controller),
       ),
     );
-    if (food != null && mounted) await _recordFood(food, mealType);
+    if (food != null && mounted) await _recordFood(food, mealType, date);
   }
 
-  Future<void> _recordFood(FoodItem food, [String mealType = 'lunch']) async {
+  Future<void> _recordFood(
+    FoodItem food, [
+    String mealType = 'lunch',
+    DateTime? recordDate,
+  ]) async {
+    final date = recordDate ?? widget.controller.selectedDate;
     final input = await showModalBottomSheet<FoodServingInput>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _FoodServingSheet(food: food, mealType: mealType),
+      builder: (_) =>
+          _FoodServingSheet(food: food, mealType: mealType, recordDate: date),
     );
     if (input == null) return;
-    final saved = await widget.controller.addFood(input);
+    final saved = await widget.controller.addFood(input, date: date);
     if (!mounted || !saved) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('已记录 ${food.name}')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          widget.controller.savedLocally ? '已保存在本机，联网后同步' : '已记录 ${food.name}',
+        ),
+      ),
+    );
   }
 
   Future<void> _editEntry(NutritionEntry entry) async {
@@ -82,7 +108,7 @@ class _NutritionPageState extends State<NutritionPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('删除这条饮食记录？'),
-        content: Text('“${entry.displayName}”将从今日摄入中移除。'),
+        content: Text('“${entry.displayName}”将从当天的饮食记录中移除。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -112,59 +138,91 @@ class _NutritionPageState extends State<NutritionPage> {
   }
 
   Future<void> _openPhoto() async {
+    final date = widget.controller.selectedDate;
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => NutritionPhotoPage(controller: widget.controller),
+        builder: (_) =>
+            NutritionPhotoPage(controller: widget.controller, recordDate: date),
       ),
     );
   }
 
+  Future<void> _openWater() => showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (_) => WaterEntrySheet(controller: widget.controller),
+  );
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: !widget.embedded,
-        leading: widget.embedded
-            ? null
-            : IconButton(
-                tooltip: '返回',
-                onPressed: () => Navigator.maybePop(context),
-                icon: const Icon(Icons.arrow_back_rounded),
-              ),
-        title: const Text('饮食记录'),
-        actions: [
-          IconButton(
-            tooltip: '饮食工具',
-            onPressed: _openTools,
-            icon: const Icon(Icons.auto_awesome_rounded),
-          ),
-          IconButton(
-            tooltip: '刷新',
-            onPressed: widget.controller.loading
+    return ListenableBuilder(
+      listenable: widget.controller,
+      builder: (context, _) {
+        final date = widget.controller.selectedDate;
+        final today = nutritionToday();
+        final isToday = DateUtils.isSameDay(date, today);
+        final canRecord = !date.isAfter(today);
+        final summary = widget.controller.summary;
+        return Scaffold(
+          appBar: AppBar(
+            automaticallyImplyLeading: !widget.embedded,
+            leading: widget.embedded
                 ? null
-                : widget.controller.refresh,
-            icon: const Icon(Icons.refresh_rounded),
+                : IconButton(
+                    tooltip: '返回',
+                    onPressed: () => Navigator.maybePop(context),
+                    icon: const Icon(Icons.arrow_back_rounded),
+                  ),
+            title: const Text('饮食记录'),
+            actions: [
+              if (isToday)
+                IconButton(
+                  tooltip: '饮食工具',
+                  onPressed: _openTools,
+                  icon: const Icon(Icons.auto_awesome_rounded),
+                ),
+              IconButton(
+                tooltip: '刷新',
+                onPressed: widget.controller.loading
+                    ? null
+                    : widget.controller.refresh,
+                icon: const Icon(Icons.refresh_rounded),
+              ),
+              const SizedBox(width: 8),
+            ],
           ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: widget.controller.submitting ? null : _openFoods,
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('添加食品'),
-      ),
-      body: ListenableBuilder(
-        listenable: widget.controller,
-        builder: (context, _) {
-          final summary = widget.controller.summary;
-          return RefreshIndicator(
+          floatingActionButton: !canRecord
+              ? null
+              : FloatingActionButton.extended(
+                  onPressed: widget.controller.submitting ? null : _openFoods,
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  icon: const Icon(Icons.add_rounded),
+                  label: Text(isToday ? '添加食品' : '补记食品'),
+                ),
+          body: RefreshIndicator(
             onRefresh: widget.controller.refresh,
             child: ListView(
+              key: ValueKey(date),
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 108),
               children: [
+                DaySelector(
+                  date: date,
+                  onSelected: _selectDate,
+                  enabled: !widget.controller.submitting,
+                ),
+                if (widget.onOpenPlan != null)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: widget.onOpenPlan,
+                      icon: const Icon(Icons.fitness_center_rounded, size: 18),
+                      label: const Text('查看当天训练'),
+                    ),
+                  ),
+                const SizedBox(height: 12),
                 if (widget.controller.loading && summary == null)
                   const AppSurface(
                     child: Center(
@@ -174,184 +232,271 @@ class _NutritionPageState extends State<NutritionPage> {
                       ),
                     ),
                   ),
-                if (summary != null) _SummaryCard(summary: summary),
-                if (widget.controller.errorMessage case final message?) ...[
+                if (summary != null)
+                  _SummaryCard(
+                    summary: summary,
+                    label: isToday ? '今日摄入' : '当天摄入',
+                  ),
+                if (canRecord) ...[
                   const SizedBox(height: 12),
-                  AppErrorCard(message: message),
-                ],
-                const SizedBox(height: 20),
-                AppSurface(
-                  onTap: widget.controller.submitting ? null : _openPhoto,
-                  color: AppColors.indigoSoft,
-                  padding: const EdgeInsets.all(18),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.camera_alt_rounded,
-                        color: AppColors.indigo,
-                        size: 36,
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '拍照记一餐',
-                              style: Theme.of(context).textTheme.titleLarge,
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              'AI 识别食物并估算热量与三大营养素，确认后保存',
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(color: AppColors.muted),
-                            ),
-                          ],
+                  AppSurface(
+                    key: const ValueKey('nutrition-quick-entries'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 12,
+                    ),
+                    child: Row(
+                      children: [
+                        _MealShortcut(
+                          icon: Icons.free_breakfast_rounded,
+                          label: '早餐',
+                          color: AppColors.amber,
+                          onTap: widget.controller.submitting
+                              ? null
+                              : () => _openFoods('breakfast'),
                         ),
-                      ),
-                      const Icon(
-                        Icons.chevron_right_rounded,
-                        color: AppColors.indigo,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                AppSurface(
-                  onTap: widget.controller.submitting ? null : _openFoods,
-                  padding: const EdgeInsets.all(18),
-                  child: Row(
-                    children: [
-                      const FoodLineArt(name: '鸡胸肉和米饭', size: 68),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '浏览食品库',
-                              style: Theme.of(context).textTheme.titleLarge,
-                            ),
-                            const SizedBox(height: 5),
-                            Text(
-                              '按蛋白质、主食、蔬菜和水果分类查找',
-                              style: Theme.of(context).textTheme.bodyMedium
-                                  ?.copyWith(color: AppColors.muted),
-                            ),
-                          ],
+                        _MealShortcut(
+                          icon: Icons.rice_bowl_rounded,
+                          label: '午餐',
+                          color: AppColors.indigo,
+                          onTap: widget.controller.submitting
+                              ? null
+                              : () => _openFoods('lunch'),
                         ),
-                      ),
-                      const Icon(
-                        Icons.arrow_forward_rounded,
-                        color: AppColors.primary,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-                SectionTitle(
-                  title: '快速记录',
-                  action: TextButton(
-                    onPressed: widget.controller.submitting ? null : _add,
-                    child: const Text('手动填写'),
-                  ),
-                ),
-                const SizedBox(height: 11),
-                AppSurface(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 14,
-                  ),
-                  child: Row(
-                    children: [
-                      _MealShortcut(
-                        icon: Icons.free_breakfast_rounded,
-                        label: '早餐',
-                        color: AppColors.amber,
-                        onTap: () => _openFoods('breakfast'),
-                      ),
-                      _MealShortcut(
-                        icon: Icons.rice_bowl_rounded,
-                        label: '午餐',
-                        color: AppColors.indigo,
-                        onTap: () => _openFoods('lunch'),
-                      ),
-                      _MealShortcut(
-                        icon: Icons.dinner_dining_rounded,
-                        label: '晚餐',
-                        color: AppColors.primary,
-                        onTap: () => _openFoods('dinner'),
-                      ),
-                      _MealShortcut(
-                        icon: Icons.cookie_outlined,
-                        label: '加餐',
-                        color: AppColors.mint,
-                        onTap: () => _openFoods('snack'),
-                      ),
-                    ],
-                  ),
-                ),
-                if (widget.controller.frequentFoods.isNotEmpty) ...[
-                  const SizedBox(height: 25),
-                  const SectionTitle(title: '常用食品'),
-                  const SizedBox(height: 11),
-                  SizedBox(
-                    height: 112,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: widget.controller.frequentFoods.length,
-                      separatorBuilder: (_, _) => const SizedBox(width: 10),
-                      itemBuilder: (context, index) {
-                        final item = widget.controller.frequentFoods[index];
-                        return _FrequentFoodCard(
-                          item: item,
-                          onTap: () => _recordFood(item.food),
-                        );
-                      },
+                        _MealShortcut(
+                          icon: Icons.dinner_dining_rounded,
+                          label: '晚餐',
+                          color: AppColors.primary,
+                          onTap: widget.controller.submitting
+                              ? null
+                              : () => _openFoods('dinner'),
+                        ),
+                        _MealShortcut(
+                          icon: Icons.water_drop_rounded,
+                          label: '记饮水',
+                          color: AppColors.indigo,
+                          detail: summary != null
+                              ? '${summary.waterMl} ml'
+                              : widget.controller.loading
+                              ? '加载中'
+                              : '查看记录',
+                          onTap: widget.controller.submitting
+                              ? null
+                              : _openWater,
+                        ),
+                      ],
                     ),
                   ),
                 ],
-                if (widget.controller.weeklySummary case final weekly?) ...[
-                  const SizedBox(height: 25),
-                  const SectionTitle(title: '本周概览'),
-                  const SizedBox(height: 11),
-                  _WeeklySummaryCard(summary: weekly),
+                if (canRecord) ...[
+                  Wrap(
+                    spacing: 12,
+                    children: [
+                      if (isToday)
+                        TextButton.icon(
+                          onPressed: widget.controller.submitting
+                              ? null
+                              : () => _selectDate(
+                                  today.subtract(const Duration(days: 1)),
+                                ),
+                          icon: const Icon(Icons.history_rounded, size: 18),
+                          label: const Text('补记昨天'),
+                        ),
+                      TextButton.icon(
+                        onPressed: widget.controller.submitting
+                            ? null
+                            : () => showModalBottomSheet<void>(
+                                context: context,
+                                isScrollControlled: true,
+                                useSafeArea: true,
+                                builder: (_) => NutritionCopySheet(
+                                  controller: widget.controller,
+                                  recordDate: date,
+                                ),
+                              ),
+                        icon: const Icon(Icons.copy_rounded, size: 18),
+                        label: const Text('复制上一餐'),
+                      ),
+                    ],
+                  ),
+                  if (!isToday)
+                    Text(
+                      '补记至 ${nutritionDateLabel(date)}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                 ],
-                const SizedBox(height: 25),
-                const SectionTitle(title: '今日记录'),
+                if (widget.controller.errorMessage case final message?) ...[
+                  const SizedBox(height: 12),
+                  AppErrorCard(message: message),
+                  TextButton.icon(
+                    onPressed: widget.controller.loading
+                        ? null
+                        : widget.controller.refresh,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('重新加载'),
+                  ),
+                ],
+                const SizedBox(height: 20),
+                SectionTitle(title: isToday ? '今日记录' : '当天记录'),
                 const SizedBox(height: 11),
                 if (!widget.controller.loading &&
+                    widget.controller.errorMessage == null &&
                     widget.controller.entries.isEmpty)
-                  const AppEmptyState(
+                  AppEmptyState(
                     icon: Icons.restaurant_menu_rounded,
-                    title: '今天还没有饮食记录',
-                    message: '从早餐、午餐、晚餐或加餐中选择一项开始记录。',
+                    title: isToday ? '今天还没有饮食记录' : '这一天没有已保存的饮食记录',
+                    message: isToday
+                        ? '从早餐、午餐、晚餐或加餐中选择一项开始记录。'
+                        : canRecord
+                        ? '选择上方餐次或饮水，即可补记这一天。'
+                        : '这一天还未到来，可以切换日期查看或补记。',
                   )
                 else
                   ...widget.controller.entries.map(
                     (entry) => _EntryTile(
                       entry,
-                      onEdit: () => _editEntry(entry),
-                      onDelete: () => _deleteEntry(entry),
+                      onEdit: widget.controller.submitting
+                          ? null
+                          : () => _editEntry(entry),
+                      onDelete: widget.controller.submitting
+                          ? null
+                          : () => _deleteEntry(entry),
                     ),
                   ),
+                if (canRecord) ...[
+                  const SizedBox(height: 20),
+                  AppSurface(
+                    onTap: widget.controller.submitting ? null : _openPhoto,
+                    color: AppColors.indigoSoft,
+                    padding: const EdgeInsets.all(18),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.camera_alt_rounded,
+                          color: AppColors.indigo,
+                          size: 36,
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '拍照记一餐',
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                'AI 识别食物并估算热量与三大营养素，确认后保存',
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(color: AppColors.muted),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.chevron_right_rounded,
+                          color: AppColors.indigo,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  AppSurface(
+                    onTap: widget.controller.submitting ? null : _openFoods,
+                    padding: const EdgeInsets.all(18),
+                    child: Row(
+                      children: [
+                        const FoodLineArt(name: '鸡胸肉和米饭', size: 68),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '浏览食品库',
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                              const SizedBox(height: 5),
+                              Text(
+                                '按蛋白质、主食、蔬菜和水果分类查找',
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(color: AppColors.muted),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.arrow_forward_rounded,
+                          color: AppColors.primary,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 8,
+                    children: [
+                      TextButton.icon(
+                        onPressed: widget.controller.submitting
+                            ? null
+                            : () => _openFoods('snack'),
+                        icon: const Icon(Icons.cookie_outlined, size: 18),
+                        label: const Text('记加餐'),
+                      ),
+                      TextButton.icon(
+                        onPressed: widget.controller.submitting ? null : _add,
+                        icon: const Icon(Icons.edit_note_rounded, size: 18),
+                        label: const Text('手动填写'),
+                      ),
+                    ],
+                  ),
+                  if (widget.controller.frequentFoods.isNotEmpty) ...[
+                    const SizedBox(height: 25),
+                    const SectionTitle(title: '常用食品'),
+                    const SizedBox(height: 11),
+                    SizedBox(
+                      height: 112,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: widget.controller.frequentFoods.length,
+                        separatorBuilder: (_, _) => const SizedBox(width: 10),
+                        itemBuilder: (context, index) {
+                          final item = widget.controller.frequentFoods[index];
+                          return _FrequentFoodCard(
+                            item: item,
+                            onTap: () => _recordFood(item.food),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ],
+                if (widget.controller.weeklySummary case final weekly?) ...[
+                  const SizedBox(height: 25),
+                  SectionTitle(title: isToday ? '本周概览' : '所在周概览'),
+                  const SizedBox(height: 11),
+                  _WeeklySummaryCard(summary: weekly),
+                ],
               ],
             ),
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
   }
 }
 
 class _SummaryCard extends StatelessWidget {
-  const _SummaryCard({required this.summary});
+  const _SummaryCard({required this.summary, required this.label});
 
   final DailyNutritionSummary summary;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
-    final targetKcal = _number(summary.target?['kcal']);
+    final targetKcal = summary.targetRange('kcal');
     return AppSurface(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -368,17 +513,14 @@ class _SummaryCard extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
-                  targetKcal > 0
-                      ? '/ ${targetKcal.toStringAsFixed(0)} 千卡'
-                      : '千卡',
+                  '千卡',
                   style: Theme.of(context).textTheme.bodyLarge
                       ?.copyWith(color: AppColors.muted),
                 ),
               ),
               const Spacer(),
               StatusPill(
-                label:
-                    '${(summary.completeness * 100).clamp(0, 100).toStringAsFixed(0)}% 完整',
+                label: '三餐已记 ${summary.recordedMeals.length}/3',
                 color: AppColors.mint,
                 icon: Icons.check_circle_outline_rounded,
               ),
@@ -386,7 +528,7 @@ class _SummaryCard extends StatelessWidget {
           ),
           const SizedBox(height: 7),
           Text(
-            '今日摄入',
+            '$label · ${targetKcal == null ? '未设置营养目标' : '目标 ${targetKcal.label} 千卡'}',
             style: Theme.of(context).textTheme.bodyMedium
                 ?.copyWith(color: AppColors.muted),
           ),
@@ -397,7 +539,7 @@ class _SummaryCard extends StatelessWidget {
                 child: _MacroRing(
                   label: '蛋白质',
                   value: summary.consumed.proteinG,
-                  target: _number(summary.target?['protein_g']),
+                  target: summary.targetRange('protein'),
                   color: AppColors.amber,
                 ),
               ),
@@ -405,7 +547,7 @@ class _SummaryCard extends StatelessWidget {
                 child: _MacroRing(
                   label: '碳水',
                   value: summary.consumed.carbsG,
-                  target: _number(summary.target?['carbs_g']),
+                  target: summary.targetRange('carbs'),
                   color: AppColors.indigo,
                 ),
               ),
@@ -413,7 +555,7 @@ class _SummaryCard extends StatelessWidget {
                 child: _MacroRing(
                   label: '脂肪',
                   value: summary.consumed.fatG,
-                  target: _number(summary.target?['fat_g']),
+                  target: summary.targetRange('fat'),
                   color: AppColors.primary,
                 ),
               ),
@@ -435,15 +577,16 @@ class _MacroRing extends StatelessWidget {
 
   final String label;
   final double value;
-  final double target;
+  final NutritionTargetRange? target;
   final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final progress = target <= 0 ? 0.0 : (value / target).clamp(0.0, 1.0);
+    final upper = target?.max ?? 0;
+    final progress = upper <= 0 ? 0.0 : (value / upper).clamp(0.0, 1.0);
     return Semantics(
       label:
-          '$label ${value.toStringAsFixed(0)}克${target > 0 ? '，目标${target.toStringAsFixed(0)}克' : ''}',
+          '$label ${value.toStringAsFixed(0)}克${target != null ? '，目标${target!.label}克' : ''}',
       child: Column(
         children: [
           SizedBox.square(
@@ -473,7 +616,7 @@ class _MacroRing extends StatelessWidget {
           Text(label, style: Theme.of(context).textTheme.labelLarge),
           const SizedBox(height: 2),
           Text(
-            target > 0 ? '/ ${target.toStringAsFixed(0)} g' : '目标 --',
+            target != null ? '${target!.label} g' : '目标 --',
             style: Theme.of(context).textTheme.labelMedium,
           ),
         ],
@@ -488,12 +631,14 @@ class _MealShortcut extends StatelessWidget {
     required this.label,
     required this.color,
     required this.onTap,
+    this.detail,
   });
 
   final IconData icon;
   final String label;
   final Color color;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
+  final String? detail;
 
   @override
   Widget build(BuildContext context) {
@@ -516,6 +661,12 @@ class _MealShortcut extends StatelessWidget {
               ),
               const SizedBox(height: 7),
               Text(label, style: Theme.of(context).textTheme.labelMedium),
+              const SizedBox(height: 3),
+              Text(
+                detail ?? '记一餐',
+                style: Theme.of(context).textTheme.labelSmall
+                    ?.copyWith(color: AppColors.muted),
+              ),
             ],
           ),
         ),
@@ -619,7 +770,7 @@ class _WeeklySummaryCard extends StatelessWidget {
           Row(
             children: [
               Text(
-                '记录完整度 ${(summary.completeness * 100).toStringAsFixed(0)}%',
+                '记录天数覆盖 ${(summary.completeness * 100).toStringAsFixed(0)}%',
                 style: Theme.of(context).textTheme.labelMedium,
               ),
               const Spacer(),
@@ -654,11 +805,11 @@ class _WeeklyMetric extends StatelessWidget {
 }
 
 class _EntryTile extends StatelessWidget {
-  const _EntryTile(this.entry, {required this.onEdit, required this.onDelete});
+  const _EntryTile(this.entry, {this.onEdit, this.onDelete});
 
   final NutritionEntry entry;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -705,17 +856,20 @@ class _EntryTile extends StatelessWidget {
                   ),
               ],
             ),
-            PopupMenuButton<String>(
-              tooltip: '更多操作',
-              onSelected: (value) {
-                if (value == 'edit') onEdit();
-                if (value == 'delete') onDelete();
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'edit', child: Text('编辑')),
-                PopupMenuItem(value: 'delete', child: Text('删除')),
-              ],
-            ),
+            if (onEdit != null || onDelete != null)
+              PopupMenuButton<String>(
+                tooltip: '更多操作',
+                onSelected: (value) {
+                  if (value == 'edit') onEdit?.call();
+                  if (value == 'delete') onDelete?.call();
+                },
+                itemBuilder: (_) => [
+                  if (onEdit != null)
+                    const PopupMenuItem(value: 'edit', child: Text('编辑')),
+                  if (onDelete != null)
+                    const PopupMenuItem(value: 'delete', child: Text('删除')),
+                ],
+              ),
           ],
         ),
       ),
@@ -724,10 +878,15 @@ class _EntryTile extends StatelessWidget {
 }
 
 class _FoodServingSheet extends StatefulWidget {
-  const _FoodServingSheet({required this.food, required this.mealType});
+  const _FoodServingSheet({
+    required this.food,
+    required this.mealType,
+    required this.recordDate,
+  });
 
   final FoodItem food;
   final String mealType;
+  final DateTime recordDate;
 
   @override
   State<_FoodServingSheet> createState() => _FoodServingSheetState();
@@ -826,6 +985,8 @@ class _FoodServingSheetState extends State<_FoodServingSheet> {
                   ],
                 ),
                 const SizedBox(height: 18),
+                Text('记录至 ${nutritionDateLabel(widget.recordDate)}'),
+                const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
                   initialValue: _mealType,
                   decoration: const InputDecoration(labelText: '餐次'),
@@ -1058,9 +1219,13 @@ class _NutritionEntryEditSheetState extends State<_NutritionEntryEditSheet> {
 }
 
 class _NutritionEntrySheet extends StatefulWidget {
-  const _NutritionEntrySheet({required this.initialMealType});
+  const _NutritionEntrySheet({
+    required this.initialMealType,
+    required this.recordDate,
+  });
 
   final String initialMealType;
+  final DateTime recordDate;
 
   @override
   State<_NutritionEntrySheet> createState() => _NutritionEntrySheetState();
@@ -1077,15 +1242,42 @@ class _NutritionEntrySheetState extends State<_NutritionEntrySheet> {
   final _notes = TextEditingController();
   late String _mealType;
   bool _flexible = false;
+  late final FormDraft _formDraft;
 
   @override
   void initState() {
     super.initState();
     _mealType = widget.initialMealType;
+    _formDraft = FormDraft(
+      records: LocalRecordsScope.read(context),
+      key:
+          'meal:${widget.recordDate.toIso8601String()}:${widget.initialMealType}',
+      label:
+          '${nutritionDateLabel(widget.recordDate)} ${_mealLabel(widget.initialMealType)}手动饮食',
+      fields: {
+        'name': _name,
+        'amount': _amount,
+        'kcal': _kcal,
+        'protein': _protein,
+        'carbs': _carbs,
+        'fat': _fat,
+        'notes': _notes,
+      },
+      isActive: () => mounted,
+      extras: () => {'meal': _mealType, 'flexible': _flexible},
+      restoreExtras: (data) {
+        _mealType = data['meal'] as String? ?? _mealType;
+        _flexible = data['flexible'] == true;
+      },
+      onRestored: () {
+        if (mounted) setState(() {});
+      },
+    );
   }
 
   @override
   void dispose() {
+    _formDraft.dispose();
     _name.dispose();
     _amount.dispose();
     _kcal.dispose();
@@ -1098,6 +1290,7 @@ class _NutritionEntrySheetState extends State<_NutritionEntrySheet> {
 
   void _submit() {
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    _formDraft.dispose();
     Navigator.pop(
       context,
       ManualNutritionInput(
@@ -1133,6 +1326,7 @@ class _NutritionEntrySheetState extends State<_NutritionEntrySheet> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text('记录饮食', style: Theme.of(context).textTheme.headlineSmall),
+                Text('记录至 ${nutritionDateLabel(widget.recordDate)}'),
                 const SizedBox(height: 6),
                 Text(
                   '先快速记录，后续可以继续补充更精确的数据。',
@@ -1141,10 +1335,14 @@ class _NutritionEntrySheetState extends State<_NutritionEntrySheet> {
                 ),
                 const SizedBox(height: 20),
                 DropdownButtonFormField<String>(
+                  key: ValueKey(_mealType),
                   initialValue: _mealType,
                   decoration: const InputDecoration(labelText: '餐次'),
                   items: _mealItems,
-                  onChanged: (value) => _mealType = value!,
+                  onChanged: (value) {
+                    _mealType = value!;
+                    _formDraft.save();
+                  },
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
@@ -1177,7 +1375,10 @@ class _NutritionEntrySheetState extends State<_NutritionEntrySheet> {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('标记为灵活餐'),
                   value: _flexible,
-                  onChanged: (value) => setState(() => _flexible = value),
+                  onChanged: (value) {
+                    setState(() => _flexible = value);
+                    _formDraft.save();
+                  },
                 ),
                 TextFormField(
                   controller: _notes,
@@ -1217,12 +1418,6 @@ class _NutritionEntrySheetState extends State<_NutritionEntrySheet> {
   }
 }
 
-double _number(Object? value) => switch (value) {
-  num number => number.toDouble(),
-  String text => double.tryParse(text) ?? 0,
-  _ => 0,
-};
-
 String _mealLabel(String value) => switch (value) {
   'breakfast' => '早餐',
   'lunch' => '午餐',
@@ -1238,3 +1433,34 @@ const _mealItems = <DropdownMenuItem<String>>[
   DropdownMenuItem(value: 'snack', child: Text('加餐')),
   DropdownMenuItem(value: 'other', child: Text('其他')),
 ];
+
+Future<void> showManualNutritionEntry(
+  BuildContext context,
+  NutritionController controller,
+  DateTime date,
+  String mealType,
+) async {
+  final input = await showModalBottomSheet<ManualNutritionInput>(
+    context: context,
+    isScrollControlled: true,
+    builder: (_) =>
+        _NutritionEntrySheet(initialMealType: mealType, recordDate: date),
+  );
+  if (input != null) {
+    final saved = await controller.add(
+      input,
+      date: date,
+      draftKey: 'meal:${date.toIso8601String()}:$mealType',
+    );
+    if (saved && context.mounted) {
+      await clearSubmittedDraft(
+        context,
+        'meal:${date.toIso8601String()}:$mealType',
+      );
+      if (context.mounted && controller.savedLocally) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已保存在本机，联网后同步')));
+      }
+    }
+  }
+}

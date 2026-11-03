@@ -30,6 +30,8 @@ class UserProfile {
     required this.sessionDurationMinutes,
     required this.timezone,
     required this.version,
+    this.weightKg,
+    this.weightRecordedAt,
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
@@ -37,6 +39,8 @@ class UserProfile {
     sex: json['sex'] as String? ?? 'unspecified',
     birthDate: _date(json['birth_date']),
     heightCm: _number(json['height_cm']),
+    weightKg: _number(json['weight_kg']),
+    weightRecordedAt: _date(json['weight_recorded_at']),
     experienceLevel: json['experience_level'] as String?,
     weeklyTrainingDays: json['weekly_training_days'] as int?,
     sessionDurationMinutes: json['session_duration_minutes'] as int?,
@@ -48,6 +52,8 @@ class UserProfile {
   final String sex;
   final DateTime? birthDate;
   final double? heightCm;
+  final double? weightKg;
+  final DateTime? weightRecordedAt;
   final String? experienceLevel;
   final int? weeklyTrainingDays;
   final int? sessionDurationMinutes;
@@ -169,6 +175,7 @@ class PersonalProfileInput {
     required this.heightCm,
     required this.experienceLevel,
     required this.sessionDurationMinutes,
+    this.weightKg,
   });
 
   final String? displayName;
@@ -177,6 +184,7 @@ class PersonalProfileInput {
   final double? heightCm;
   final String? experienceLevel;
   final int? sessionDurationMinutes;
+  final double? weightKg;
 }
 
 class TrainingPreferencesInput {

@@ -10,15 +10,32 @@ from pydantic import (
     model_validator,
 )
 
+from nxtrep_backend.schemas.agent_task import AgentTaskUpdate
+from nxtrep_backend.services.memory import MemoryCategory
+
 AgentTaskType = Literal[
     "general_question",
     "body_assessment",
     "body_progress_comparison",
     "body_measurement_draft",
+    "water_record_draft",
+    "profile_update_draft",
+    "workout_set_update_draft",
+    "workout_set_void_draft",
+    "workout_record_draft",
+    "workout_record_update_draft",
+    "workout_record_void_draft",
+    "nutrition_entry_update_draft",
+    "nutrition_entry_delete_draft",
     "memory_write",
+    "food_catalog_draft",
+    "confirmation_cancel",
     "nutrition_analysis",
     "nutrition_record_draft",
+    "nutrition_target_draft",
     "training_plan_draft",
+    "schedule_change_draft",
+    "training_progression_draft",
     "structured_data_query",
     "knowledge_retrieval",
 ]
@@ -57,6 +74,7 @@ class AgentChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     message: str = Field(min_length=1, max_length=8_000)
     conversation_id: UUID | None = None
+    client_turn_id: UUID | None = None
     image_asset_ids: list[UUID] = Field(
         default_factory=list,
         max_length=4,
@@ -91,7 +109,7 @@ class AgentConfirmationCard(BaseModel):
 class AgentCitation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source_type: Literal["structured_data", "image", "knowledge"]
+    source_type: Literal["structured_data", "image", "knowledge", "web"]
     source_id: str
     label: str
 
@@ -107,10 +125,26 @@ AgentStreamEventType = Literal[
 ]
 
 
+class AgentMemoryInstruction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["save", "update", "delete"]
+    category: MemoryCategory
+    content: str = Field(min_length=1, max_length=2000)
+    evidence: str = Field(min_length=1, max_length=2000)
+
+
 class AgentIntentTask(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_type: AgentTaskType
+    task_id: UUID | None = None
+    task_update: AgentTaskUpdate | None = None
+    memory_instructions: list[AgentMemoryInstruction] = Field(default_factory=list, max_length=8)
+    food_catalog_actions: list[Literal["create", "update", "delete"]] = Field(
+        default_factory=list,
+        max_length=3,
+    )
     asset_ids: list[UUID] = Field(
         default_factory=list,
         max_length=4,
@@ -192,7 +226,9 @@ class AgentBranchResult(BaseModel):
     )
     status: AgentBranchStatus
     result: dict[str, Any] | None = None
+    unpersisted_suggestion: str | None = None
     operation_results: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+    tool_runs: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
     confirmation_cards: list[AgentConfirmationCard] = Field(default_factory=list, max_length=20)
     citations: list[AgentCitation] = Field(default_factory=list, max_length=20)
     missing_fields: list[str] = Field(

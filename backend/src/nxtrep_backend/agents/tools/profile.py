@@ -3,9 +3,11 @@ from datetime import date
 from langchain.tools import tool
 from langchain_core.tools import BaseTool
 
+from nxtrep_backend.agents.tools.common import confirmation_payload
 from nxtrep_backend.agents.tools.context import AgentToolContext
+from nxtrep_backend.schemas.profile import ProfileUpdateRequest
 from nxtrep_backend.services.goals import GoalsNotFoundError
-from nxtrep_backend.services.profile import ProfileNotFoundError
+from nxtrep_backend.services.profile import ProfileNotFoundError, ProfileVersionConflictError
 
 
 def build_profile_tools(context: AgentToolContext) -> list[BaseTool]:
@@ -82,3 +84,45 @@ def build_profile_tools(context: AgentToolContext) -> list[BaseTool]:
         }
 
     return [read_profile_summary, read_active_goal]
+
+
+def build_profile_draft_tools(context: AgentToolContext) -> list[BaseTool]:
+    read_version: int | None = None
+    proposals: dict[str, dict] = {}
+
+    @tool
+    async def read_profile_for_update() -> dict:
+        """Read personal profile, latest recorded weight and version before edits."""
+        nonlocal read_version
+        try:
+            profile = await context.profile_service.read_update_snapshot(context.user_id)
+        except ProfileNotFoundError:
+            return {"status": "needs_review", "message": "尚未建立个人资料，请先完成账号资料设置。"}
+        read_version = profile["version"]
+        return {"status": "available", "profile": profile}
+
+    @tool
+    async def propose_profile_update(changes: ProfileUpdateRequest) -> dict:
+        """Draft requested profile fields; read first, approve later. No goal/plan edits."""
+        if read_version != changes.expected_version:
+            return {"status": "needs_review", "message": "请先读取最新个人资料，再生成修改草稿。"}
+        key = changes.model_dump_json(exclude_unset=True)
+        if key in proposals:
+            return proposals[key]
+        try:
+            confirmation = await context.profile_service.propose_update(context.user_id, changes)
+        except (ProfileNotFoundError, ProfileVersionConflictError):
+            return {
+                "status": "needs_review",
+                "message": "个人资料已变化或不存在，请重新读取后核对。",
+            }
+        except ValueError as exc:
+            return {"status": "needs_review", "message": str(exc)}
+        payload = {
+            "status": "confirmation_required",
+            "confirmation": confirmation_payload(confirmation),
+        }
+        proposals[key] = payload
+        return payload
+
+    return [read_profile_for_update, propose_profile_update]

@@ -2,12 +2,13 @@ import 'package:flutter/foundation.dart';
 
 import '../../../core/media/image_upload.dart';
 import '../../../core/network/api_exception.dart';
+import '../../../core/state/lifecycle_notifier.dart';
 import '../data/body_progress_repository.dart';
 import '../domain/body_progress_models.dart';
 
 typedef BodyImageUploader = Future<UploadedImage> Function(Uint8List bytes);
 
-class BodyProgressController extends ChangeNotifier {
+class BodyProgressController extends LifecycleNotifier {
   BodyProgressController(this._repository, this._uploader);
 
   final BodyProgressRepository _repository;
@@ -59,6 +60,7 @@ class BodyProgressController extends ChangeNotifier {
     notifyListeners();
     try {
       final uploaded = await _uploader(bytes);
+      if (isDisposed) return false;
       final photo = await _repository.createPhoto(
         imageAssetId: uploaded.assetId,
         capturedAt: capturedAt,
@@ -121,6 +123,9 @@ class BodyProgressController extends ChangeNotifier {
     } on ApiException catch (error) {
       errorMessage = _messageFor(error);
       return null;
+    } on Object {
+      errorMessage = '评估结果暂时无法读取，照片已保留，请稍后重试。';
+      return null;
     } finally {
       analyzingPhotoId = null;
       notifyListeners();
@@ -144,6 +149,9 @@ class BodyProgressController extends ChangeNotifier {
       return comparison;
     } on ApiException catch (error) {
       errorMessage = _messageFor(error);
+      return null;
+    } on Object {
+      errorMessage = '对比结果暂时无法读取，照片已保留，请稍后重试。';
       return null;
     } finally {
       analyzingPhotoId = null;

@@ -9,6 +9,28 @@ from nxtrep_backend.schemas.agent import AgentIntentTask
 from nxtrep_backend.services.workout import WorkoutNotFoundError
 
 EXPECTED_TOOL_NAMES = {
+    "read_water_entries",
+    "propose_water_entry",
+    "read_pending_business_draft",
+    "propose_pending_draft_revision",
+    "propose_workout_record",
+    "read_workout_record_for_change",
+    "propose_workout_record_update",
+    "propose_workout_record_void",
+    "propose_saved_meal_item_remove",
+    "read_saved_meal_for_change",
+    "propose_saved_meal_update",
+    "propose_saved_meals_date_change",
+    "propose_saved_meal_delete",
+    "read_workout_set_for_change",
+    "propose_workout_set_update",
+    "propose_workout_set_void",
+    "read_profile_for_update",
+    "propose_profile_update",
+    "propose_custom_food",
+    "read_custom_food",
+    "propose_custom_food_update",
+    "propose_custom_food_delete",
     "read_profile_summary",
     "read_active_goal",
     "search_exercises",
@@ -25,7 +47,10 @@ EXPECTED_TOOL_NAMES = {
     "search_food_candidates",
     "read_nutrition_entries",
     "read_daily_nutrition_summary",
+    "calculate_meal_option",
     "propose_nutrition_entry",
+    "propose_nutrition_entry_from_reference",
+    "propose_nutrition_entry_revision",
     "propose_nutrition_target",
     "read_body_progress",
     "read_personal_records",
@@ -37,7 +62,12 @@ EXPECTED_TOOL_NAMES = {
     "delete_memory",
     "read_confirmation_status",
     "list_confirmations",
+    "cancel_confirmation",
     "retrieve_knowledge",
+    "search_web",
+    "read_progress_review",
+    "read_recovery_status",
+    "propose_recovery_adjustment",
 }
 
 
@@ -97,7 +127,7 @@ def test_required_context_can_only_add_whitelisted_read_group() -> None:
         )
     )
 
-    assert groups == frozenset({"knowledge", "workout_read"})
+    assert groups == frozenset({"knowledge", "web", "workout_read"})
 
 
 def test_structured_query_with_known_context_only_receives_relevant_read_tools() -> None:
@@ -210,3 +240,20 @@ async def test_tools_serialize_access_to_request_scoped_services() -> None:
     )
 
     assert maximum_active_calls == 1
+    assert {item["tool_name"] for item in context.tool_runs} == {
+        "read_active_training_plan",
+        "read_active_workout",
+    }
+    assert all(
+        set(item)
+        <= {
+            "tool_name",
+            "status",
+            "duration_ms",
+            "error_code",
+            "tool_call_id",
+            "argument_fingerprint",
+            "replayed",
+        }
+        for item in context.tool_runs
+    )

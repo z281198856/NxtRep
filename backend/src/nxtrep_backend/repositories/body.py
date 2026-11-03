@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -26,6 +26,24 @@ class SqlAlchemyBodyRepository:
         self.session.add(item)
         await self.session.flush()
         return item
+
+    async def latest_measurement(self, user_id: UUID, metric: str) -> BodyMeasurement | None:
+        columns = {
+            "weight_kg": BodyMeasurement.weight_kg,
+            "body_fat_percent": BodyMeasurement.body_fat_percent,
+        }
+        column = columns[metric]
+        return await self.session.scalar(
+            select(BodyMeasurement)
+            .where(
+                BodyMeasurement.user_id == user_id,
+                BodyMeasurement.deleted_at.is_(None),
+                BodyMeasurement.measured_at <= datetime.now(UTC),
+                column.is_not(None),
+            )
+            .order_by(BodyMeasurement.measured_at.desc(), BodyMeasurement.created_at.desc())
+            .limit(1)
+        )
 
     async def get_measurement(
         self, user_id: UUID, measurement_id: UUID, *, lock: bool = False

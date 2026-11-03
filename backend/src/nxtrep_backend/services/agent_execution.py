@@ -19,6 +19,7 @@ from nxtrep_backend.services.agent_context import (
     ActiveMemoryContext,
     AgentContextAssembler,
 )
+from nxtrep_backend.services.agent_errors import public_agent_error
 from nxtrep_backend.services.agent_media import ResolvedAgentImage
 from nxtrep_backend.services.agent_planning import PlannedAgentRequest
 from nxtrep_backend.services.conversation import AgentConversationContext
@@ -36,6 +37,7 @@ class AgentBranchInput:
     memories: tuple[ActiveMemoryContext, ...] = ()
     context_hints: AgentContextHints = field(default_factory=AgentContextHints)
     prior_results: tuple[AgentBranchResult, ...] = ()
+    knowledge_context: dict | None = None
 
 
 class AgentBranchHandler(Protocol):
@@ -212,7 +214,7 @@ class AgentBranchExecutor:
                 message="视觉模型未能返回完整评估结果，请重新发送照片后重试",
                 retryable=True,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Agent branch execution failed",
                 extra={
@@ -220,12 +222,13 @@ class AgentBranchExecutor:
                     "agent_user_id": str(user_id),
                 },
             )
+            error = public_agent_error(exc)
             return self._failed_result(
                 task,
-                code="BRANCH_EXECUTION_FAILED",
-                message="This Agent capability failed",
-                retryable=True,
-            )
+                code=error.code,
+                message=error.message,
+                retryable=error.retryable,
+            ).model_copy(update={"tool_runs": getattr(exc, "agent_tool_runs", [])})
 
         if result.task_type != task.task_type or result.asset_ids != task.asset_ids:
             return self._failed_result(

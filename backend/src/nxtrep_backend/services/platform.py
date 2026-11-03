@@ -5,6 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 
+from nxtrep_backend.agents.tools.common import json_safe
 from nxtrep_backend.db.models import (
     AgentMemory,
     AppAlert,
@@ -34,6 +35,7 @@ from nxtrep_backend.schemas.platform import (
     SyncPushRequest,
 )
 from nxtrep_backend.services.body import BodyService
+from nxtrep_backend.services.coaching_review import build_progress_review
 
 
 class PlatformNotFoundError(RuntimeError):
@@ -308,9 +310,28 @@ class PlatformService:
     ) -> GeneratedReport:
         if period_start > period_end:
             raise PlatformConflictError("Report start date must not exceed end date")
-        overview = await BodyService(SqlAlchemyBodyRepository(self.repository.session)).overview(
-            user_id, period_start, period_end
+        if (period_end - period_start).days + 1 > 365:
+            raise PlatformConflictError("阶段报告的日期区间不能超过365天")
+        review = await build_progress_review(
+            BodyService(SqlAlchemyBodyRepository(self.repository.session)),
+            user_id,
+            period_start,
+            period_end,
         )
+        overview = {
+            **review["current"],
+            "comparison": {
+                "period": review["previous_period"],
+                "facts": review["previous"],
+                "training_count_change": review["training_count_change"],
+            },
+            "samples": {
+                "weight": len(review["weight_points"]),
+                "waist": len(review["waist_points"]),
+            },
+            "recovery": review["recovery"],
+            "limitations": review["limitations"],
+        }
         missing = []
         if overview["training"]["workout_count"] == 0:
             missing.append("training")
@@ -318,11 +339,8 @@ class PlatformService:
             missing.append("nutrition")
         if overview["body"]["weight_end_kg"] is None:
             missing.append("body")
-        recommendations = []
-        if overview["training"]["workout_count"] < 2:
-            recommendations.append("下周优先完成至少两次可持续的训练")
-        if float(overview["nutrition"]["record_completeness"]) < 0.7:
-            recommendations.append("提高饮食记录完整度后再调整热量目标")
+        missing = sorted(set(missing + review["missing_data"]))
+        recommendations = review["recommendations"]
         current = await self.repository.get_report_period(
             user_id, report_type, period_start, period_end, lock=True
         )
@@ -333,17 +351,18 @@ class PlatformService:
                     report_type=report_type,
                     period_start=period_start,
                     period_end=period_end,
-                    facts=overview,
+                    facts=json_safe(overview),
                     missing_data=missing,
                     recommendations=recommendations,
-                    evidence=[],
+                    evidence=review["evidence"],
                     version=1,
                 )
             )
         else:
-            current.facts = overview
+            current.facts = json_safe(overview)
             current.missing_data = missing
             current.recommendations = recommendations
+            current.evidence = review["evidence"]
             current.version += 1
         await self.repository.session.flush()
         return current

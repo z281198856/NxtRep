@@ -9,6 +9,48 @@ import 'package:nxtrep/features/profile/data/profile_repository.dart';
 import 'package:nxtrep/features/profile/domain/profile_models.dart';
 
 void main() {
+  test(
+    'saves changed weight atomically with profile and skips unchanged weight',
+    () async {
+      final bodies = <Map<String, dynamic>>[];
+      final client = ApiClient(
+        config: ApiConfig(baseUri: Uri.parse('https://api.test/api/v1')),
+        accessTokenProvider: () => 'token',
+        httpClient: MockClient((request) async {
+          expect(request.method, 'PATCH');
+          expect(request.url.path, '/api/v1/profile');
+          bodies.add(jsonDecode(request.body) as Map<String, dynamic>);
+          return _json({
+            ..._profileJson(),
+            'weight_kg': '70.5',
+            'weight_recorded_at': '2026-10-02',
+          });
+        }),
+      );
+      addTearDown(client.close);
+      final repository = ProfileRepository(client);
+      const input = PersonalProfileInput(
+        displayName: 'test',
+        sex: 'male',
+        birthDate: null,
+        heightCm: 178.5,
+        weightKg: 70.5,
+        experienceLevel: 'beginner',
+        sessionDurationMinutes: 45,
+      );
+      final saved = await repository.updatePersonalProfile(
+        UserProfile.fromJson(_profileJson()),
+        input,
+      );
+      expect(saved.weightKg, 70.5);
+      expect(saved.weightRecordedAt, DateTime(2026, 10, 2));
+      expect(bodies.first['weight_kg'], 70.5);
+      expect(bodies.first['expected_version'], 3);
+      await repository.updatePersonalProfile(saved, input);
+      expect(bodies.last.containsKey('weight_kg'), isFalse);
+    },
+  );
+
   test('loads profile, training preferences and settings', () async {
     final client = ApiClient(
       config: ApiConfig(baseUri: Uri.parse('https://api.test/api/v1')),

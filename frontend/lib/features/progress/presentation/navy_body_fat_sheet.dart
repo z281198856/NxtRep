@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/settings/app_preferences.dart';
 import '../domain/body_models.dart';
 import 'progress_controller.dart';
 
@@ -17,6 +18,7 @@ class NavyBodyFatSheet extends StatefulWidget {
 class _NavyBodyFatSheetState extends State<NavyBodyFatSheet> {
   final _formKey = GlobalKey<FormState>();
   final _height = TextEditingController();
+  late final MeasurementUnits _units;
   final _waist = TextEditingController();
   final _neck = TextEditingController();
   final _hip = TextEditingController();
@@ -28,6 +30,7 @@ class _NavyBodyFatSheetState extends State<NavyBodyFatSheet> {
   @override
   void initState() {
     super.initState();
+    _units = AppPreferencesScope.readUnits(context);
     final latest = widget.controller.measurements.isEmpty
         ? null
         : widget.controller.measurements.first;
@@ -37,7 +40,7 @@ class _NavyBodyFatSheetState extends State<NavyBodyFatSheet> {
     _loadDefaults();
   }
 
-  String _format(double? value) => value?.toStringAsFixed(1) ?? '';
+  String _format(double? value) => _units.lengthInput(value);
 
   Future<void> _loadDefaults() async {
     final defaults = await widget.controller.loadNavyDefaults();
@@ -62,9 +65,11 @@ class _NavyBodyFatSheetState extends State<NavyBodyFatSheet> {
       setState(() {});
       return null;
     }
-    final waist = double.parse(_waist.text);
-    final neck = double.parse(_neck.text);
-    final hip = _sex == 'female' ? double.parse(_hip.text) : null;
+    final waist = _units.lengthCm(double.parse(_waist.text));
+    final neck = _units.lengthCm(double.parse(_neck.text));
+    final hip = _sex == 'female'
+        ? _units.lengthCm(double.parse(_hip.text))
+        : null;
     if (waist + (hip ?? 0) <= neck) {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('请检查围度：腰围（女性加臀围）必须大于颈围')));
@@ -72,7 +77,7 @@ class _NavyBodyFatSheetState extends State<NavyBodyFatSheet> {
     }
     return NavyBodyFatInput(
       sex: _sex!,
-      heightCm: double.parse(_height.text),
+      heightCm: _units.lengthCm(double.parse(_height.text)),
       waistCm: waist,
       neckCm: neck,
       hipCm: hip,
@@ -144,18 +149,30 @@ class _NavyBodyFatSheetState extends State<NavyBodyFatSheet> {
               validator: (value) => value == null ? '请选择计算公式' : null,
             ),
             const SizedBox(height: 12),
-            _field(_height, '身高（cm）', 300),
+            _field(_height, '身高（${_units.lengthLabel}）', _units.length(300)),
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(child: _field(_waist, '腰围（cm）', 400)),
+                Expanded(
+                  child: _field(
+                    _waist,
+                    '腰围（${_units.lengthLabel}）',
+                    _units.length(400),
+                  ),
+                ),
                 const SizedBox(width: 10),
-                Expanded(child: _field(_neck, '颈围（cm）', 200)),
+                Expanded(
+                  child: _field(
+                    _neck,
+                    '颈围（${_units.lengthLabel}）',
+                    _units.length(200),
+                  ),
+                ),
               ],
             ),
             if (_sex == 'female') ...[
               const SizedBox(height: 12),
-              _field(_hip, '臀围（cm）', 400),
+              _field(_hip, '臀围（${_units.lengthLabel}）', _units.length(400)),
             ],
             const SizedBox(height: 10),
             Text(

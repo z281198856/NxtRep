@@ -45,4 +45,6 @@ class SettingsUpdateRequest(BaseModel):
         }
         if not self.model_fields_set.intersection(fields):
             raise ValueError("At least one settings field must be provided")
+        if any(getattr(self, name) is None for name in self.model_fields_set.intersection(fields)):
+            raise ValueError("Settings fields cannot be null")
         return self

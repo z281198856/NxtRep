@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -35,11 +36,17 @@ class ApiException implements Exception {
     );
   }
 
-  factory ApiException.network(Object cause) => ApiException(
-    code: 'NETWORK_ERROR',
-    message: '无法连接服务器，请检查网络和后端服务',
-    details: cause,
-  );
+  factory ApiException.network(Object cause) => cause is TimeoutException
+      ? ApiException(
+          code: 'REQUEST_TIMEOUT',
+          message: '请求超时，尚未确认操作结果，请核对记录后重试',
+          details: cause,
+        )
+      : ApiException(
+          code: 'NETWORK_ERROR',
+          message: '无法连接服务器，请检查网络和后端服务',
+          details: cause,
+        );
 
   final int? statusCode;
   final String code;
@@ -48,6 +55,7 @@ class ApiException implements Exception {
 
   bool get isAuthenticationFailure =>
       code == 'AUTHENTICATION_REQUIRED' ||
+      code == 'INVALID_ACCESS_TOKEN' ||
       code == 'INVALID_REFRESH_TOKEN' ||
       code == 'REFRESH_TOKEN_REUSED' ||
       code == 'REFRESH_TOKEN_EXPIRED' ||

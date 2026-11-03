@@ -169,7 +169,7 @@ class CalendarRescheduleDraft(IdMixin, TimestampMixin, Base):
     missed_event_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("calendar_events.id", ondelete="CASCADE"), nullable=False
     )
-    strategy: Mapped[str] = mapped_column(String(10), nullable=False)
+    strategy: Mapped[str] = mapped_column(String(20), nullable=False)
     target_date: Mapped[date | None] = mapped_column(Date)
     reason: Mapped[str | None] = mapped_column(String(1000))
     before_events: Mapped[list[dict]] = mapped_column(JSONB, nullable=False)

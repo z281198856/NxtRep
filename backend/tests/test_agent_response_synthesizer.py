@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
+from test_nutrition_record_draft_branch_handler import make_analysis
 
 from nxtrep_backend.agents.synthesis import (
     AgentResponseSynthesisError,
@@ -13,8 +14,37 @@ from nxtrep_backend.agents.synthesis import (
 )
 from nxtrep_backend.schemas.agent import (
     AgentBranchResult,
+    AgentCitation,
+    AgentConfirmationCard,
     AgentExecutionBundle,
 )
+
+
+def test_search_appendix_does_not_turn_the_first_unused_candidate_into_a_source():
+    bundle = AgentExecutionBundle(
+        branch_results=[
+            AgentBranchResult(
+                task_type="knowledge_retrieval",
+                status="completed",
+                result={"answer": "有用回答。"},
+                citations=[
+                    AgentCitation(
+                        source_type="web",
+                        source_id=f"https://example.org/{index}",
+                        label="研究 / 查询时间 2026-10-05T10:00:00+00:00",
+                    )
+                    for index in range(3)
+                ],
+            )
+        ]
+    )
+    suffix = AgentResponseSynthesizer._web_source_suffix("有用回答。", bundle)
+    assert suffix == ""
+    bundle.branch_results[0].result["answer"] = "依据第二条资料：https://example.org/1"
+    assert AgentResponseSynthesizer._web_source_suffix("有用回答。", bundle) == (
+        "\n\n[来源](https://example.org/1)"
+    )
+    assert AgentResponseSynthesizer._web_source_suffix("参考https://example.org/2", bundle) == ""
 
 
 def make_execution_bundle() -> AgentExecutionBundle:
@@ -54,6 +84,30 @@ def make_model(response: AIMessage) -> MagicMock:
     return model
 
 
+@pytest.mark.asyncio
+async def test_text_meal_reply_keeps_actual_card_totals_when_nested_context_is_trimmed():
+    model = make_model(AIMessage(content="这餐估算约923千卡。"))
+    total = {"kcal": "923.4", "protein_g": "41", "carbs_g": "56", "fat_g": "11"}
+    bundle = AgentExecutionBundle(branch_results=[AgentBranchResult(
+        task_type="nutrition_record_draft", status="completed", requires_confirmation=True,
+        result={"task_tool_results": [{"irrelevant": "x" * 20000}]},
+        confirmation_cards=[AgentConfirmationCard(
+            confirmation_id=uuid4(), operation_type="nutrition_entry_create", status="pending",
+            version=1, expires_at="2026-10-19T00:00:00Z", impact="确认后保存",
+            after={"preview": {"totals": total, "items": [{"name": "米饭", "amount_g": "200"}]}},
+        )],
+    )])
+    await AgentResponseSynthesizer(model).synthesize(
+        user_message="记录午饭", execution_bundle=bundle,
+    )
+    payload = json.loads(model.ainvoke.await_args.args[0][1].content)
+    actual = next(
+        item for item in payload["photo_nutrition_evidence"] if item.get("confirmation_preview")
+    )
+    assert actual["totals"] == total
+    assert actual["foods"][0]["amount_g"] == "200"
+
+
 def make_stream_model(*chunks: str, error: Exception | None = None) -> MagicMock:
     model = MagicMock(spec=BaseChatModel)
 
@@ -65,6 +119,52 @@ def make_stream_model(*chunks: str, error: Exception | None = None) -> MagicMock
 
     model.astream = MagicMock(side_effect=stream)
     return model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize("already_visible", [True, False])
+async def test_actual_search_sources_remain_visible_in_sync_and_streaming_answer(
+    streaming,
+    already_visible,
+):
+    url = "https://example.com/actual-search-source"
+    text = "根据资料回答。" + (url if already_visible else "")
+    bundle = AgentExecutionBundle(
+        branch_results=[
+            AgentBranchResult(
+                task_type="knowledge_retrieval",
+                status="completed",
+                result={"answer": "根据资料回答。" + url},
+                citations=[
+                    AgentCitation(
+                        source_type="web", source_id=url, label="来源 / 查询时间 2026-10-05"
+                    )
+                ],
+            )
+        ]
+    )
+    model = (
+        make_stream_model(text[:10], text[10:])
+        if streaming
+        else make_model(AIMessage(content=text))
+    )
+    synthesizer = AgentResponseSynthesizer(model)
+    if streaming:
+        result = "".join(
+            [
+                part
+                async for part in synthesizer.astream(
+                    user_message="普通知识提问",
+                    execution_bundle=bundle,
+                )
+            ]
+        )
+    else:
+        result = await synthesizer.synthesize(user_message="普通知识提问", execution_bundle=bundle)
+    assert result.count(url) == 1
+    assert ("[来源]" in result) is (not already_visible)
+    assert "查询时间" not in result
 
 
 @pytest.mark.asyncio
@@ -91,8 +191,10 @@ async def test_synthesizer_sends_all_branch_results_to_text_model() -> None:
     assert isinstance(messages[1], HumanMessage)
     assert "Memory 已经生效" in messages[0].content
     assert "其他正式业务数据不得声称已保存" in messages[0].content
-    assert "回答：" in messages[0].content
-    assert "分析：" in messages[0].content
+    assert "把理由和分析融入正文" in messages[0].content
+    assert "未核验数值不得冒充官方数据" in messages[0].content
+    assert "unpersisted_suggestion" in messages[0].content
+    assert "旧回复声称没有资料不能覆盖本轮已读取的资料" in messages[0].content
     assert "Markdown 表格" in messages[0].content
 
     payload = json.loads(messages[1].content)
@@ -210,3 +312,90 @@ async def test_synthesizer_stream_never_splices_fallback_after_partial_output() 
     with pytest.raises(AgentResponseSynthesisError, match="after output started"):
         await anext(stream)
     fallback.astream.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("task_type", ["nutrition_analysis", "nutrition_record_draft"])
+async def test_photo_totals_portions_and_uncertainty_survive_deep_and_large_context(
+    streaming, task_type
+):
+    analysis = make_analysis()
+    analysis.calculation.requires_confirmation = True
+    analysis.recognition.assumptions = ["照片份量没有称重"]
+    analysis.calculation.items[0].assumptions = ["按常见做法估算用油"]
+    analysis.calculation.items[0].source = "model_estimated"
+    analysis.calculation.items[0].confidence = "low"
+    actual = analysis.model_dump(mode="json")
+    branch_result = actual if task_type == "nutrition_analysis" else {"analysis": actual}
+    bundle = AgentExecutionBundle(
+        branch_results=[
+            AgentBranchResult(
+                task_type="general_question", status="completed", result={"answer": "旧信息" * 9000}
+            ),
+            AgentBranchResult(task_type=task_type, status="completed", result=branch_result),
+        ]
+    )
+    before = bundle.model_dump(mode="json")
+    model = (
+        make_stream_model("按照片估算。")
+        if streaming
+        else make_model(AIMessage(content="按照片估算。"))
+    )
+    synthesizer = AgentResponseSynthesizer(model)
+    if streaming:
+        _ = [
+            chunk
+            async for chunk in synthesizer.astream(user_message="评估午饭", execution_bundle=bundle)
+        ]
+        messages = model.astream.call_args.args[0]
+    else:
+        await synthesizer.synthesize(user_message="评估午饭", execution_bundle=bundle)
+        messages = model.ainvoke.call_args.args[0]
+    context = json.loads(messages[1].content)
+    evidence = context["photo_nutrition_evidence"][0]
+    assert evidence["branch_index"] == 1 and evidence["is_complete"] is True
+    assert evidence["totals"] == actual["calculation"]["totals"]
+    assert evidence["foods"] == actual["recognition"]["foods"]
+    assert evidence["estimate_needs_review"] is True
+    assert evidence["nutrition_sources"] == ["model_estimated"]
+    assert evidence["nutrition_confidence"] == ["low"]
+    assert evidence["assumptions"] == ["照片份量没有称重", "按常见做法估算用油"]
+    assert (
+        len(
+            json.dumps(
+                {key: context[key] for key in ("execution_bundle", "photo_nutrition_evidence")},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+        <= 8000
+    )
+    assert bundle.model_dump(mode="json") == before
+
+
+@pytest.mark.parametrize("status", ["needs_input", "failed"])
+def test_partial_or_failed_photo_result_is_never_projected_as_complete(status):
+    analysis = make_analysis()
+    analysis.calculation.is_complete = False
+    bundle = AgentExecutionBundle(
+        branch_results=[
+            AgentBranchResult(
+                task_type="nutrition_analysis",
+                status=status,
+                missing_fields=["food_selection"],
+                result=analysis.model_dump(mode="json") if status != "failed" else None,
+                error={"code": "FOOD_ANALYSIS_FAILED", "message": "本次照片分析未完成"}
+                if status == "failed"
+                else None,
+            )
+        ]
+    )
+    messages = AgentResponseSynthesizer._messages(
+        user_message="评估午饭", execution_bundle=bundle, conversation_context=None
+    )
+    context = json.loads(messages[1].content)
+    if status == "failed":
+        assert "photo_nutrition_evidence" not in context
+    else:
+        assert context["photo_nutrition_evidence"][0]["is_complete"] is False

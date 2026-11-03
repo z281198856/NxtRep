@@ -129,12 +129,14 @@ class SqlAlchemyUserRepository:
         *,
         user_id: UUID,
         revoked_at: datetime,
+        except_session_id: UUID | None = None,
     ) -> None:
+        statement = update(RefreshSession)
+        if except_session_id is not None:
+            statement = statement.where(RefreshSession.id != except_session_id)
         await self._session.execute(
-            update(RefreshSession)
-            .where(
+            statement.where(
                 RefreshSession.user_id == user_id,
                 RefreshSession.revoked_at.is_(None),
-            )
-            .values(revoked_at=revoked_at)
+            ).values(revoked_at=revoked_at)
         )

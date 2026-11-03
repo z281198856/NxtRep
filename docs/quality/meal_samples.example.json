@@ -1,0 +1,12 @@
+[
+  {
+    "sample_id": "replace-with-real-meal-001",
+    "image_path": "./replace-with-consented-weighed-meal.jpg",
+    "expected_foods": [
+      {"aliases": ["熟米饭", "米饭"], "amount_g": 150, "kcal": 195},
+      {"aliases": ["鸡胸肉", "鸡肉"], "amount_g": 100}
+    ],
+    "max_portion_relative_error": 0.35,
+    "max_kcal_relative_error": 0.35
+  }
+]

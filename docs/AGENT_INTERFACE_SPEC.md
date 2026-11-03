@@ -151,6 +151,7 @@ POST /api/v1/agent/runs/{run_id}:cancel
 ```http
 GET|PATCH|DELETE /api/v1/agent/conversations/{conversation_id}
 GET /api/v1/agent/conversations/{conversation_id}/messages
+GET /api/v1/agent/conversations/{conversation_id}/confirmations
 GET|POST|PATCH|DELETE /api/v1/memories
 GET|POST|DELETE /api/v1/body/progress-photos
 ```
@@ -204,8 +205,12 @@ body_assessment
 body_progress_comparison
 nutrition_analysis
 nutrition_record_draft
+nutrition_target_draft
 training_plan_draft
+schedule_change_draft
+training_progression_draft
 structured_data_query
+confirmation_cancel
 knowledge_retrieval
 ```
 
@@ -235,8 +240,35 @@ authenticate
 
 身体和饮食能力分开执行，是为了使用各自的结构化输出和安全规则；它们可以在同一请求中并行运行，最后统一汇总。
 
-其中 `nutrition_record_draft` 依赖同一请求的 `nutrition_analysis`，因此先并行执行所有
+有图片的 `nutrition_record_draft` 依赖同一请求的 `nutrition_analysis`，因此先执行
 独立分支，再把图片识别结果传给饮食草稿分支，避免同一张图片重复调用视觉模型。
+纯文字饮食记录通过现有食物检索、营养计算和饮食提案工具生成待确认草稿。
+
+改期与重量递增分别复用 `calendar_reschedule`、`training_progression_apply` 确认操作。
+工具读取实际日历和已完成训练记录；需要人工复核的递增建议返回 `needs_input`。
+确认卡提供日期前后对比或动作重量、依据、警告，批准后才修改正式记录。
+
+`confirmation_cancel` 仅向明确取消未确认草稿的任务开放 `cancel_confirmation`，
+要求核对用户、确认 ID 和当前版本；取消不能批准草稿或撤销已生效记录。
+普通问答和数据查询仍只读。具体草稿状态查询读取确认服务，以实际状态区分草稿
+已保存与正式记录已生效。当前注册表共 36 个工具，照片识别仍由专用工作流执行。
+待确认改期可通过 `propose_schedule_change` 的 `replaces_confirmation_id` 与
+`expected_version` 修订；新草稿通过校验后原卡才失效。前端保留普通追问前的卡片，
+确认结果未知时读取实际状态，同一卡片版本的重试复用幂等键。
+本轮完整操作步骤及验证边界见 [Agent 多轮验收](AGENT_MULTITURN_ACCEPTANCE.md)。
+
+结构化查询必须取得对应领域的完整工具返回，不能将模型文字当作已查询证据。
+`read_recent_workouts` 支持明确起止日期或 `this_week/last_week`，按用户时区和周一边界统计。
+分支中的 `tool_runs` 仅记录工具名称、状态、耗时和错误代码，不保存参数或敏感返回。
+
+`search_web` 是只读联网查询工具，返回来源网址、查询时间和搜索摘要，不代表已读取全文。
+公开健身知识默认先检索本地资料并评估问题覆盖程度；无资料、覆盖不足或无法满足
+适用条件及时效时转联网补充，无需用户使用固定关键词。`local_knowledge` 包含检索状态、
+覆盖判断、片段和来源。仅查询个人记录、做已有数值计算、闲聊及产品功能不触发此补充规则。
+明确联网请求不得仅以本地知识结果宣称已经查过网页；无结果或调用失败时应准确说明。
+来源类型增加 `web`，`source_id` 使用实际返回的来源网址。
+Agent 自定义食物支持 `nutrient_basis=total_consumed`，先在工具入口规范营养基准，
+避免把多份营养合计再次乘以份量；正式饮食接口模型和确认机制保持原样。
 
 ## 4. 图片路由规则
 
@@ -291,6 +323,47 @@ authenticate
 模型只生成训练、饮食、身体等正式业务数据的结构化候选或草稿内容。Graph 节点调用业务 Service 创建草稿；用户确认后，确认状态机才允许写入正式表。不要向 ReAct Agent 暴露“直接保存饮食”“直接激活计划”“直接修改身体数据”等工具。
 
 Memory 使用独立边界：`read_memories` 读取当前有效 Memory，`save_memory`、`update_memory`、`delete_memory` 直接调用同进程 `MemoryService`。只允许保存当前用户稳定、长期、非假设的信息；修改和删除前必须读取 `id` 与 `version`，写入后必须向用户说明结果。服务层继续执行用户隔离、精确重复抑制、乐观版本校验和软删除。
+
+记忆由 Agent 依据语义主动识别，不要求用户说“记住”。路由为 `memory_write` 时会再次复核，
+每个 `memory_instructions` 包含 action、category、content 和当前消息原文 evidence。
+证据缺失或置信度不足不会开放写权限。工具仅处理本次核实的事实；撤销措辞不一致时，
+进一步核实具体事实是否一致，不能仅凭同一类别删除其他记忆。食品条目、某餐、日历、
+测量、训练记录、正式目标及资料字段的修改不能用 Memory 代替。
+
+个人食品库新增走 `food_catalog_draft` → `propose_custom_food` → `food_create` 确认卡，
+确认后复用 `NutritionService.create_food` 创建 Food/FoodVersion，保留数据来源和可信度。
+同一请求的食品新增任务合并执行，同名同品牌条目重复提议时复用确认卡。不会创建餐食或记忆；
+重量/配方不全可先生成注明假设的估算草稿。详细验收见 [记忆与食品库路由修复](AGENT_MEMORY_ROUTING_FIX.md)。
+
+修改/删除也走 `food_catalog_draft`，按 `food_catalog_actions` 仅开放对应写草稿工具。
+先由 `read_custom_food` 核实个人食品与最新版本；同名候选需选择，公共或其他账户食品不开放修改。
+`propose_custom_food_update` / `propose_custom_food_delete` 生成 `food_update` / `food_delete` 确认卡，
+确认后分别复用现有版本化更新与软删除服务。修改保留未指定字段和估算可信度，旧版本与餐食快照不变；
+版本过期则拒绝执行。详细验收见 [食品修改与删除验收](AGENT_FOOD_CHANGES_ACCEPTANCE.md)。
+
+个人资料修改走 `profile_update_draft` → `read_profile_for_update` → `propose_profile_update`，
+生成 `profile_update` 确认卡，仅含明确修改的字段与原资料版本。
+确认后复用现有 `ProfileService.update_profile`，锁定并重新读取最新版本，旧草稿不能覆盖新资料。
+体重更新追加测量，历史保留；其他资料更新不自动改变已有计划或营养目标。
+详细验收见 [个人资料修改验收](AGENT_PROFILE_CHANGES_ACCEPTANCE.md)。
+
+已记录训练组更正和作废分别走 `workout_set_update_draft` / `workout_set_void_draft`。
+先 `read_workout_set_for_change` 唯一定位本人真实训练组及版本，再用
+`propose_workout_set_update` / `propose_workout_set_void` 生成相应确认卡。
+确认时核对训练和组版本，复用现有更正/作废服务、修订记录和审批幂等机制。
+确认前训练不变；确认后重算有效组统计和受影响动作的个人纪录。更正来源训练后，旧递增草稿不能生效。
+详细验收见 [训练组更正与作废验收](AGENT_WORKOUT_SET_CHANGES_ACCEPTANCE.md)。
+
+已保存饮食份量更正和误记餐食删除分别走 `nutrition_entry_update_draft` / `nutrition_entry_delete_draft`。
+先 `read_saved_meal_for_change` 按日期、餐次、食物及时间唯一定位本人记录及版本，再用
+`propose_saved_meal_update` / `propose_saved_meal_delete` 创建确认卡。只有确认后才更正或软删除正式记录。
+份量更正使用该餐原营养快照，保留其他食物、来源及可信度；不重新查询已变动的食品库。
+确认时重新加载并核对版本，写入饮食修订，日/周统计按有效记录更新；不创建记忆或食品库条目。
+详细验收见 [已保存饮食更正与删除验收](AGENT_SAVED_MEAL_CHANGES_ACCEPTANCE.md)。
+
+会话上下文附带本会话餐食确认卡的数据库当前状态，已批准卡包含实际记录ID，
+优先于旧AI回复中的“待确认”。用户只补充份量时按当前状态修订草稿或更正已有餐食，
+不能把已确认一餐重复新增；明确另吃一餐仍可新建。详见 [份量补充修复](AGENT_MEAL_FOLLOWUP_DUPLICATE_FIX.md)。
 
 ## 6. 数据与 RAG 边界
 

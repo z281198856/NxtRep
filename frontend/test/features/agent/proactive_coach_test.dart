@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nxtrep/core/settings/app_preferences.dart';
+import 'package:nxtrep/features/profile/domain/profile_models.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:nxtrep/core/config/api_config.dart';
@@ -15,6 +17,81 @@ import 'package:nxtrep/features/training/presentation/today_page.dart';
 import 'package:nxtrep/features/training/presentation/training_controller.dart';
 
 void main() {
+  test(
+    'reminder timing retains version and snooze removes notice after success',
+    () async {
+      Map<String, dynamic>? timing;
+      String? until;
+      final api = ApiClient(
+        config: ApiConfig(baseUri: Uri.parse('http://localhost/api/v1')),
+        accessTokenProvider: () => null,
+        httpClient: MockClient((request) async {
+          if (request.url.path.endsWith('/notification-settings')) {
+            if (request.method == 'PATCH') {
+              final body = jsonDecode(request.body) as Map<String, dynamic>;
+              expect(body['expected_version'], 1);
+              timing = Map<String, dynamic>.from(body['quiet_hours'] as Map);
+            }
+            return http.Response(
+              jsonEncode({
+                'enabled': true,
+                'categories': {'proactive_coach': true},
+                'frequency': 'daily',
+                'version': timing == null ? 1 : 2,
+                'quiet_hours': timing,
+              }),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }
+          if (request.url.path.endsWith('/snooze')) {
+            until = (jsonDecode(request.body) as Map)['until'] as String;
+            return http.Response('{}', 200);
+          }
+          if (request.url.path.endsWith('/review')) {
+            return http.Response('[]', 200);
+          }
+          if (request.url.path.endsWith('/notifications')) {
+            return http.Response(
+              jsonEncode({
+                'list': [
+                  {
+                    'id': 'n',
+                    'title': '提醒',
+                    'body': '测试',
+                    'category': 'proactive_coach',
+                    'data': {'kind': 'missed_workout'},
+                  },
+                ],
+              }),
+              200,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+          }
+          throw StateError('Unexpected request');
+        }),
+      );
+      final controller = ProactiveController(ProactiveRepository(api));
+      addTearDown(controller.dispose);
+      addTearDown(api.close);
+      await controller.refresh();
+      await controller.setTiming({
+        'enabled': true,
+        'start': '22:00',
+        'end': '08:00',
+        'timezone': 'Asia/Shanghai',
+      });
+      expect(controller.settings?.quietHours?['start'], '22:00');
+      await controller.snooze(
+        controller.notices.single,
+        const Duration(hours: 1),
+      );
+      expect(controller.notices, isEmpty);
+      expect(until, endsWith('Z'));
+      expect(controller.errorMessage, isNull);
+    },
+  );
+
   test('important-only scope filters routine nutrition notices', () async {
     var frequency = 'daily';
     var version = 2;
@@ -92,6 +169,7 @@ void main() {
     (tester) async {
       final requests = <String>[];
       var planOpened = false;
+      var exerciseLibraryOpened = false;
       var discussed = false;
       var notificationsEnabled = false;
       var coachCategoryEnabled = false;
@@ -214,24 +292,47 @@ void main() {
         api.close();
       });
 
+      final preferences = ValueNotifier<AppSettings>(
+        const AppSettings(
+          unitSystem: 'metric',
+          timezone: 'Asia/Shanghai',
+          privacyMode: 'private',
+          shareAnonymousAnalytics: false,
+          version: 1,
+        ),
+      );
+      addTearDown(preferences.dispose);
       await tester.pumpWidget(
-        MaterialApp(
-          home: TodayPage(
-            username: '测试用户',
-            controller: training,
-            proactiveController: proactive,
-            exerciseRepository: ExerciseRepository(api),
-            onOpenNutrition: () {},
-            onOpenPlan: () => planOpened = true,
-            onOpenProgress: () {},
-            onOpenAgent: () {},
-            onDiscussNotice: (_) => discussed = true,
+        ValueListenableBuilder<AppSettings>(
+          valueListenable: preferences,
+          builder: (_, settings, _) => AppPreferencesScope(
+            settings: settings,
+            child: MaterialApp(
+              home: TodayPage(
+                username: '测试用户',
+                controller: training,
+                proactiveController: proactive,
+                exerciseRepository: ExerciseRepository(api),
+                onOpenNutrition: () {},
+                onOpenPlan: () => planOpened = true,
+                onOpenProgress: () {},
+                onOpenAgent: () {},
+                onOpenExerciseLibrary: () => exerciseLibraryOpened = true,
+                onDiscussNotice: (_) => discussed = true,
+              ),
+            ),
           ),
         ),
       );
       await tester.pumpAndSettle();
+      expect(
+        find.widgetWithText(OutlinedButton, '动作库').hitTestable(),
+        findsOneWidget,
+      );
+      await tester.tap(find.widgetWithText(OutlinedButton, '动作库'));
+      expect(exerciseLibraryOpened, isTrue);
       await tester.scrollUntilVisible(
-        find.text('主动教练'),
+        find.text('温馨提醒'),
         250,
         scrollable: find.byType(Scrollable).first,
       );
@@ -244,6 +345,21 @@ void main() {
       expect(proactive.errorMessage, isNull, reason: requests.join(', '));
       expect(notificationCategory, 'proactive_coach');
       expect(proactive.notices.length, 1);
+      await tester.scrollUntilVisible(
+        find.text('你有一条教练提醒'),
+        160,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('昨天日历中的训练尚未标记完成'), findsNothing);
+      expect(find.text('有帮助'), findsNothing);
+      preferences.value = const AppSettings(
+        unitSystem: 'metric',
+        timezone: 'Asia/Shanghai',
+        privacyMode: 'summary',
+        shareAnonymousAnalytics: false,
+        version: 2,
+      );
+      await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
         find.text('昨天日历中的训练尚未标记完成'),
         160,

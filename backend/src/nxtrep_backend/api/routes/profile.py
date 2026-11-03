@@ -2,6 +2,7 @@ from fastapi import APIRouter, status
 
 from nxtrep_backend.api.deps import CurrentUser, DbSession
 from nxtrep_backend.api.errors import ApiError
+from nxtrep_backend.repositories.body import SqlAlchemyBodyRepository
 from nxtrep_backend.repositories.goals import (
     SqlAlchemyGoalsRepository,
 )
@@ -19,6 +20,7 @@ from nxtrep_backend.schemas.profile import (
     ProfileResponse,
     ProfileUpdateRequest,
 )
+from nxtrep_backend.services.body import BodyService
 from nxtrep_backend.services.goals import (
     GoalsExerciseUnavailableError,
     GoalsNotFoundError,
@@ -36,6 +38,19 @@ from nxtrep_backend.services.profile import (
 )
 
 router = APIRouter()
+
+
+async def _profile_response(profile, user_id, session) -> ProfileResponse:
+    summary = await BodyService(SqlAlchemyBodyRepository(session)).recent_measurement_summary(
+        user_id
+    )
+    return ProfileResponse.model_validate(
+        {
+            **ProfileResponse.model_validate(profile).model_dump(),
+            "weight_kg": summary["weight_kg"],
+            "weight_recorded_at": summary["weight_recorded_at"],
+        }
+    )
 
 
 def _build_goals_response(
@@ -65,6 +80,7 @@ def _build_goals_response(
 )
 async def get_profile(
     user: CurrentUser,
+    session: DbSession,
 ) -> ProfileResponse:
     if user.profile is None:
         raise ApiError(
@@ -73,7 +89,7 @@ async def get_profile(
             message="Profile not found",
         )
 
-    return ProfileResponse.model_validate(user.profile)
+    return await _profile_response(user.profile, user.id, session)
 
 
 @router.patch(
@@ -92,7 +108,7 @@ async def update_profile(
     )
 
     repository = SqlAlchemyProfileRepository(session)
-    service = ProfileService(repository)
+    service = ProfileService(repository, SqlAlchemyBodyRepository(session))
 
     try:
         profile = await service.update_profile(
@@ -117,7 +133,7 @@ async def update_profile(
             },
         ) from exc
 
-    return ProfileResponse.model_validate(profile)
+    return await _profile_response(profile, user.id, session)
 
 
 @router.get(

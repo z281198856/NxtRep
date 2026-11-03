@@ -32,6 +32,7 @@ def build_confirmation_tools(context: AgentToolContext) -> list[BaseTool]:
             "rejected",
             "failed",
             "expired",
+            "cancelled",
         ]
         | None = None,
         limit: int = 10,
@@ -52,3 +53,25 @@ def build_confirmation_tools(context: AgentToolContext) -> list[BaseTool]:
         }
 
     return [read_confirmation_status, list_confirmations]
+
+
+def build_confirmation_cancel_tools(context: AgentToolContext) -> list[BaseTool]:
+    @tool
+    async def cancel_confirmation(confirmation_id: UUID, expected_version: int) -> dict:
+        """Cancel an identified pending draft only when the user explicitly requests it.
+
+        Read current confirmation ID/version first. Never approves or reverses an
+        already executed operation. Clarify which draft if the reference is ambiguous.
+        Deferring approval (先别保存/先不确认/等会再记) does not cancel a draft;
+        keep it pending, especially when the user interrupts with a read-only question.
+        """
+        item = await context.confirmation_service.get(
+            user_id=context.user_id, confirmation_id=confirmation_id
+        )
+        if item.status != "cancelled":
+            item = await context.confirmation_service.cancel(
+                context.user_id, confirmation_id, expected_version
+            )
+        return {"status": "cancelled", "confirmation": confirmation_payload(item)}
+
+    return [cancel_confirmation]

@@ -45,6 +45,7 @@ def test_factory_registers_handlers_and_builds_workflow(
     settings.rag_enabled = rag_enabled
     settings.rag_candidate_k = 20
     settings.rag_top_k = 5
+    settings.agent_workflow_timeout_seconds = 120
     storage = MagicMock()
     text_model = make_model()
     intent_router_model = make_model()
@@ -103,6 +104,12 @@ def test_factory_registers_handlers_and_builds_workflow(
         "build_fallback_vision_model",
         fallback_vision_model_builder,
     )
+    food_vision_model_builder = MagicMock(return_value=vision_model)
+    food_fallback_model_builder = MagicMock(return_value=fallback_vision_model)
+    monkeypatch.setattr(factory_module, "build_food_vision_model", food_vision_model_builder)
+    monkeypatch.setattr(
+        factory_module, "build_food_fallback_vision_model", food_fallback_model_builder
+    )
     monkeypatch.setattr(
         factory_module,
         "build_agent",
@@ -130,9 +137,12 @@ def test_factory_registers_handlers_and_builds_workflow(
 
     assert isinstance(service, AgentWorkflowService)
     assert service._graph is compiled_graph
-    text_model_builder.assert_called_once_with(settings)
-    vision_model_builder.assert_called_once_with(settings)
-    fallback_vision_model_builder.assert_called_once_with(settings)
+    text_model_builder.assert_any_call(settings)
+    text_model_builder.assert_any_call(settings, timeout_seconds=20, max_retries=0)
+    vision_model_builder.assert_any_call(settings)
+    food_vision_model_builder.assert_called_once_with(settings)
+    fallback_vision_model_builder.assert_any_call(settings)
+    food_fallback_model_builder.assert_called_once_with(settings)
     react_agent_builder.assert_not_called()
     graph_builder.assert_called_once()
 
@@ -147,15 +157,30 @@ def test_factory_registers_handlers_and_builds_workflow(
     ]
 
     handlers = nodes._executor._handlers
+    assert handlers["nutrition_record_draft"]._text_handler is handlers["general_question"]
     assert set(handlers) == {
+        "water_record_draft",
+        "food_catalog_draft",
         "general_question",
         "body_progress_comparison",
         "body_measurement_draft",
+        "profile_update_draft",
+        "workout_set_update_draft",
+        "workout_set_void_draft",
+        "workout_record_draft",
+        "workout_record_update_draft",
+        "workout_record_void_draft",
+        "nutrition_entry_update_draft",
+        "nutrition_entry_delete_draft",
         "memory_write",
+        "confirmation_cancel",
         "body_assessment",
         "nutrition_analysis",
         "nutrition_record_draft",
+        "nutrition_target_draft",
         "training_plan_draft",
+        "schedule_change_draft",
+        "training_progression_draft",
         "structured_data_query",
         "knowledge_retrieval",
     }
@@ -169,9 +194,11 @@ def test_factory_registers_handlers_and_builds_workflow(
             KnowledgeRetrievalBranchHandler,
         )
         assert handlers["knowledge_retrieval"]._service is knowledge_retrieval_service
+        assert handlers["knowledge_retrieval"]._tool_context.user_id == user_id
     else:
-        assert handlers["knowledge_retrieval"] is handlers["general_question"]
-        assert handlers["knowledge_retrieval"]._knowledge_retrieval_enabled is False
+        assert isinstance(handlers["knowledge_retrieval"], KnowledgeRetrievalBranchHandler)
+        assert handlers["knowledge_retrieval"]._service is None
+        assert handlers["knowledge_retrieval"]._web_handler is handlers["general_question"]
     assert isinstance(
         handlers["body_assessment"],
         BodyAssessmentBranchHandler,
@@ -193,6 +220,9 @@ def test_factory_registers_handlers_and_builds_workflow(
     context = react_call.kwargs["tool_context"]
     assert isinstance(context, AgentToolContext)
     assert context.user_id == user_id
+    assert service._tool_journal_provider.__self__ is context.journal
+    assert service._conversation_service._turn_guard.__self__ is service._run_service
+    assert context.memory_scope == ()
     assert isinstance(context.profile_service, ProfileService)
     assert isinstance(context.goals_service, GoalsService)
     assert isinstance(context.workout_service, WorkoutService)

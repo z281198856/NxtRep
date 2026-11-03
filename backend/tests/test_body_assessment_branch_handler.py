@@ -71,13 +71,14 @@ def make_input(
 
 
 @pytest.mark.asyncio
-async def test_body_handler_returns_completed_validated_assessment() -> None:
+@pytest.mark.parametrize("fields", [[], ["age", "weight_kg", "body_images", "photo_angle"]])
+async def test_body_handler_returns_completed_validated_assessment(fields) -> None:
     image = make_image()
     assessment = make_assessment(usable=True)
     workflow = make_workflow()
     workflow.assess_resolved.return_value = assessment
     handler = BodyAssessmentBranchHandler(workflow)
-    branch_input = make_input(images=(image,))
+    branch_input = make_input(images=(image,), missing_fields=fields)
 
     result = await handler.execute(branch_input)
 

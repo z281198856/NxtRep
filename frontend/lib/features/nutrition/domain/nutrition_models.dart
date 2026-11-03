@@ -24,6 +24,13 @@ class NutritionTotals {
   final double proteinG;
   final double carbsG;
   final double fatG;
+
+  Map<String, dynamic> toJson() => {
+    'kcal': kcal,
+    'protein_g': proteinG,
+    'carbs_g': carbsG,
+    'fat_g': fatG,
+  };
 }
 
 class NutritionEstimateRange {
@@ -49,6 +56,11 @@ class NutritionEstimateRange {
   final NutritionTotals minimum;
   final NutritionTotals estimated;
   final NutritionTotals maximum;
+  Map<String, dynamic> toJson() => {
+    'minimum': minimum.toJson(),
+    'estimated': estimated.toJson(),
+    'maximum': maximum.toJson(),
+  };
 }
 
 class NutritionPhotoItem {
@@ -62,6 +74,9 @@ class NutritionPhotoItem {
     required this.assumptions,
     required this.questions,
     this.nutrition,
+    this.visualEvidence,
+    this.portionBasis,
+    this.portionConfidence = 'low',
   });
 
   factory NutritionPhotoItem.fromJson(Map<String, dynamic> json) {
@@ -75,6 +90,9 @@ class NutritionPhotoItem {
       amountMaxG: _decimal(detected['amount_max_g']),
       confidence: detected['confidence'] as String? ?? 'low',
       status: match['status'] as String? ?? 'not_found',
+      visualEvidence: detected['visual_evidence'] as String?,
+      portionBasis: detected['portion_basis'] as String?,
+      portionConfidence: detected['portion_confidence'] as String? ?? 'low',
       assumptions: (json['assumptions'] as List<dynamic>? ?? const [])
           .whereType<String>()
           .toList(),
@@ -98,6 +116,27 @@ class NutritionPhotoItem {
   final List<String> assumptions;
   final List<String> questions;
   final NutritionEstimateRange? nutrition;
+  final String? visualEvidence;
+  final String? portionBasis;
+  final String portionConfidence;
+  Map<String, dynamic> toJson() => {
+    'match': {
+      'status': status,
+      'detected': {
+        'name': name,
+        'estimated_amount_g': amountG,
+        'amount_min_g': amountMinG,
+        'amount_max_g': amountMaxG,
+        'confidence': confidence,
+        'visual_evidence': visualEvidence,
+        'portion_basis': portionBasis,
+        'portion_confidence': portionConfidence,
+      },
+    },
+    'nutrition': nutrition?.toJson(),
+    'assumptions': assumptions,
+    'follow_up_questions': questions,
+  };
 }
 
 class NutritionPhotoDraft {
@@ -148,6 +187,20 @@ class NutritionPhotoDraft {
   final bool isComplete;
   final List<String> assumptions;
   final List<String> questions;
+  Map<String, dynamic> toJson() => {
+    'image_asset_id': imageAssetId,
+    'meal_type': mealType,
+    'eaten_at': eatenAt.toIso8601String(),
+    'recognition': {
+      'assumptions': assumptions,
+      'follow_up_questions': questions,
+    },
+    'calculation': {
+      'items': items.map((e) => e.toJson()).toList(),
+      'totals': totals.toJson(),
+      'is_complete': isComplete,
+    },
+  };
 }
 
 class NutritionPhotoEntryInput {
@@ -382,6 +435,16 @@ class NutritionEntry {
   }
 }
 
+class NutritionTargetRange {
+  const NutritionTargetRange(this.min, this.max);
+  final double min;
+  final double max;
+
+  String get label => min == max
+      ? min.toStringAsFixed(0)
+      : '${min.toStringAsFixed(0)}–${max.toStringAsFixed(0)}';
+}
+
 class DailyNutritionSummary {
   const DailyNutritionSummary({
     required this.date,
@@ -389,6 +452,8 @@ class DailyNutritionSummary {
     required this.completeness,
     this.target,
     this.remaining,
+    this.waterMl = 0,
+    this.recordedMeals = const [],
   });
 
   factory DailyNutritionSummary.fromJson(Map<String, dynamic> json) =>
@@ -398,6 +463,10 @@ class DailyNutritionSummary {
           Map<String, dynamic>.from(json['consumed'] as Map),
         ),
         completeness: _decimal(json['record_completeness']),
+        waterMl: (json['water_ml'] as num?)?.toInt() ?? 0,
+        recordedMeals: List<String>.from(
+          json['recorded_meals'] as List? ?? const [],
+        ),
         target: json['target'] == null
             ? null
             : Map<String, dynamic>.from(json['target'] as Map),
@@ -408,9 +477,29 @@ class DailyNutritionSummary {
 
   final DateTime date;
   final NutritionTotals consumed;
+  final int waterMl;
   final double completeness;
   final Map<String, dynamic>? target;
   final Map<String, dynamic>? remaining;
+  final List<String> recordedMeals;
+
+  NutritionTargetRange? targetRange(String nutrient) {
+    final suffix = nutrient == 'kcal' ? '' : '_g';
+    final lower = target?['${nutrient}_min$suffix'];
+    final upper = target?['${nutrient}_max$suffix'];
+    if (lower == null || upper == null) return null;
+    final min = double.tryParse('$lower');
+    final max = double.tryParse('$upper');
+    if (min == null ||
+        max == null ||
+        !min.isFinite ||
+        !max.isFinite ||
+        min < 0 ||
+        max < min) {
+      return null;
+    }
+    return NutritionTargetRange(min, max);
+  }
 }
 
 class WeeklyNutritionSummary {

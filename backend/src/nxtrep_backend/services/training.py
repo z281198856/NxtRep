@@ -599,6 +599,40 @@ class TrainingService:
             )
         )
 
+    async def revise_pending_reschedule(
+        self, user_id: UUID, confirmation_id: UUID, expected_version: int,
+        body: RescheduleDraftCreateRequest,
+    ) -> tuple[CalendarRescheduleDraft, Confirmation]:
+        """Replace an unapproved reschedule atomically; validation keeps the old card usable."""
+        if self.confirmations is None:
+            raise RuntimeError("Confirmation repository is required")
+        async with self.repository.session.begin_nested():
+            old = await self.confirmations.get_confirmation(user_id, confirmation_id, lock=True)
+            if old is None:
+                raise TrainingNotFoundError("Pending reschedule not found")
+            if (old.status != "pending" or old.version != expected_version
+                    or old.expires_at <= datetime.now(UTC)
+                    or old.operation_type != "calendar_reschedule"):
+                raise TrainingConflictError("Reschedule confirmation is no longer editable")
+            previous = await self.repository.get_reschedule_draft(
+                user_id, UUID(old.after["draft_id"]), lock=True
+            )
+            if previous is None or previous.missed_event_id != body.missed_event_id:
+                raise TrainingConflictError("Replacement must refer to the original event")
+            if previous.status != "submitted" or previous.version != old.after["draft_version"]:
+                raise TrainingConflictError("The original draft was modified")
+            if previous.strategy not in {"shift", "merge", "skip"}:
+                raise TrainingConflictError("This adjustment cannot be replaced by a reschedule")
+            draft = await self.create_reschedule_draft(user_id, body)
+            new = await self.submit_reschedule(user_id, draft.id, draft.version)
+            new.after = {**new.after, "replaces_confirmation_id": str(old.id)}
+            old.status = "rejected"
+            old.rejection_reason = f"superseded_by:{new.id}"
+            old.version += 1
+            previous.version += 1
+            await self.repository.session.flush()
+            return draft, new
+
     async def create_compression_draft(
         self, user_id: UUID, body: CompressionDraftCreateRequest
     ) -> CalendarRescheduleDraft:

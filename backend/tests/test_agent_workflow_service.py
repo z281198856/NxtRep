@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -50,6 +51,77 @@ def make_conversation_service(conversation_id=None) -> tuple[MagicMock, SimpleNa
     service.begin_turn = AsyncMock(return_value=(conversation, AgentConversationContext()))
     service.finish_turn = AsyncMock()
     return service, conversation
+
+
+@pytest.mark.asyncio
+async def test_chat_deadline_cancels_stalled_graph_and_records_timeout():
+    graph = make_graph({})
+    cancelled = asyncio.Event()
+
+    async def stalled(*_args, **_kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    graph.ainvoke.side_effect = stalled
+    conversations, _ = make_conversation_service()
+    run = SimpleNamespace(id=uuid4(), status="running")
+    runs = MagicMock(spec=AgentRunService)
+    runs.start = AsyncMock(return_value=run)
+    service = AgentWorkflowService(graph, conversations, runs, timeout_seconds=0.02)
+    with pytest.raises(TimeoutError):
+        await service.chat(user_id=uuid4(), request=AgentChatRequest(message="记午餐"))
+    assert cancelled.is_set()
+    runs.rollback_pending.assert_awaited_once_with(run=run)
+    assert runs.fail.call_args.kwargs["error_code"] == "AGENT_TIMEOUT"
+    conversations.finish_turn.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("progress", [False, True])
+async def test_stream_total_deadline_ends_stall_even_with_intermediate_events(progress):
+    graph = MagicMock(spec=CompiledStateGraph)
+    closed = asyncio.Event()
+
+    async def stalled(*_args, **_kwargs):
+        try:
+            yield ("custom", {"event": "message_delta", "node": "synthesize_response",
+                              "delta": "已收到的文字"})
+            while True:
+                await asyncio.sleep(0.005) if progress else await asyncio.Event().wait()
+                yield ("custom", {"event": "diagnostic"})
+        finally:
+            closed.set()
+
+    graph.astream.side_effect = stalled
+    conversations, _ = make_conversation_service()
+    service = AgentWorkflowService(graph, conversations, timeout_seconds=0.025)
+    events = [event async for event in service.stream(
+        user_id=uuid4(), request=AgentChatRequest(message="记录饮食"))]
+    assert events[-1].event == "failed" and events[-1].error_code == "AGENT_TIMEOUT"
+    assert events[1].delta == "已收到的文字"
+    assert closed.is_set()
+    conversations.finish_turn.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provider_timeout_is_saved_without_private_provider_details():
+    graph = make_graph({})
+    graph.ainvoke.side_effect = TimeoutError("private-provider-token-and-url")
+    conversations, _ = make_conversation_service()
+    run = SimpleNamespace(id=uuid4(), status="running")
+    runs = MagicMock(spec=AgentRunService)
+    runs.start = AsyncMock(return_value=run)
+    runs.checkpoint = AsyncMock()
+    runs.fail = AsyncMock()
+    service = AgentWorkflowService(graph, conversations, runs)
+    with pytest.raises(TimeoutError):
+        await service.chat(user_id=uuid4(), request=AgentChatRequest(message="查询记录"))
+    saved = runs.fail.call_args.kwargs
+    assert saved["error_code"] == "AGENT_TIMEOUT"
+    assert "private" not in saved["error_message"]
+    assert "核对记录" in saved["error_message"]
 
 
 @pytest.mark.asyncio

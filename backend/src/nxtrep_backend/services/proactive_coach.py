@@ -17,6 +17,7 @@ from nxtrep_backend.db.models import (
     NutritionEntry,
     Workout,
 )
+from nxtrep_backend.services.notification_timing import coach_paused, coach_quiet, notice_due
 
 CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
 COACH_NAMESPACE = UUID("81359e64-5b92-4dba-9c87-36ec97b25aa0")
@@ -92,6 +93,27 @@ class ProactiveCoachService:
         await self.session.flush()
         return notice
 
+    async def snooze(self, user_id: UUID, notification_id: UUID, until: datetime):
+        now = datetime.now(UTC)
+        if until.utcoffset() is None or not now < until <= now + timedelta(days=7):
+            raise ValueError("延后时间须包含时区，且在未来 7 天以内")
+        notice = await self.session.scalar(
+            select(AppNotification)
+            .where(
+                AppNotification.id == notification_id,
+                AppNotification.user_id == user_id,
+                AppNotification.category == COACH_CATEGORY,
+            )
+            .with_for_update()
+        )
+        if notice is None:
+            raise ProactiveNoticeNotFoundError("Proactive notice not found")
+        if notice.read_at is not None:
+            raise ValueError("已读提醒不能延后")
+        notice.data = {**notice.data, "snoozed_until": until.astimezone(UTC).isoformat()}
+        await self.session.flush()
+        return notice
+
     async def review_user(self, user_id: UUID, today: date | None = None) -> list[AppNotification]:
         """Create at most one notice per kind and day, only after explicit opt-in."""
         settings = await self.session.scalar(
@@ -106,6 +128,9 @@ class ProactiveCoachService:
         ):
             return []
 
+        now = datetime.now(UTC)
+        if coach_paused(settings.quiet_hours, now):
+            return []
         today = today or datetime.now(CHINA_TIMEZONE).date()
         yesterday = today - timedelta(days=1)
         start = datetime.combine(yesterday, time.min, tzinfo=CHINA_TIMEZONE)
@@ -242,10 +267,14 @@ class ProactiveCoachService:
             remaining = max(0, remaining - 1)
         if not ids:
             return []
-        return list(
+        notifications = list(
             await self.session.scalars(
                 select(AppNotification)
                 .where(AppNotification.id.in_(ids))
                 .order_by(AppNotification.created_at.desc())
             )
         )
+
+        if coach_quiet(settings.quiet_hours, now):
+            return []
+        return [notice for notice in notifications if notice_due(notice.data, now)]

@@ -44,6 +44,26 @@ class ProactiveRepository {
     ),
   );
 
+  Future<ProactiveSettings> setTiming(
+    ProactiveSettings current,
+    Map<String, dynamic> config,
+  ) async => ProactiveSettings.fromJson(
+    expectJsonObject(
+      await _apiClient.patch(
+        '/notification-settings',
+        body: {'quiet_hours': config, 'expected_version': current.version},
+      ),
+      context: '更新提醒时间接口',
+    ),
+  );
+
+  Future<void> snooze(String id, DateTime until) async {
+    await _apiClient.post(
+      '/agent/proactive/notices/$id/snooze',
+      body: {'until': until.toUtc().toIso8601String()},
+    );
+  }
+
   Future<void> review() async {
     await _apiClient.post('/agent/proactive/review');
   }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/settings/app_preferences.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../domain/body_progress_models.dart';
 import 'body_progress_controller.dart';
@@ -831,7 +832,8 @@ class _ReportPage extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    '$weightChange kg',
+                    AppPreferencesScope.unitsOf(context)
+                        .formatWeight(double.tryParse('$weightChange') ?? 0),
                     style: Theme.of(context).textTheme.titleMedium
                         ?.copyWith(color: AppColors.indigo),
                   ),
@@ -841,6 +843,27 @@ class _ReportPage extends StatelessWidget {
           ],
           if (report.recommendations.isNotEmpty)
             _BulletSection(title: '下一阶段建议', items: report.recommendations),
+          if (report.facts['comparison'] is Map) ...[
+            const SizedBox(height: 24),
+            const SectionTitle(title: '与前一期比较'),
+            const SizedBox(height: 10),
+            AppSurface(
+              child: Text(
+                '比较区间：${(report.facts['comparison'] as Map)['period']?['start_date']} 至 '
+                '${(report.facts['comparison'] as Map)['period']?['end_date']}\n'
+                '训练记录次数变化：${(report.facts['comparison'] as Map)['training_count_change']} 次\n'
+                '体重样本：${(report.facts['samples'] as Map?)?['weight'] ?? 0} 个，'
+                '腰围样本：${(report.facts['samples'] as Map?)?['waist'] ?? 0} 个',
+              ),
+            ),
+          ],
+          if (report.facts['limitations'] is List)
+            _BulletSection(
+              title: '如何理解这些记录',
+              items: (report.facts['limitations'] as List)
+                  .map((item) => '$item')
+                  .toList(),
+            ),
           if (report.missingData.isNotEmpty) ...[
             const SizedBox(height: 24),
             const SectionTitle(title: '数据完整度'),

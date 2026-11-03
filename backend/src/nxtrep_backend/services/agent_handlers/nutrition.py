@@ -1,6 +1,7 @@
 from nxtrep_backend.schemas.agent import AgentBranchResult
 from nxtrep_backend.services.agent_context import build_contextual_user_payload
 from nxtrep_backend.services.agent_execution import AgentBranchInput
+from nxtrep_backend.services.agent_resolution import observation_input_fields
 from nxtrep_backend.services.nutrition_image import (
     NutritionImageAnalysisService,
 )
@@ -45,9 +46,17 @@ class NutritionAnalysisBranchHandler:
             ),
         )
 
+        resolved = {"food_images"}
+        if analysis.recognition.foods:
+            resolved.update({"identifiable_food", "food_name", "food_details"})
+        if analysis.calculation.is_complete:
+            resolved.update({"food_selection", "amount_g", "portion", "nutrients", "nutrition"})
+        missing_fields = observation_input_fields(task, missing_fields, resolved)
         if not analysis.recognition.foods:
             if "identifiable_food" not in missing_fields:
                 missing_fields.append("identifiable_food")
+        elif not analysis.calculation.is_complete and "food_selection" not in missing_fields:
+            missing_fields.append("food_selection")
 
         status = "needs_input" if missing_fields else "completed"
 
@@ -57,5 +66,7 @@ class NutritionAnalysisBranchHandler:
             status=status,
             result=analysis.model_dump(mode="json"),
             missing_fields=missing_fields,
-            requires_confirmation=(analysis.calculation.requires_confirmation),
+            # Nutrition uncertainty is kept inside calculation.requires_confirmation.
+            # This read-only analysis does not issue a business command/approval card.
+            requires_confirmation=False,
         )

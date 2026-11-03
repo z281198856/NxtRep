@@ -26,6 +26,7 @@ from nxtrep_backend.schemas.workout import (
     WorkoutExerciseReplaceRequest,
     WorkoutExerciseResponse,
     WorkoutExerciseSkipRequest,
+    WorkoutExerciseTargetUpdateRequest,
     WorkoutFinishRequest,
     WorkoutFinishResponse,
     WorkoutHistoryResponse,
@@ -45,6 +46,7 @@ from nxtrep_backend.services.workout import (
     WorkoutConflictError,
     WorkoutNotFoundError,
     WorkoutService,
+    WorkoutTargetError,
     set_payload,
     workout_duration_seconds,
 )
@@ -61,6 +63,8 @@ def _service(session: DbSession) -> WorkoutService:
 
 
 def _raise_workout_error(exc: RuntimeError) -> None:
+    if isinstance(exc, WorkoutTargetError):
+        raise ApiError(status_code=422, code="WORKOUT_TARGET_INVALID", message=str(exc)) from exc
     if isinstance(exc, WorkoutNotFoundError):
         raise ApiError(status_code=404, code="WORKOUT_NOT_FOUND", message=str(exc)) from exc
     if isinstance(exc, WorkoutConflictError):
@@ -81,7 +85,7 @@ def _workout_response(aggregate: WorkoutAggregate) -> WorkoutResponse:
     workout = aggregate.workout
     now = datetime.now(UTC)
     rest_timer = None
-    if workout.status == "in_progress":
+    if workout.status in {"in_progress", "paused"}:
         latest = max(
             (
                 (completed_set, exercise)
@@ -94,8 +98,14 @@ def _workout_response(aggregate: WorkoutAggregate) -> WorkoutResponse:
         if latest is not None:
             completed_set, exercise = latest
             duration = int(exercise.target_snapshot.get("rest_seconds") or 0)
-            ends_at = completed_set.completed_at + timedelta(seconds=duration)
-            remaining = max(0, int((ends_at - now).total_seconds()))
+            pause = exercise.target_snapshot.get("rest_timer_pause", {})
+            pause_seconds = (
+                int(pause.get("seconds", 0))
+                if pause.get("set_id") == str(completed_set.id) else 0
+            )
+            ends_at = completed_set.completed_at + timedelta(seconds=duration + pause_seconds)
+            reference = workout.paused_at if workout.status == "paused" else now
+            remaining = max(0, int((ends_at - (reference or now)).total_seconds()))
             if duration > 0 and remaining > 0:
                 rest_timer = WorkoutRestTimerResponse(
                     workout_exercise_id=exercise.id,
@@ -107,6 +117,8 @@ def _workout_response(aggregate: WorkoutAggregate) -> WorkoutResponse:
                 )
     return WorkoutResponse(
         id=workout.id,
+        calendar_event_id=workout.calendar_event_id,
+        plan_day_id=workout.plan_day_id,
         status=workout.status,
         started_at=workout.started_at,
         ended_at=workout.ended_at,
@@ -235,6 +247,22 @@ async def add_workout_exercise(
         _raise_workout_error(exc)
     await complete_idempotent(idem, decision, response, 201)
     return response
+
+
+@router.patch("/{workout_id}/exercises/{item_id}/target", response_model=WorkoutResponse)
+async def update_workout_exercise_target(
+    workout_id: UUID,
+    item_id: UUID,
+    body: WorkoutExerciseTargetUpdateRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> WorkoutResponse:
+    try:
+        return _workout_response(
+            await _service(session).update_exercise_target(user.id, workout_id, item_id, body)
+        )
+    except RuntimeError as exc:
+        _raise_workout_error(exc)
 
 
 @router.post("/{workout_id}/sets", response_model=WorkoutSetResponse, status_code=201)

@@ -1,12 +1,33 @@
 from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class QuietHours(StrictModel):
+    enabled: bool = False
+    start: str = Field(default="22:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    end: str = Field(default="08:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    timezone: str = "Asia/Shanghai"
+    pause_until: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_timing(self):
+        if self.start == self.end:
+            raise ValueError("免打扰开始和结束时间不能相同")
+        try:
+            ZoneInfo(self.timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("无效的时区") from exc
+        if self.pause_until is not None and self.pause_until.utcoffset() is None:
+            raise ValueError("暂停截止时间须包含时区")
+        return self
 
 
 class NotificationSettingsUpdate(StrictModel):
@@ -15,6 +36,11 @@ class NotificationSettingsUpdate(StrictModel):
     frequency: Literal["important_only", "daily", "realtime"] | None = None
     quiet_hours: dict | None = None
     expected_version: int = Field(ge=1)
+
+    @field_validator("quiet_hours")
+    @classmethod
+    def validate_quiet_hours(cls, value):
+        return None if value is None else QuietHours.model_validate(value).model_dump(mode="json")
 
 
 class NotificationSettingsResponse(BaseModel):

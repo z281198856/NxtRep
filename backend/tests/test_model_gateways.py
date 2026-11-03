@@ -1,3 +1,5 @@
+import ssl
+
 import pytest
 from langchain_deepseek import ChatDeepSeek
 from langchain_openai import ChatOpenAI
@@ -8,6 +10,7 @@ from nxtrep_backend.providers.models import (
     ConfiguredTextModelGateway,
     GlmVisionModelGateway,
     ModelConfigurationError,
+    _model_tls_context,
     build_fallback_intent_router_model,
     build_fallback_text_model,
     build_fallback_vision_model,
@@ -71,7 +74,21 @@ def test_text_gateway_uses_explicit_proxy_configuration(provider: str) -> None:
 
     model = ConfiguredTextModelGateway(settings).build()
 
-    assert model.openai_proxy == "http://127.0.0.1:10808/"
+    for client in (model.http_client, model.http_async_client):
+        proxies = [
+            transport._pool._proxy_url
+            for transport in client._mounts.values()
+            if transport is not None and hasattr(transport._pool, "_proxy_url")
+        ]
+        assert len(proxies) == 1
+        assert proxies[0].host == b"127.0.0.1" and proxies[0].port == 10808
+
+
+def test_tls_context_is_reused_and_keeps_certificate_verification():
+    first = _model_tls_context()
+    assert _model_tls_context() is first
+    assert first.verify_mode == ssl.CERT_REQUIRED
+    assert first.check_hostname
 
 
 def test_glm_vision_gateway_is_independent_from_text_provider() -> None:
@@ -155,7 +172,7 @@ def test_intent_router_gateway_uses_independent_fail_fast_policy() -> None:
 
     assert regular_model.request_timeout == 45
     assert regular_model.max_retries == 2
-    assert router_model.request_timeout == 12
+    assert router_model.request_timeout == 30
     assert router_model.max_retries == 0
 
 

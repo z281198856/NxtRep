@@ -12,23 +12,20 @@ from nxtrep_backend.services.body import BodyService
 @pytest.mark.asyncio
 async def test_latest_weight_and_body_fat_can_come_from_different_records() -> None:
     repository = MagicMock()
-    repository.list_measurements = AsyncMock(
-        return_value=(
-            [
-                SimpleNamespace(
-                    measured_at=datetime(2026, 9, 25, tzinfo=UTC),
-                    weight_kg=Decimal("78.5"),
-                    body_fat_percent=None,
-                    body_fat_method=None,
-                ),
-                SimpleNamespace(
-                    measured_at=datetime(2026, 9, 20, tzinfo=UTC),
-                    weight_kg=None,
-                    body_fat_percent=Decimal("24.0"),
-                    body_fat_method="manual",
-                ),
-            ],
-            2,
+    repository.latest_measurement = AsyncMock(
+        side_effect=(
+            SimpleNamespace(
+                measured_at=datetime(2026, 9, 25, tzinfo=UTC),
+                weight_kg=Decimal("78.5"),
+                body_fat_percent=None,
+                body_fat_method=None,
+            ),
+            SimpleNamespace(
+                measured_at=datetime(2026, 9, 20, tzinfo=UTC),
+                weight_kg=None,
+                body_fat_percent=Decimal("24.0"),
+                body_fat_method="manual",
+            ),
         )
     )
     user_id = uuid4()
@@ -42,15 +39,14 @@ async def test_latest_weight_and_body_fat_can_come_from_different_records() -> N
         "body_fat_recorded_at": "2026-09-20",
         "body_fat_method": "manual",
     }
-    repository.list_measurements.assert_awaited_once_with(
-        user_id, None, None, 1, 100
-    )
+    assert repository.latest_measurement.await_args_list[0].args == (user_id, "weight_kg")
+    assert repository.latest_measurement.await_args_list[1].args == (user_id, "body_fat_percent")
 
 
 @pytest.mark.asyncio
 async def test_missing_body_measurements_remain_missing() -> None:
     repository = MagicMock()
-    repository.list_measurements = AsyncMock(return_value=([], 0))
+    repository.latest_measurement = AsyncMock(return_value=None)
 
     summary = await BodyService(repository).recent_measurement_summary(uuid4())
 

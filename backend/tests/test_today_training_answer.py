@@ -44,8 +44,8 @@ def test_direct_answer_prioritizes_active_workout_progress() -> None:
 
     assert answer is not None
     assert "进行中的训练" in answer
-    assert "回答：" in answer
-    assert "分析：" in answer
+    assert "回答：" not in answer
+    assert "分析：" not in answer
     assert "深蹲：已完成 1/3 组，每组 8–12 次，目标 40 kg，做完还可再做约 2 次" in answer
     assert "RIR" not in answer
     assert "不应覆盖进行中训练" not in answer

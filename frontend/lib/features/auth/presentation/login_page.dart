@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
+import 'app_loading_page.dart';
 import 'session_controller.dart';
 
 class LoginPage extends StatefulWidget {
@@ -28,11 +29,14 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    FocusScope.of(context).unfocus();
     await widget.controller.login(_username.text, _password.text);
   }
 
   @override
   Widget build(BuildContext context) {
+    if (widget.controller.submitting) return const AppLoadingPage();
+
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -138,18 +142,8 @@ class _LoginPageState extends State<LoginPage> {
                             ),
                             const SizedBox(height: 20),
                             FilledButton(
-                              onPressed: widget.controller.submitting
-                                  ? null
-                                  : _submit,
-                              child: widget.controller.submitting
-                                  ? const SizedBox.square(
-                                      dimension: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: Colors.white,
-                                      ),
-                                    )
-                                  : const Text('登录'),
+                              onPressed: _submit,
+                              child: const Text('登录'),
                             ),
                           ],
                         ),

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from nxtrep_backend.schemas.agent import AgentIntentPlan, AgentIntentTask
+from nxtrep_backend.services.agent_context_builder import bound_conversation, bound_payload
 from nxtrep_backend.services.conversation import AgentConversationContext
 from nxtrep_backend.services.memory import MemoryService
 
@@ -24,6 +25,10 @@ class ActiveMemoryContext:
 
 
 TASK_MEMORY_CATEGORIES: dict[str, frozenset[str]] = {
+    "schedule_change_draft": frozenset({"schedule", "exercise_limit", "communication_preference"}),
+    "training_progression_draft": frozenset(
+        {"exercise_limit", "equipment", "communication_preference"}
+    ),
     "general_question": frozenset({"communication_preference"}),
     "training_plan_draft": frozenset(
         {
@@ -49,6 +54,9 @@ TASK_MEMORY_CATEGORIES: dict[str, frozenset[str]] = {
             "dietary_preference",
             "communication_preference",
         }
+    ),
+    "nutrition_target_draft": frozenset(
+        {"long_term_goal", "allergy", "dietary_preference", "communication_preference"}
     ),
     "body_assessment": frozenset({"long_term_goal", "exercise_limit", "communication_preference"}),
     "body_progress_comparison": frozenset(
@@ -124,13 +132,16 @@ def build_contextual_user_payload(
         not conversation_context.summary
         and not conversation_context.recent_messages
         and not memories
+        and not conversation_context.task_state
     ):
         return current_message
     return json.dumps(
         {
             "current_user_message": current_message,
-            "conversation_context": conversation_context.as_dict(),
-            "active_long_term_memories": [item.as_dict() for item in memories],
+            "conversation_context": bound_conversation(
+                conversation_context, current_message, limit=12000
+            ).as_dict(),
+            "active_long_term_memories": bound_payload([item.as_dict() for item in memories], 2000),
         },
         ensure_ascii=False,
     )

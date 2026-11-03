@@ -1,47 +1,11 @@
 from datetime import UTC, datetime
-from functools import lru_cache
 from uuid import UUID
 
 from nxtrep_backend.db.models import Confirmation
-from nxtrep_backend.domain.confirmation import ConfirmationDraft, ConfirmationNotFoundError
-from nxtrep_backend.repositories.confirmation import (
-    ConfirmationRepository,
-    InMemoryConfirmationRepository,
-    SqlAlchemyConfirmationRepository,
-)
+from nxtrep_backend.repositories.confirmation import SqlAlchemyConfirmationRepository
 from nxtrep_backend.repositories.nutrition import SqlAlchemyNutritionRepository
 from nxtrep_backend.repositories.training import SqlAlchemyTrainingRepository
 from nxtrep_backend.repositories.workout import SqlAlchemyWorkoutRepository
-from nxtrep_backend.schemas.confirmation import ConfirmationCreate
-
-
-class ConfirmationService:
-    def __init__(self, repository: ConfirmationRepository) -> None:
-        self._repository = repository
-
-    async def create(self, user_id: UUID, data: ConfirmationCreate) -> ConfirmationDraft:
-        draft = ConfirmationDraft(user_id=user_id, **data.model_dump())
-        await self._repository.add(draft)
-        return draft
-
-    async def decide(
-        self,
-        user_id: UUID,
-        confirmation_id: str,
-        decision: str,
-    ) -> ConfirmationDraft:
-        draft = await self._repository.get_for_user(confirmation_id, user_id)
-        if draft is None:
-            raise ConfirmationNotFoundError(f"Confirmation {confirmation_id} was not found")
-        draft.decide(decision)
-        # Approval changes only the confirmation state in this scaffold. A later command
-        # dispatcher must execute the operation transactionally and record its outcome.
-        return draft
-
-
-@lru_cache
-def get_confirmation_service() -> ConfirmationService:
-    return ConfirmationService(InMemoryConfirmationRepository())
 
 
 class DatabaseConfirmationNotFoundError(RuntimeError):
@@ -88,6 +52,22 @@ class DatabaseConfirmationService:
         try:
             item.result = await self._execute(item)
         except RuntimeError as exc:
+            if item.operation_type in {"food_update", "food_delete"}:
+                from nxtrep_backend.services.nutrition import (
+                    NutritionConflictError,
+                    NutritionNotFoundError,
+                )
+
+                if isinstance(exc, NutritionConflictError):
+                    raise DatabaseConfirmationConflictError(
+                        "食品已被修改，旧草稿未生效。请重新读取最新内容后生成草稿。",
+                        item.version,
+                    ) from exc
+                if isinstance(exc, NutritionNotFoundError):
+                    raise DatabaseConfirmationConflictError(
+                        "食品已删除或当前账户无权修改，草稿未生效。请重新核对食品条目。",
+                        item.version,
+                    ) from exc
             raise DatabaseConfirmationConflictError(str(exc), item.version) from exc
         item.status = "succeeded"
         item.executed_at = datetime.now(UTC)
@@ -132,6 +112,141 @@ class DatabaseConfirmationService:
 
     async def _execute(self, item: Confirmation) -> dict:
         session = self.repository.session
+        if item.operation_type in {
+            "workout_record_create",
+            "workout_record_update",
+            "workout_record_void",
+        }:
+            from nxtrep_backend.repositories.exercise import SqlAlchemyExercisesRepository
+            from nxtrep_backend.services.exercise import ExercisesService
+            from nxtrep_backend.services.workout import WorkoutService
+            from nxtrep_backend.services.workout_record import WorkoutRecordService
+
+            service = WorkoutRecordService(
+                WorkoutService(
+                    SqlAlchemyWorkoutRepository(session), SqlAlchemyTrainingRepository(session)
+                ),
+                self.repository,
+                ExercisesService(SqlAlchemyExercisesRepository(session)),
+            )
+            if item.operation_type == "workout_record_create":
+                return await service.execute_record(item)
+            return await service.execute_change(item)
+        if item.operation_type in {"workout_set_update", "workout_set_void"}:
+            from nxtrep_backend.schemas.workout import (
+                WorkoutSetUpdateRequest,
+                WorkoutSetVoidRequest,
+            )
+            from nxtrep_backend.services.workout import (
+                WorkoutConflictError,
+                WorkoutNotFoundError,
+                WorkoutService,
+            )
+
+            service = WorkoutService(
+                SqlAlchemyWorkoutRepository(session), SqlAlchemyTrainingRepository(session)
+            )
+            workout_id, set_id = UUID(item.after["workout_id"]), UUID(item.after["set_id"])
+            data = {"reason": item.reason, "expected_version": item.after["expected_version"]}
+            try:
+                current_workout = await service.repository.get_workout(
+                    item.user_id, workout_id, lock=True
+                )
+                if (
+                    current_workout is None
+                    or current_workout.version != item.after["expected_workout_version"]
+                ):
+                    raise WorkoutConflictError("训练记录版本变化")
+                if item.operation_type == "workout_set_update":
+                    result = await service.update_set(
+                        item.user_id,
+                        workout_id,
+                        set_id,
+                        WorkoutSetUpdateRequest.model_validate({**item.after["changes"], **data}),
+                    )
+                else:
+                    result = await service.void_set(
+                        item.user_id, workout_id, set_id, WorkoutSetVoidRequest.model_validate(data)
+                    )
+            except (WorkoutConflictError, WorkoutNotFoundError) as exc:
+                raise RuntimeError(
+                    "训练组不存在、已作废或被修改，旧草稿未生效。请重新读取记录。"
+                ) from exc
+            return {"resource_id": str(result.id), "resource_version": result.version}
+        if item.operation_type == "profile_update":
+            from nxtrep_backend.repositories.body import SqlAlchemyBodyRepository
+            from nxtrep_backend.repositories.profile import SqlAlchemyProfileRepository
+            from nxtrep_backend.schemas.profile import ProfileUpdateRequest
+            from nxtrep_backend.services.profile import ProfileService, ProfileVersionConflictError
+
+            body = ProfileUpdateRequest.model_validate(
+                {**item.after["changes"], "expected_version": item.after["expected_version"]}
+            )
+            try:
+                profile = await ProfileService(
+                    SqlAlchemyProfileRepository(session), SqlAlchemyBodyRepository(session)
+                ).update_profile(
+                    user_id=item.user_id,
+                    changes=body.model_dump(exclude_unset=True, exclude={"expected_version"}),
+                    expected_version=body.expected_version,
+                )
+            except ProfileVersionConflictError as exc:
+                raise RuntimeError(
+                    "个人资料已被修改，旧草稿未生效。请读取最新资料后重新生成草稿。"
+                ) from exc
+            return {"resource_id": str(profile.user_id), "resource_version": profile.version}
+        if item.operation_type in {"food_update", "food_delete"}:
+            from nxtrep_backend.schemas.nutrition import FoodUpdateRequest
+            from nxtrep_backend.services.nutrition import NutritionService
+
+            service = NutritionService(SqlAlchemyNutritionRepository(session))
+            food_id = UUID(item.after["food_id"])
+            expected = int(item.after["expected_version"])
+            if item.operation_type == "food_delete":
+                await service.delete_food(item.user_id, food_id, expected)
+                return {"resource_id": str(food_id), "deleted": True}
+            draft = item.after["food"]
+            food, version = await service.update_food(
+                item.user_id,
+                food_id,
+                FoodUpdateRequest.model_validate(
+                    {
+                        **{
+                            field: draft[field]
+                            for field in FoodUpdateRequest.model_fields
+                            if field != "expected_version"
+                        },
+                        "expected_version": expected,
+                    }
+                ),
+                source=draft["source"],
+                confidence=draft["confidence"],
+            )
+            return {
+                "resource_id": str(food.id),
+                "resource_version": version.version,
+                "food_version_id": str(version.id),
+            }
+        if item.operation_type == "food_create":
+            from nxtrep_backend.schemas.nutrition import CustomFoodDraftRequest, FoodCreateRequest
+            from nxtrep_backend.services.nutrition import NutritionService
+
+            draft = CustomFoodDraftRequest.model_validate(item.after["food"])
+            food, version = await NutritionService(
+                SqlAlchemyNutritionRepository(session)
+            ).create_food(
+                item.user_id,
+                FoodCreateRequest.model_validate(
+                    draft.model_dump(exclude={"source", "confidence", "notes"})
+                ),
+                source=draft.source,
+                confidence=draft.confidence,
+            )
+            return {
+                "resource_id": str(food.id),
+                "resource_version": version.version,
+                "food_version_id": str(version.id),
+            }
         if item.operation_type == "training_plan_activate":
             from nxtrep_backend.services.training import TrainingService
 
@@ -178,6 +293,32 @@ class DatabaseConfirmationService:
                 NutritionEntryCreateRequest.model_validate(item.after["entry"]),
             )
             return {"resource_id": str(entry.id), "resource_version": entry.version}
+        if item.operation_type == "nutrition_entries_date_change":
+            from nxtrep_backend.schemas.nutrition import NutritionDateChangeRequest
+            from nxtrep_backend.services.nutrition import NutritionService
+
+            return await NutritionService(
+                SqlAlchemyNutritionRepository(session)
+            ).apply_saved_date_change(
+                item.user_id, NutritionDateChangeRequest.model_validate(item.after["request"])
+            )
+        if item.operation_type == "nutrition_entry_update":
+            from nxtrep_backend.schemas.nutrition import NutritionSavedEntryRevisionRequest
+            from nxtrep_backend.services.nutrition import NutritionService
+
+            entry = await NutritionService(
+                SqlAlchemyNutritionRepository(session)
+            ).correct_saved_entry(
+                item.user_id,
+                UUID(item.after["entry_id"]),
+                NutritionSavedEntryRevisionRequest(
+                    expected_version=item.after["expected_version"],
+                    changes=item.after.get("changes", []),
+                    remove_item_indices=item.after.get("remove_item_indices", []),
+                    reason=item.reason,
+                ),
+            )
+            return {"resource_id": str(entry.id), "resource_version": entry.version}
         if item.operation_type == "nutrition_entry_delete":
             from nxtrep_backend.services.nutrition import NutritionService
 
@@ -185,7 +326,17 @@ class DatabaseConfirmationService:
                 item.user_id,
                 UUID(item.after["entry_id"]),
                 int(item.after["expected_version"]),
+                reason=item.reason,
             )
+        if item.operation_type == "water_entry_create":
+            from nxtrep_backend.repositories.water import SqlAlchemyWaterRepository
+            from nxtrep_backend.schemas.water import WaterEntryCreateRequest
+
+            body = WaterEntryCreateRequest.model_validate(item.after["water"])
+            entry = await SqlAlchemyWaterRepository(session).create(
+                item.user_id, body.amount_ml, body.consumed_at
+            )
+            return {"resource_id": str(entry.id)}
         if item.operation_type == "body_measurement_create":
             from nxtrep_backend.repositories.body import SqlAlchemyBodyRepository
             from nxtrep_backend.schemas.body import BodyMeasurementCreateRequest
@@ -268,5 +419,7 @@ class DatabaseConfirmationService:
     def _check_pending(item: Confirmation | None, expected_version: int) -> None:
         if item is None:
             raise DatabaseConfirmationNotFoundError("Confirmation not found")
+        if item.status == "expired":
+            raise DatabaseConfirmationConflictError("Confirmation has expired", item.version)
         if item.version != expected_version or item.status != "pending":
             raise DatabaseConfirmationConflictError("Confirmation was modified", item.version)

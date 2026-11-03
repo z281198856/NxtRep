@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/settings/app_preferences.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../domain/profile_models.dart';
 import 'profile_controller.dart';
@@ -13,12 +14,18 @@ class ProfilePage extends StatefulWidget {
     required this.username,
     required this.loggingOut,
     required this.onLogout,
+    this.onOpenSecurity,
+    this.onOpenLocalRecords,
+    this.onOpenSystemReminders,
   });
 
   final ProfileController controller;
   final String username;
   final bool loggingOut;
   final Future<void> Function() onLogout;
+  final VoidCallback? onOpenSecurity;
+  final VoidCallback? onOpenLocalRecords;
+  final VoidCallback? onOpenSystemReminders;
 
   @override
   State<ProfilePage> createState() => _ProfilePageState();
@@ -131,7 +138,10 @@ class _ProfilePageState extends State<ProfilePage> {
                           title: '个人资料',
                           subtitle: profile == null
                               ? '正在加载'
-                              : _personalSummary(profile),
+                              : _personalSummary(
+                                  profile,
+                                  AppPreferencesScope.unitsOf(context),
+                                ),
                           enabled: profile != null,
                           onTap: () => _open(
                             PersonalProfilePage(controller: widget.controller),
@@ -166,6 +176,36 @@ class _ProfilePageState extends State<ProfilePage> {
                             '应用设置已保存',
                           ),
                         ),
+                        const Divider(height: 1, indent: 70),
+                        _ProfileAction(
+                          icon: Icons.security_rounded,
+                          title: '账户安全',
+                          subtitle: '修改密码、管理登录设备',
+                          enabled:
+                              widget.onOpenSecurity != null &&
+                              !widget.loggingOut,
+                          onTap: widget.onOpenSecurity ?? () {},
+                        ),
+                        const Divider(height: 1, indent: 70),
+                        _ProfileAction(
+                          icon: Icons.cloud_sync_outlined,
+                          title: '离线记录与草稿',
+                          subtitle: '待同步记录、恢复草稿',
+                          enabled:
+                              widget.onOpenLocalRecords != null &&
+                              !widget.loggingOut,
+                          onTap: widget.onOpenLocalRecords ?? () {},
+                        ),
+                        const Divider(height: 1, indent: 70),
+                        _ProfileAction(
+                          icon: Icons.notifications_active_outlined,
+                          title: '手机系统提醒',
+                          subtitle: '定时提醒、通知权限与免打扰',
+                          enabled:
+                              widget.onOpenSystemReminders != null &&
+                              !widget.loggingOut,
+                          onTap: widget.onOpenSystemReminders ?? () {},
+                        ),
                       ],
                     ),
                   ),
@@ -198,6 +238,8 @@ class _PersonalProfilePageState extends State<PersonalProfilePage> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _displayName;
   late final TextEditingController _height;
+  late final MeasurementUnits _units;
+  late final TextEditingController _weight;
   late final TextEditingController _sessionMinutes;
   late String _sex;
   late String? _experienceLevel;
@@ -209,10 +251,10 @@ class _PersonalProfilePageState extends State<PersonalProfilePage> {
   void initState() {
     super.initState();
     final profile = _profile;
+    _units = AppPreferencesScope.readUnits(context);
     _displayName = TextEditingController(text: profile.displayName ?? '');
-    _height = TextEditingController(
-      text: profile.heightCm?.toStringAsFixed(1) ?? '',
-    );
+    _height = TextEditingController(text: _units.lengthInput(profile.heightCm));
+    _weight = TextEditingController(text: _units.weightInput(profile.weightKg));
     _sessionMinutes = TextEditingController(
       text: profile.sessionDurationMinutes?.toString() ?? '',
     );
@@ -225,6 +267,7 @@ class _PersonalProfilePageState extends State<PersonalProfilePage> {
   void dispose() {
     _displayName.dispose();
     _height.dispose();
+    _weight.dispose();
     _sessionMinutes.dispose();
     super.dispose();
   }
@@ -246,7 +289,8 @@ class _PersonalProfilePageState extends State<PersonalProfilePage> {
         displayName: _nullable(_displayName.text),
         sex: _sex,
         birthDate: _birthDate,
-        heightCm: double.tryParse(_height.text.trim()),
+        heightCm: _units.parseLength(_height.text, original: _profile.heightCm),
+        weightKg: _units.parseWeight(_weight.text, original: _profile.weightKg),
         experienceLevel: _experienceLevel,
         sessionDurationMinutes: int.tryParse(_sessionMinutes.text.trim()),
       ),
@@ -303,12 +347,38 @@ class _PersonalProfilePageState extends State<PersonalProfilePage> {
                 inputFormatters: [
                   FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                 ],
-                decoration: const InputDecoration(labelText: '身高（cm）'),
+                decoration: InputDecoration(
+                  labelText: '身高（${_units.lengthLabel}）',
+                ),
                 validator: (value) => _optionalNumberError(
                   value,
-                  min: 1,
-                  max: 300,
-                  message: '请输入 1–300 cm',
+                  min: _units.length(1),
+                  max: _units.length(300),
+                  message:
+                      '请输入 ${_units.formatLength(1)}–${_units.formatLength(300)}',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _weight,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                ],
+                decoration: InputDecoration(
+                  labelText: '体重（${_units.weightLabel}）',
+                  helperText: _profile.weightRecordedAt == null
+                      ? '选填。保存后同步到身体进展，AI 会读取这条记录。'
+                      : '最近记录：${_profile.weightRecordedAt!.year}-${_profile.weightRecordedAt!.month}-${_profile.weightRecordedAt!.day}；修改后新增体重记录。',
+                  helperMaxLines: 2,
+                ),
+                validator: (value) => _optionalNumberError(
+                  value,
+                  min: _units.weight(0.01),
+                  max: _units.weight(500),
+                  message: '请输入大于 0、不超过 ${_units.formatWeight(500)} 的体重',
                 ),
               ),
               const SizedBox(height: 12),
@@ -522,7 +592,6 @@ class AppSettingsPage extends StatefulWidget {
 class _AppSettingsPageState extends State<AppSettingsPage> {
   late String _unitSystem;
   late String _privacyMode;
-  late bool _shareAnalytics;
 
   @override
   void initState() {
@@ -530,7 +599,6 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
     final settings = widget.controller.settings!;
     _unitSystem = settings.unitSystem;
     _privacyMode = settings.privacyMode;
-    _shareAnalytics = settings.shareAnonymousAnalytics;
   }
 
   Future<void> _save() async {
@@ -538,7 +606,7 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
       AppSettingsInput(
         unitSystem: _unitSystem,
         privacyMode: _privacyMode,
-        shareAnonymousAnalytics: _shareAnalytics,
+        shareAnonymousAnalytics: false,
       ),
     );
     if (saved && mounted) Navigator.of(context).pop(true);
@@ -557,7 +625,7 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
             const _FormIntro(
               icon: Icons.verified_user_outlined,
               title: '由你控制的数据设置',
-              message: '训练记录默认仅自己可见；匿名分析开关不会影响核心功能。',
+              message: '单位设置用于身体数据和训练重量；记录仍仅自己可见。食物份量沿用克，饮水沿用毫升。',
             ),
             const SizedBox(height: 24),
             Text('计量单位', style: Theme.of(context).textTheme.titleMedium),
@@ -573,27 +641,29 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
               },
             ),
             const SizedBox(height: 24),
-            Text('隐私模式', style: Theme.of(context).textTheme.titleMedium),
+            Text('首页提醒隐私', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 10),
             SegmentedButton<String>(
               segments: const [
-                ButtonSegment(value: 'private', label: Text('完全私密')),
-                ButtonSegment(value: 'summary', label: Text('仅汇总信息')),
+                ButtonSegment(value: 'private', label: Text('隐藏摘要')),
+                ButtonSegment(value: 'summary', label: Text('显示摘要')),
               ],
               selected: {_privacyMode},
               onSelectionChanged: (value) {
                 setState(() => _privacyMode = value.single);
               },
             ),
+            const SizedBox(height: 10),
+            const Text('隐藏摘要时，首页只提示有新提醒；主动打开提醒列表后可查看详情。此设置不开放任何公开分享。'),
             const SizedBox(height: 18),
             AppSurface(
               padding: EdgeInsets.zero,
               child: SwitchListTile.adaptive(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                title: const Text('分享匿名使用数据'),
-                subtitle: const Text('帮助改进稳定性，不包含训练照片和对话正文'),
-                value: _shareAnalytics,
-                onChanged: (value) => setState(() => _shareAnalytics = value),
+                title: const Text('匿名稳定性统计 · 暂未开放'),
+                subtitle: const Text('当前版本不会采集或上报匿名使用统计。'),
+                value: false,
+                onChanged: null,
               ),
             ),
             const SizedBox(height: 12),
@@ -831,10 +901,10 @@ String _profileSummary(UserProfile profile) {
   return '${profile.weeklyTrainingDays ?? 0} 次/周 · $level';
 }
 
-String _personalSummary(UserProfile profile) {
+String _personalSummary(UserProfile profile, MeasurementUnits units) {
   final height = profile.heightCm == null
       ? '身高待补充'
-      : '${profile.heightCm!.toStringAsFixed(0)} cm';
+      : units.formatLength(profile.heightCm!, decimals: 0);
   return '${profile.displayName ?? '昵称待补充'} · $height';
 }
 
@@ -847,7 +917,7 @@ String _trainingSummary(UserProfile profile, TrainingPreferences preferences) {
 
 String _settingsSummary(AppSettings settings) {
   final units = settings.unitSystem == 'metric' ? '公制' : '英制';
-  final privacy = settings.privacyMode == 'private' ? '完全私密' : '仅汇总信息';
+  final privacy = settings.privacyMode == 'private' ? '隐藏提醒摘要' : '显示提醒摘要';
   return '$units · $privacy';
 }
 

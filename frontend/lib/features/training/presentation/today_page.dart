@@ -1,3 +1,5 @@
+import '../../../core/settings/app_preferences.dart';
+
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -20,6 +22,7 @@ class TodayPage extends StatefulWidget {
     required this.onOpenPlan,
     required this.onOpenProgress,
     required this.onOpenAgent,
+    required this.onOpenExerciseLibrary,
     required this.onDiscussNotice,
   });
 
@@ -31,6 +34,7 @@ class TodayPage extends StatefulWidget {
   final VoidCallback onOpenPlan;
   final VoidCallback onOpenProgress;
   final VoidCallback onOpenAgent;
+  final VoidCallback onOpenExerciseLibrary;
   final ValueChanged<ProactiveNotice> onDiscussNotice;
 
   @override
@@ -182,11 +186,11 @@ class _TodayPageState extends State<TodayPage> {
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
               children: [
                 Text(
-                  '主动教练建议',
+                  '温馨提醒',
                   style: Theme.of(sheetContext).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 8),
-                const Text('建议来自已记录的数据；点开后可查看或调整，教练不会自动改动计划。'),
+                const Text('根据你的记录提供提醒，点开即可查看相关安排。'),
                 const SizedBox(height: 14),
                 for (final notice in widget.proactiveController.notices)
                   Column(
@@ -223,6 +227,102 @@ class _TodayPageState extends State<TodayPage> {
     _ => Icons.auto_awesome_rounded,
   };
 
+  Future<void> _editReminderTiming() async {
+    final current = widget.proactiveController.settings;
+    if (current == null) return;
+    final config = <String, dynamic>{
+      'enabled': false,
+      'start': '22:00',
+      'end': '08:00',
+      'timezone': 'Asia/Shanghai',
+      'pause_until': null,
+      ...?current.quietHours,
+    };
+    String timeText(TimeOfDay value) =>
+        '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, update) => AlertDialog(
+          title: const Text('提醒时间'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('免打扰'),
+                value: config['enabled'] == true,
+                onChanged: (value) => update(() => config['enabled'] = value),
+              ),
+              for (final (key, label) in [('start', '开始'), ('end', '结束')])
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(label),
+                  trailing: Text(config[key] as String),
+                  onTap: () async {
+                    final parts = (config[key] as String).split(':');
+                    final selected = await showTimePicker(
+                      context: context,
+                      initialTime: TimeOfDay(
+                        hour: int.parse(parts[0]),
+                        minute: int.parse(parts[1]),
+                      ),
+                    );
+                    if (selected != null && context.mounted) {
+                      update(() => config[key] = timeText(selected));
+                    }
+                  },
+                ),
+              const Text('按上海时间；免打扰期间隐藏提醒，结束后可刷新查看。'),
+              if (config['pause_until'] != null)
+                Text(
+                  '暂停至 ${DateTime.parse(config['pause_until'] as String).toLocal().toString().substring(0, 16)}',
+                ),
+              Wrap(
+                children: [
+                  TextButton(
+                    onPressed: () => update(
+                      () => config['pause_until'] = DateTime.now()
+                          .add(const Duration(hours: 24))
+                          .toUtc()
+                          .toIso8601String(),
+                    ),
+                    child: const Text('暂停一天'),
+                  ),
+                  TextButton(
+                    onPressed: () => update(() => config['pause_until'] = null),
+                    child: const Text('恢复提醒'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (config['start'] == config['end']) {
+                  ScaffoldMessenger.of(
+                    this.context,
+                  ).showSnackBar(const SnackBar(content: Text('开始和结束时间不能相同。')));
+                  return;
+                }
+                Navigator.pop(dialogContext, config);
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result != null && mounted) {
+      await widget.proactiveController.setTiming(result);
+    }
+  }
+
   Widget _noticeActions(ProactiveNotice notice, {VoidCallback? closeSheet}) =>
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -247,6 +347,23 @@ class _TodayPageState extends State<TodayPage> {
                     notice.feedbackRating == rating ? '已评价：$label' : label,
                   ),
                 ),
+              PopupMenuButton<Duration>(
+                tooltip: '稍后提醒',
+                enabled: !widget.proactiveController.updating,
+                onSelected: (delay) =>
+                    widget.proactiveController.snooze(notice, delay),
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    value: Duration(hours: 1),
+                    child: Text('1 小时后提醒'),
+                  ),
+                  PopupMenuItem(value: Duration(days: 1), child: Text('明天提醒')),
+                ],
+                child: const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: Text('稍后提醒'),
+                ),
+              ),
               TextButton.icon(
                 onPressed: () {
                   closeSheet?.call();
@@ -278,12 +395,12 @@ class _TodayPageState extends State<TodayPage> {
     );
   }
 
-  Future<void> _start(CalendarEvent event) async {
+  Future<void> _start(CalendarEvent? event) async {
     final preCheck = await showModalBottomSheet<PreWorkoutCheckInput>(
       context: context,
       isScrollControlled: true,
       builder: (_) =>
-          _PreWorkoutCheckSheet(defaultMinutes: event.estimatedMinutes),
+          _PreWorkoutCheckSheet(defaultMinutes: event?.estimatedMinutes ?? 60),
     );
     if (preCheck == null) return;
     if (await widget.controller.start(event, preCheck: preCheck) && mounted) {
@@ -329,10 +446,18 @@ class _TodayPageState extends State<TodayPage> {
                     submitting: widget.controller.submitting,
                     onContinue: _openWorkout,
                     onStart: nextEvent == null ? null : () => _start(nextEvent),
+                    onStartFreely: () => _start(null),
                     onOpenPlan: widget.onOpenPlan,
                   ),
                   const SizedBox(height: 26),
-                  const SectionTitle(title: '快速开始'),
+                  SectionTitle(
+                    title: '快速开始',
+                    action: OutlinedButton.icon(
+                      onPressed: widget.onOpenExerciseLibrary,
+                      icon: const Icon(Icons.fitness_center_rounded, size: 18),
+                      label: const Text('动作库'),
+                    ),
+                  ),
                   const SizedBox(height: 12),
                   GridView.count(
                     crossAxisCount: 2,
@@ -365,7 +490,7 @@ class _TodayPageState extends State<TodayPage> {
                       ),
                       QuickActionCard(
                         icon: Icons.auto_awesome_rounded,
-                        label: '问 AI 教练',
+                        label: '问 AI 私人教练',
                         subtitle: '获得即时建议',
                         tint: AppColors.mint,
                         onTap: widget.onOpenAgent,
@@ -374,7 +499,7 @@ class _TodayPageState extends State<TodayPage> {
                   ),
                   const SizedBox(height: 26),
                   SectionTitle(
-                    title: '主动教练',
+                    title: '温馨提醒',
                     action: widget.proactiveController.notices.length > 2
                         ? TextButton(
                             onPressed: _openCoachInbox,
@@ -390,11 +515,11 @@ class _TodayPageState extends State<TodayPage> {
                         Row(
                           children: [
                             const Icon(
-                              Icons.auto_awesome_rounded,
+                              Icons.notifications_none_rounded,
                               color: AppColors.mint,
                             ),
                             const SizedBox(width: 10),
-                            const Expanded(child: Text('根据你的记录检查需要关注的事')),
+                            const Expanded(child: Text('关注训练、饮食与恢复')),
                             Switch.adaptive(
                               value: widget.proactiveController.enabled,
                               onChanged:
@@ -406,7 +531,9 @@ class _TodayPageState extends State<TodayPage> {
                             ),
                           ],
                         ),
-                        const Text('开启后会检查记录，建议仅在应用内展示；通常每天最多两条，高疲劳可例外。不会自动改计划。'),
+                        const Text(
+                          '开启后，相关提醒会显示在这里。通常每天最多两条，恢复状态需要关注时可能增加。计划调整仍由你确认。',
+                        ),
                         if (widget.proactiveController.errorMessage
                             case final message?) ...[
                           const SizedBox(height: 10),
@@ -449,9 +576,16 @@ class _TodayPageState extends State<TodayPage> {
                               ),
                             ],
                           ),
+                          TextButton.icon(
+                            onPressed: widget.proactiveController.updating
+                                ? null
+                                : _editReminderTiming,
+                            icon: const Icon(Icons.schedule_rounded),
+                            label: const Text('免打扰与暂停'),
+                          ),
                           const Divider(height: 22),
                           if (widget.proactiveController.notices.isEmpty)
-                            const Text('目前没有新的建议，继续按自己的节奏记录即可。'),
+                            const Text('暂时没有新的提醒，按自己的节奏继续就好。'),
                           for (final notice
                               in widget.proactiveController.notices.take(2))
                             Column(
@@ -459,15 +593,41 @@ class _TodayPageState extends State<TodayPage> {
                               children: [
                                 ListTile(
                                   contentPadding: EdgeInsets.zero,
-                                  leading: Icon(_noticeIcon(notice.kind)),
-                                  title: Text(notice.title),
-                                  subtitle: Text(notice.body),
+                                  leading: Icon(
+                                    AppPreferencesScope.of(context)
+                                                ?.showNoticeSummary ==
+                                            true
+                                        ? _noticeIcon(notice.kind)
+                                        : Icons.notifications_none_rounded,
+                                  ),
+                                  title: Text(
+                                    AppPreferencesScope.of(context)
+                                                ?.showNoticeSummary ==
+                                            true
+                                        ? notice.title
+                                        : '你有一条教练提醒',
+                                  ),
+                                  subtitle: Text(
+                                    AppPreferencesScope.of(context)
+                                                ?.showNoticeSummary ==
+                                            true
+                                        ? notice.body
+                                        : '摘要已隐藏，打开提醒列表查看详情',
+                                  ),
                                   trailing: const Icon(
                                     Icons.chevron_right_rounded,
                                   ),
-                                  onTap: () => _openNotice(notice),
+                                  onTap: () =>
+                                      AppPreferencesScope.of(context)
+                                              ?.showNoticeSummary ==
+                                          true
+                                      ? _openNotice(notice)
+                                      : _openCoachInbox(),
                                 ),
-                                _noticeActions(notice),
+                                if (AppPreferencesScope.of(context)
+                                        ?.showNoticeSummary ==
+                                    true)
+                                  _noticeActions(notice),
                               ],
                             ),
                         ],
@@ -542,6 +702,7 @@ class _TodayHero extends StatelessWidget {
     required this.submitting,
     required this.onContinue,
     required this.onStart,
+    required this.onStartFreely,
     required this.onOpenPlan,
   });
 
@@ -550,6 +711,7 @@ class _TodayHero extends StatelessWidget {
   final bool submitting;
   final VoidCallback onContinue;
   final VoidCallback? onStart;
+  final VoidCallback onStartFreely;
   final VoidCallback onOpenPlan;
 
   @override
@@ -644,11 +806,20 @@ class _TodayHero extends StatelessWidget {
                 active
                     ? '继续训练'
                     : scheduled && !completed
-                    ? '开始训练'
+                    ? '按计划训练'
                     : '查看计划',
               ),
             ),
           ),
+          if (!active) ...[
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: submitting ? null : onStartFreely,
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('自主训练'),
+            ),
+          ],
         ],
       ),
     );

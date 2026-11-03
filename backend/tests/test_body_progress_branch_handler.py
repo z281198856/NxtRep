@@ -63,7 +63,8 @@ def make_handler():
 
 
 @pytest.mark.asyncio
-async def test_comparison_uses_saved_history_when_only_current_photo_is_uploaded() -> None:
+@pytest.mark.parametrize("fields", [[], ["age", "weight_kg", "comparison_body_images"]])
+async def test_comparison_uses_saved_history_when_only_current_photo_is_uploaded(fields) -> None:
     handler, workflow, progress, resolver = make_handler()
     user_id = uuid4()
     current = make_image()
@@ -71,7 +72,9 @@ async def test_comparison_uses_saved_history_when_only_current_photo_is_uploaded
     progress.list.return_value = [SimpleNamespace(image_asset_id=historical.asset_id)]
     resolver.resolve.return_value = [historical]
 
-    result = await handler.execute(make_input(user_id, [current]))
+    branch = make_input(user_id, [current])
+    branch.task.missing_fields = fields
+    result = await handler.execute(branch)
 
     assert result.status == "completed"
     assert result.result["comparison_order"] == [

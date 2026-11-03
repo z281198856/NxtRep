@@ -14,6 +14,7 @@ void main() {
   testWidgets('active plan opens full day and exercise details', (
     tester,
   ) async {
+    var exerciseLibraryOpened = false;
     final api = ApiClient(
       config: ApiConfig(baseUri: Uri.parse('https://api.example.test/api/v1')),
       accessTokenProvider: () => 'access',
@@ -68,12 +69,22 @@ void main() {
         home: PlanPage(
           controller: controller,
           onAskCoach: (_) async {},
-          onOpenExerciseLibrary: () {},
+          onOpenExerciseLibrary: () => exerciseLibraryOpened = true,
         ),
       ),
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('动作库').hitTestable(), findsOneWidget);
+    await tester.tap(find.text('动作库'));
+    expect(exerciseLibraryOpened, isTrue);
+
+    await tester.scrollUntilVisible(
+      find.text('查看完整计划'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
     expect(find.text('我的三日力量计划'), findsOneWidget);
     await tester.tap(find.text('查看完整计划'));
     await tester.pumpAndSettle();

@@ -1,7 +1,11 @@
+import '../../../core/settings/app_preferences.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../../../core/offline/form_draft.dart';
 
 import '../../exercises/data/exercise_repository.dart';
 import '../../exercises/domain/exercise_models.dart';
@@ -24,6 +28,7 @@ class WorkoutPage extends StatefulWidget {
 
 class _WorkoutPageState extends State<WorkoutPage> {
   Timer? _ticker;
+  final _scrollController = ScrollController();
 
   @override
   void initState() {
@@ -36,6 +41,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
   @override
   void dispose() {
     _ticker?.cancel();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -46,11 +52,14 @@ class _WorkoutPageState extends State<WorkoutPage> {
       builder: (_) => _SetEntrySheet(exercise: exercise),
     );
     if (input == null) return;
-    await widget.controller.completeSet(
+    final saved = await widget.controller.completeSet(
       exercise: exercise,
       weightKg: input.weightKg,
       reps: input.reps,
     );
+    if (mounted && saved) {
+      await clearSubmittedDraft(context, 'set:${exercise.id}:new');
+    }
   }
 
   Future<void> _editSet(WorkoutExercise exercise, WorkoutSet set) async {
@@ -60,11 +69,14 @@ class _WorkoutPageState extends State<WorkoutPage> {
       builder: (_) => _SetEntrySheet(exercise: exercise, editingSet: set),
     );
     if (input == null) return;
-    await widget.controller.updateSet(
+    final saved = await widget.controller.updateSet(
       set: set,
       weightKg: input.weightKg,
       reps: input.reps,
     );
+    if (mounted && saved) {
+      await clearSubmittedDraft(context, 'set:${exercise.id}:${set.id}');
+    }
   }
 
   Future<void> _deleteSet(WorkoutSet set) async {
@@ -100,8 +112,57 @@ class _WorkoutPageState extends State<WorkoutPage> {
   }
 
   Future<void> _addExercise() async {
-    final selected = await _chooseExercise(title: '临时添加动作');
-    if (selected != null) await widget.controller.addExercise(selected.id);
+    final workout = widget.controller.activeWorkout;
+    if (workout == null) return;
+    final selected = await _chooseExercise(
+      title: workout.isPlanBased
+          ? '临时添加动作'
+          : workout.exercises.isEmpty
+          ? '添加第一个动作'
+          : '下一个动作',
+    );
+    if (selected == null) return;
+    if (await widget.controller.addExercise(selected.id) && mounted) {
+      await WidgetsBinding.instance.endOfFrame;
+      if (mounted && _scrollController.hasClients) {
+        await _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    }
+  }
+
+  Future<void> _adjustTarget(
+    WorkoutExercise exercise, {
+    bool rest = false,
+  }) async {
+    final value = await showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _NumberSettingSheet(
+        title: rest ? '组间休息' : '调整目标组数',
+        label: rest ? '休息时长（秒）' : '目标组数',
+        initialValue: rest ? exercise.restSeconds : exercise.targetSets,
+        minimum: rest ? 0 : exercise.sets.length.clamp(1, 20),
+        maximum: rest ? 1800 : 20,
+        presets: rest ? const [30, 60, 90, 120, 180] : const [3, 4, 5, 6],
+        helper: rest
+            ? '用于这个动作的组间休息；当前倒计时从最近一组完成时计算。0 秒表示关闭。'
+            : '只调整本次训练，已完成的组会保留。',
+      ),
+    );
+    if (value == null) return;
+    if (rest && value == exercise.restSeconds ||
+        !rest && value == exercise.targetSets) {
+      return;
+    }
+    await widget.controller.updateExerciseTarget(
+      exercise,
+      targetSets: rest ? null : value,
+      restSeconds: rest ? value : null,
+    );
   }
 
   Future<void> _replaceExercise(WorkoutExercise exercise) async {
@@ -177,7 +238,9 @@ class _WorkoutPageState extends State<WorkoutPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('完成 ${summary.completedSets} 组'),
-            Text('训练容量 ${summary.totalVolumeKg.toStringAsFixed(1)} kg'),
+            Text(
+              '训练容量 ${AppPreferencesScope.unitsOf(context).formatWeight(summary.totalVolumeKg)}',
+            ),
             Text('用时 ${_formatDuration(summary.durationSeconds)}'),
             if (summary.prCount > 0) Text('刷新 ${summary.prCount} 项个人纪录'),
           ],
@@ -203,11 +266,39 @@ class _WorkoutPageState extends State<WorkoutPage> {
           return const Scaffold(body: Center(child: Text('没有进行中的训练')));
         }
 
-        final elapsed = workout.elapsedAt(DateTime.now());
         final paused = workout.status == 'paused';
+        final addLabel = workout.isPlanBased
+            ? '临时添加动作'
+            : workout.exercises.isEmpty
+            ? '添加第一个动作'
+            : '下一个动作';
+        final restExercise =
+            workout.exercises
+                .where(
+                  (item) => item.id == workout.restTimer?.workoutExerciseId,
+                )
+                .firstOrNull ??
+            workout.exercises
+                .where((item) => !item.completed && !item.skipped)
+                .firstOrNull ??
+            workout.exercises.lastOrNull;
         return Scaffold(
           appBar: AppBar(
-            title: Text(_formatDuration(elapsed)),
+            title: Text(workout.isPlanBased ? '计划训练' : '自主训练'),
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(78),
+              child: _WorkoutTimers(
+                workout: workout,
+                restExercise: restExercise,
+                onAdjustRest:
+                    restExercise == null ||
+                        restExercise.skipped ||
+                        paused ||
+                        widget.controller.submitting
+                    ? null
+                    : () => _adjustTarget(restExercise, rest: true),
+              ),
+            ),
             actions: [
               IconButton(
                 tooltip: paused ? '继续训练' : '暂停训练',
@@ -230,20 +321,18 @@ class _WorkoutPageState extends State<WorkoutPage> {
                   if (value == 'add') _addExercise();
                   if (value == 'abandon') _abandon();
                 },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'add', child: Text('临时添加动作')),
-                  PopupMenuItem(value: 'abandon', child: Text('放弃本次训练')),
+                enabled: !widget.controller.submitting && !paused,
+                itemBuilder: (_) => [
+                  PopupMenuItem(value: 'add', child: Text(addLabel)),
+                  const PopupMenuItem(value: 'abandon', child: Text('放弃本次训练')),
                 ],
               ),
             ],
           ),
           body: ListView(
+            controller: _scrollController,
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
-              if (workout.restTimer case final timer?) ...[
-                _RestTimerCard(timer: timer),
-                const SizedBox(height: 12),
-              ],
               if (paused) ...[
                 const Card(
                   child: Padding(
@@ -273,7 +362,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                 const Card(
                   child: Padding(
                     padding: EdgeInsets.all(24),
-                    child: Text('这次训练还没有动作，请先在计划中添加动作。'),
+                    child: Text('选择今天要练的第一个动作，练完后可以继续添加。'),
                   ),
                 )
               else
@@ -286,6 +375,8 @@ class _WorkoutPageState extends State<WorkoutPage> {
                     onDeleteSet: _deleteSet,
                     onReplace: () => _replaceExercise(exercise),
                     onSkip: () => _skipExercise(exercise),
+                    onAdjustSets: () => _adjustTarget(exercise),
+                    onAdjustRest: () => _adjustTarget(exercise, rest: true),
                   ),
                 ),
               const SizedBox(height: 4),
@@ -294,7 +385,7 @@ class _WorkoutPageState extends State<WorkoutPage> {
                     ? null
                     : _addExercise,
                 icon: const Icon(Icons.add_rounded),
-                label: const Text('临时添加动作'),
+                label: Text(addLabel),
               ),
             ],
           ),
@@ -304,30 +395,64 @@ class _WorkoutPageState extends State<WorkoutPage> {
   }
 }
 
-class _RestTimerCard extends StatelessWidget {
-  const _RestTimerCard({required this.timer});
+class _WorkoutTimers extends StatelessWidget {
+  const _WorkoutTimers({
+    required this.workout,
+    required this.restExercise,
+    required this.onAdjustRest,
+  });
 
-  final WorkoutRestTimer timer;
+  final Workout workout;
+  final WorkoutExercise? restExercise;
+  final VoidCallback? onAdjustRest;
 
   @override
   Widget build(BuildContext context) {
-    final remaining = timer.remainingAt(DateTime.now());
-    return Card(
-      color: Theme.of(context).colorScheme.secondaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            const Icon(Icons.timer_outlined),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                remaining > 0 ? '休息 ${_formatDuration(remaining)}' : '可以开始下一组',
-                style: Theme.of(context).textTheme.titleMedium,
+    final now = workout.status == 'paused'
+        ? workout.pausedAt ?? DateTime.now()
+        : DateTime.now();
+    final remaining = workout.restTimer?.remainingAt(now) ?? 0;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('总用时'),
+                Text(
+                  _formatDuration(workout.elapsedAt(DateTime.now())),
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: TextButton.icon(
+              onPressed: onAdjustRest,
+              icon: const Icon(Icons.timer_outlined),
+              label: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    workout.restTimer != null
+                        ? remaining > 0
+                              ? '组间休息'
+                              : '休息结束'
+                        : '休息时长',
+                  ),
+                  Text(
+                    workout.restTimer != null
+                        ? _formatDuration(remaining)
+                        : _formatDuration(restExercise?.restSeconds ?? 90),
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -342,6 +467,8 @@ class _ExerciseCard extends StatelessWidget {
     required this.onDeleteSet,
     required this.onReplace,
     required this.onSkip,
+    required this.onAdjustSets,
+    required this.onAdjustRest,
   });
 
   final WorkoutExercise exercise;
@@ -351,6 +478,8 @@ class _ExerciseCard extends StatelessWidget {
   final ValueChanged<WorkoutSet> onDeleteSet;
   final VoidCallback onReplace;
   final VoidCallback onSkip;
+  final VoidCallback onAdjustSets;
+  final VoidCallback onAdjustRest;
 
   @override
   Widget build(BuildContext context) {
@@ -370,7 +499,15 @@ class _ExerciseCard extends StatelessWidget {
                         ?.copyWith(fontWeight: FontWeight.w700),
                   ),
                 ),
-                Text('${exercise.sets.length}/${exercise.targetSets} 组'),
+                TextButton.icon(
+                  onPressed: submitting || exercise.skipped
+                      ? null
+                      : onAdjustSets,
+                  icon: const Icon(Icons.edit_outlined, size: 16),
+                  label: Text(
+                    '${exercise.sets.length}/${exercise.targetSets} 组',
+                  ),
+                ),
                 PopupMenuButton<String>(
                   tooltip: '动作操作',
                   enabled: !submitting && !exercise.skipped,
@@ -386,9 +523,17 @@ class _ExerciseCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 4),
-            Text(
-              '${exercise.repMin}–${exercise.repMax} 次'
-              '${exercise.restSeconds > 0 ? ' · 休息 ${exercise.restSeconds} 秒' : ''}',
+            Row(
+              children: [
+                Text('${exercise.repMin}–${exercise.repMax} 次'),
+                const Spacer(),
+                TextButton(
+                  onPressed: submitting || exercise.skipped
+                      ? null
+                      : onAdjustRest,
+                  child: Text('休息 ${exercise.restSeconds} 秒'),
+                ),
+              ],
             ),
             if (exercise.sets.isNotEmpty) ...[
               const Divider(height: 24),
@@ -399,14 +544,22 @@ class _ExerciseCard extends StatelessWidget {
                     children: [
                       SizedBox(width: 40, child: Text('${set.setIndex}')),
                       Expanded(
-                        child: Text('${set.weightKg.toStringAsFixed(1)} kg'),
+                        child: Text(
+                          AppPreferencesScope.unitsOf(context)
+                              .formatWeight(set.weightKg),
+                        ),
                       ),
                       Text('${set.reps} 次'),
+                      if (set.id.startsWith('local-'))
+                        const Padding(
+                          padding: EdgeInsets.only(left: 6),
+                          child: Text('待同步', style: TextStyle(fontSize: 11)),
+                        ),
                       const SizedBox(width: 8),
                       PopupMenuButton<String>(
                         padding: EdgeInsets.zero,
                         tooltip: '训练组操作',
-                        enabled: !submitting,
+                        enabled: !submitting && !set.id.startsWith('local-'),
                         onSelected: (value) {
                           if (value == 'edit') onEditSet(set);
                           if (value == 'delete') onDeleteSet(set);
@@ -434,6 +587,102 @@ class _ExerciseCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _NumberSettingSheet extends StatefulWidget {
+  const _NumberSettingSheet({
+    required this.title,
+    required this.label,
+    required this.initialValue,
+    required this.minimum,
+    required this.maximum,
+    required this.presets,
+    required this.helper,
+  });
+
+  final String title;
+  final String label;
+  final int initialValue;
+  final int minimum;
+  final int maximum;
+  final List<int> presets;
+  final String helper;
+
+  @override
+  State<_NumberSettingSheet> createState() => _NumberSettingSheetState();
+}
+
+class _NumberSettingSheetState extends State<_NumberSettingSheet> {
+  late final _value = TextEditingController(text: '${widget.initialValue}');
+  final _form = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _value.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (_form.currentState!.validate()) {
+      Navigator.pop(context, int.parse(_value.text));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    top: false,
+    child: SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(
+        20,
+        20,
+        20,
+        MediaQuery.viewInsetsOf(context).bottom + 20,
+      ),
+      child: Form(
+        key: _form,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(widget.title, style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _value,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: InputDecoration(labelText: widget.label),
+              validator: (value) {
+                final number = int.tryParse(value ?? '');
+                return number == null ||
+                        number < widget.minimum ||
+                        number > widget.maximum
+                    ? '请输入 ${widget.minimum}–${widget.maximum}'
+                    : null;
+              },
+              onFieldSubmitted: (_) => _save(),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final preset in widget.presets.where(
+                  (n) => n >= widget.minimum,
+                ))
+                  ActionChip(
+                    label: Text('$preset'),
+                    onPressed: () => _value.text = '$preset',
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(widget.helper),
+            const SizedBox(height: 18),
+            FilledButton(onPressed: _save, child: const Text('保存')),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _FinishInput {
@@ -586,22 +835,45 @@ class _SetEntrySheet extends StatefulWidget {
 
 class _SetEntrySheetState extends State<_SetEntrySheet> {
   late final TextEditingController _weight;
+  late final MeasurementUnits _units;
+  late final double _initialWeight;
   late final TextEditingController _reps;
   final _formKey = GlobalKey<FormState>();
+  late final FormDraft _formDraft;
 
   @override
   void initState() {
     super.initState();
     final last = widget.editingSet ?? widget.exercise.sets.lastOrNull;
-    final initialWeight = last?.weightKg ?? widget.exercise.targetLoadKg;
-    _weight = TextEditingController(text: initialWeight.toStringAsFixed(1));
+    _initialWeight = last?.weightKg ?? widget.exercise.targetLoadKg;
+    _units = AppPreferencesScope.readUnits(context);
+    _weight = TextEditingController(text: _units.weightInput(_initialWeight));
     _reps = TextEditingController(
       text: (last?.reps ?? widget.exercise.repMax).toString(),
+    );
+    _formDraft = FormDraft(
+      records: LocalRecordsScope.read(context),
+      key: 'set:${widget.exercise.id}:${widget.editingSet?.id ?? 'new'}',
+      label: '${widget.exercise.name}训练组',
+      fields: {'weight': _weight, 'reps': _reps},
+      isActive: () => mounted,
+      extras: () => {'imperial': _units.imperial},
+      restoreExtras: (data) {
+        final previous = MeasurementUnits(imperial: data['imperial'] == true);
+        final kg = previous.parseWeight(_weight.text);
+        if (kg != null && previous.imperial != _units.imperial) {
+          _weight.text = _units.weightInput(kg);
+        }
+      },
+      onRestored: () {
+        if (mounted) setState(() {});
+      },
     );
   }
 
   @override
   void dispose() {
+    _formDraft.dispose();
     _weight.dispose();
     _reps.dispose();
     super.dispose();
@@ -609,10 +881,11 @@ class _SetEntrySheetState extends State<_SetEntrySheet> {
 
   void _submit() {
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    _formDraft.dispose();
     Navigator.pop(
       context,
       _SetInput(
-        weightKg: double.parse(_weight.text),
+        weightKg: _units.parseWeight(_weight.text, original: _initialWeight)!,
         reps: int.parse(_reps.text),
       ),
     );
@@ -654,7 +927,9 @@ class _SetEntrySheetState extends State<_SetEntrySheet> {
                         RegExp(r'^\d*\.?\d{0,3}'),
                       ),
                     ],
-                    decoration: const InputDecoration(labelText: '重量（kg）'),
+                    decoration: InputDecoration(
+                      labelText: '重量（${_units.weightLabel}）',
+                    ),
                     validator: (value) {
                       final parsed = double.tryParse(value ?? '');
                       return parsed == null || parsed < 0 ? '请输入有效重量' : null;

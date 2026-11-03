@@ -7,7 +7,7 @@ MAX_EXERCISES_IN_ANSWER = 4
 
 
 def _answer_with_analysis(answer: str, analysis: str) -> str:
-    return f"回答：{answer}\n\n分析：{analysis}"
+    return f"{answer}\n\n{analysis}"
 
 
 def direct_today_training_answer(

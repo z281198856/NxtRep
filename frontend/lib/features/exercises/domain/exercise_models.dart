@@ -231,6 +231,7 @@ String equipmentLabel(String value) => switch (value) {
   'barbell' => '杠铃',
   'dumbbell' => '哑铃',
   'machine' => '固定器械',
+  'smith_machine' => '史密斯机',
   'cable' => '绳索器械',
   'kettlebell' => '壶铃',
   'band' => '弹力带',

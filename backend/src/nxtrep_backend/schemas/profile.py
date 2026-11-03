@@ -23,6 +23,8 @@ class ProfileResponse(BaseModel):
     ]
     birth_date: date | None
     height_cm: Decimal | None
+    weight_kg: Decimal | None = None
+    weight_recorded_at: date | None = None
     experience_level: (
         Literal[
             "beginner",
@@ -54,6 +56,7 @@ class ProfileUpdateRequest(BaseModel):
         | None
     ) = None
     birth_date: date | None = None
+    weight_kg: Decimal | None = Field(default=None, gt=0, le=500, decimal_places=3)
     height_cm: Decimal | None = Field(
         default=None,
         gt=0,
@@ -112,6 +115,7 @@ class ProfileUpdateRequest(BaseModel):
             "sex",
             "birth_date",
             "height_cm",
+            "weight_kg",
             "experience_level",
             "weekly_training_days",
             "session_duration_minutes",

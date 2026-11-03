@@ -1,6 +1,7 @@
 from nxtrep_backend.schemas.agent import AgentBranchResult
 from nxtrep_backend.services.agent_context import build_contextual_user_payload
 from nxtrep_backend.services.agent_execution import AgentBranchInput
+from nxtrep_backend.services.agent_resolution import observation_input_fields
 from nxtrep_backend.services.body_image import BodyImageWorkflow
 
 
@@ -42,9 +43,14 @@ class BodyAssessmentBranchHandler:
             images=branch_input.images,
         )
 
+        missing_fields = observation_input_fields(task, missing_fields, {"body_images"})
         if not any(quality.usable_for_assessment for quality in assessment.photo_quality):
             if "usable_body_image" not in missing_fields:
                 missing_fields.append("usable_body_image")
+        else:
+            missing_fields = observation_input_fields(
+                task, missing_fields, {"usable_body_image", "photo_angle"},
+            )
 
         status = "needs_input" if missing_fields else "completed"
 

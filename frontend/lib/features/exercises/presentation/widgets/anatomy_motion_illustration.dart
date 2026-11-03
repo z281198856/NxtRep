@@ -37,12 +37,50 @@ enum ExerciseMotionKind {
   gluteBridge,
   kneelingCrunch,
   core,
+  legPress,
+  kneeExtension,
+  seatedLegCurl,
+  lyingLegCurl,
+  seatedHipAbduction,
+  seatedHipAdduction,
+  calfRaise,
+  seatedCalfRaise,
+  hipThrust,
+  seatedCrunch,
   generic,
 }
 
 ExerciseMotionKind exerciseMotionKind(String name, String? movementPattern) {
   final value = '${name.toLowerCase()} ${movementPattern?.toLowerCase() ?? ''}';
   bool has(Iterable<String> words) => words.any(value.contains);
+
+  // Specific machine joints must precede generic curl/squat/core matches.
+  if (has(const ['腿举', '倒蹬', '蹬腿', 'leg_press'])) {
+    return ExerciseMotionKind.legPress;
+  }
+  if (has(const ['腿屈伸', '腿伸展', 'knee_extension'])) {
+    return ExerciseMotionKind.kneeExtension;
+  }
+  if (has(const ['俯卧腿弯举', '卧式腿弯举', 'lying_leg_curl'])) {
+    return ExerciseMotionKind.lyingLegCurl;
+  }
+  if (has(const ['坐姿腿弯举', 'seated_leg_curl'])) {
+    return ExerciseMotionKind.seatedLegCurl;
+  }
+  if (has(const ['坐姿髋外展', 'seated_hip_abduction'])) {
+    return ExerciseMotionKind.seatedHipAbduction;
+  }
+  if (has(const ['坐姿髋内收', 'seated_hip_adduction'])) {
+    return ExerciseMotionKind.seatedHipAdduction;
+  }
+  if (has(const ['坐姿提踵', 'seated_calf_raise'])) {
+    return ExerciseMotionKind.seatedCalfRaise;
+  }
+  if (has(const ['提踵', 'calf_raise'])) return ExerciseMotionKind.calfRaise;
+  if (has(const ['臀推', 'hip_thrust'])) return ExerciseMotionKind.hipThrust;
+  if (has(const ['器械卷腹', 'seated_crunch'])) {
+    return ExerciseMotionKind.seatedCrunch;
+  }
 
   // Reverse fly must be resolved before generic "fly" and "hinge" matches.
   // Its working direction is opening the arms, opposite to a chest fly.
@@ -65,7 +103,8 @@ ExerciseMotionKind exerciseMotionKind(String name, String? movementPattern) {
   if (has(const ['跪姿绳索卷腹', '绳索卷腹', 'kneeling_crunch'])) {
     return ExerciseMotionKind.kneelingCrunch;
   }
-  if (has(const ['卧推', 'bench_press', 'bench press'])) {
+  if (has(const ['卧推', 'bench_press', 'bench press']) ||
+      has(const ['史密斯', 'smith']) && has(const ['推胸', '胸推'])) {
     return ExerciseMotionKind.benchPress;
   }
   if (has(const ['面拉', 'face_pull', 'face pull'])) {
@@ -94,6 +133,9 @@ ExerciseMotionKind exerciseMotionKind(String name, String? movementPattern) {
   }
   if (has(const ['绳索侧平举', '单臂绳索侧平举'])) {
     return ExerciseMotionKind.singleArmLateralRaise;
+  }
+  if (has(const ['保加利亚', '分腿蹲', '弓步', '箭步', 'lunge', 'split_squat'])) {
+    return ExerciseMotionKind.lunge;
   }
   if (has(const ['深蹲', 'squat'])) return ExerciseMotionKind.squat;
   if (has(const ['硬拉', '髋铰链', '俯身', 'deadlift', 'hinge'])) {
@@ -127,7 +169,7 @@ ExerciseMotionKind exerciseMotionKind(String name, String? movementPattern) {
   if (has(const ['伐木', '转体', 'rotation', 'wood_chop'])) {
     return ExerciseMotionKind.rotation;
   }
-  if (has(const ['推举', '肩推', 'overhead_press', 'vertical_push'])) {
+  if (has(const ['推举', '肩推', '推肩', 'overhead_press', 'vertical_push'])) {
     return ExerciseMotionKind.verticalPush;
   }
   if (has(const [
@@ -147,6 +189,7 @@ ExerciseMotionKind exerciseMotionKind(String name, String? movementPattern) {
     '卧推',
     '俯卧撑',
     '胸推',
+    '推胸',
     'bench',
     'pushup',
     'push_up',
@@ -274,7 +317,7 @@ class _AnatomyMotionIllustrationState extends State<AnatomyMotionIllustration>
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       Text(
-                        _motionCaption(_kind, widget.equipment),
+                        _motionCaption(_kind, widget.equipment, widget.name),
                         style: Theme.of(context).textTheme.labelMedium,
                       ),
                     ],
@@ -492,8 +535,13 @@ class _AnatomyMotionPainter extends CustomPainter {
       _drawRowSupport(canvas);
     }
 
-    final pose = _poseAt(kind, progress);
-    _drawBody(canvas, _poseAt(kind, 0), ghost: true);
+    final pose = _displayPose(kind, progress, equipment);
+    if (equipment == 'machine' ||
+        equipment == 'smith_machine' &&
+            kind == ExerciseMotionKind.verticalPush) {
+      _drawMachineSupport(canvas, pose);
+    }
+    _drawBody(canvas, _displayPose(kind, 0, equipment), ghost: true);
     _drawBody(canvas, pose);
     _drawMuscles(canvas, pose, secondaryMuscles, AppColors.amber, 6.5);
     _drawMuscles(canvas, pose, primaryMuscles, AppColors.primary, 8.5);
@@ -518,6 +566,31 @@ class _AnatomyMotionPainter extends CustomPainter {
       ..drawRRect(bench, fill)
       ..drawRRect(bench, outline)
       ..drawLine(const Offset(56, 82), const Offset(94, 82), outline);
+  }
+
+  void _drawMachineSupport(Canvas canvas, _Pose pose) {
+    final line = Paint()
+      ..color = AppColors.indigo.withValues(alpha: 0.5)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    if (kind == ExerciseMotionKind.pullUp || kind == ExerciseMotionKind.squat) {
+      return;
+    }
+    if (kind == ExerciseMotionKind.lyingLegCurl ||
+        kind == ExerciseMotionKind.hipThrust) {
+      final x = kind == ExerciseMotionKind.hipThrust ? 20.0 : 25.0;
+      final width = kind == ExerciseMotionKind.hipThrust ? 34.0 : 100.0;
+      final y = kind == ExerciseMotionKind.hipThrust ? 72.0 : 85.0;
+      canvas
+        ..drawRect(Rect.fromLTWH(x, y, width, 5), line)
+        ..drawLine(Offset(x + 6, y + 5), Offset(x + 6, 137), line);
+      return;
+    }
+    final hip = pose.hipCenter;
+    canvas
+      ..drawLine(hip.translate(-18, 5), hip.translate(18, 5), line)
+      ..drawLine(hip.translate(-18, 5), hip.translate(-18, -30), line)
+      ..drawLine(hip.translate(0, 5), Offset(hip.dx, 137), line);
   }
 
   void _drawRowSupport(Canvas canvas) {
@@ -745,10 +818,20 @@ class _AnatomyMotionPainter extends CustomPainter {
       if (equipment == 'bodyweight') return;
     }
 
-    if (equipment == 'barbell') {
+    if (equipment == 'barbell' || equipment == 'smith_machine') {
       final y = kind == ExerciseMotionKind.squat
           ? (pose.leftShoulder.dy + pose.rightShoulder.dy) / 2 - 2
+          : kind == ExerciseMotionKind.hipThrust
+          ? pose.hipCenter.dy
           : (pose.leftHand.dy + pose.rightHand.dy) / 2;
+      if (equipment == 'smith_machine') {
+        canvas
+          ..drawLine(const Offset(22, 7), const Offset(22, 142), line)
+          ..drawLine(const Offset(128, 7), const Offset(128, 142), line)
+          ..drawLine(const Offset(22, 7), const Offset(128, 7), line)
+          ..drawLine(const Offset(16, 125), const Offset(32, 125), line)
+          ..drawLine(const Offset(118, 125), const Offset(134, 125), line);
+      }
       canvas.drawLine(Offset(38, y), Offset(112, y), line);
       for (final x in const [35.0, 39.0, 111.0, 115.0]) {
         canvas.drawLine(Offset(x, y - 6), Offset(x, y + 6), line);
@@ -774,7 +857,34 @@ class _AnatomyMotionPainter extends CustomPainter {
           line,
         );
       }
-    } else if (equipment == 'cable' || equipment == 'machine') {
+    } else if (equipment == 'machine') {
+      if (_lowerMachineKinds.contains(kind)) {
+        if (kind == ExerciseMotionKind.hipThrust) {
+          canvas.drawLine(
+            pose.leftHip.translate(-9, 0),
+            pose.rightHip.translate(9, 0),
+            line,
+          );
+        } else {
+          for (final ankle in [pose.leftAnkle, pose.rightAnkle]) {
+            canvas.drawLine(
+              ankle.translate(-5, 3),
+              ankle.translate(6, 3),
+              line,
+            );
+          }
+        }
+      } else {
+        // Fixed machine levers are not cable pulleys.
+        canvas
+          ..drawLine(const Offset(19, 25), const Offset(19, 135), line)
+          ..drawLine(const Offset(131, 25), const Offset(131, 135), line)
+          ..drawLine(const Offset(19, 53), pose.leftHand, line)
+          ..drawLine(const Offset(131, 53), pose.rightHand, line)
+          ..drawCircle(pose.leftHand, 3, line)
+          ..drawCircle(pose.rightHand, 3, line);
+      }
+    } else if (equipment == 'cable') {
       void drawTower(double x, Offset hand, {required double pulleyY}) {
         canvas
           ..drawLine(Offset(x, 18), Offset(x, 134), line)
@@ -1013,6 +1123,16 @@ class _AnatomyMotionPainter extends CustomPainter {
     ExerciseMotionKind.kneelingCrunch ||
     ExerciseMotionKind.core => pose.chest,
     ExerciseMotionKind.gluteBridge => pose.hipCenter,
+    ExerciseMotionKind.hipThrust => pose.hipCenter,
+    ExerciseMotionKind.seatedCrunch => pose.chest,
+    ExerciseMotionKind.legPress ||
+    ExerciseMotionKind.kneeExtension ||
+    ExerciseMotionKind.seatedLegCurl ||
+    ExerciseMotionKind.lyingLegCurl ||
+    ExerciseMotionKind.seatedHipAbduction ||
+    ExerciseMotionKind.seatedHipAdduction ||
+    ExerciseMotionKind.calfRaise ||
+    ExerciseMotionKind.seatedCalfRaise => pose.rightAnkle,
     ExerciseMotionKind.hipExtension ||
     ExerciseMotionKind.hipAbduction => pose.rightAnkle,
     ExerciseMotionKind.benchPress ||
@@ -1090,6 +1210,38 @@ class _Pose {
   Offset get core =>
       Offset((chest.dx + hipCenter.dx) / 2, (chest.dy + hipCenter.dy) / 2);
 
+  _Pose copyWith({
+    Offset? head,
+    Offset? neck,
+    Offset? leftShoulder,
+    Offset? rightShoulder,
+    Offset? leftElbow,
+    Offset? rightElbow,
+    Offset? leftHand,
+    Offset? rightHand,
+    Offset? leftHip,
+    Offset? rightHip,
+    Offset? leftKnee,
+    Offset? rightKnee,
+    Offset? leftAnkle,
+    Offset? rightAnkle,
+  }) => _Pose(
+    head: head ?? this.head,
+    neck: neck ?? this.neck,
+    leftShoulder: leftShoulder ?? this.leftShoulder,
+    rightShoulder: rightShoulder ?? this.rightShoulder,
+    leftElbow: leftElbow ?? this.leftElbow,
+    rightElbow: rightElbow ?? this.rightElbow,
+    leftHand: leftHand ?? this.leftHand,
+    rightHand: rightHand ?? this.rightHand,
+    leftHip: leftHip ?? this.leftHip,
+    rightHip: rightHip ?? this.rightHip,
+    leftKnee: leftKnee ?? this.leftKnee,
+    rightKnee: rightKnee ?? this.rightKnee,
+    leftAnkle: leftAnkle ?? this.leftAnkle,
+    rightAnkle: rightAnkle ?? this.rightAnkle,
+  );
+
   static _Pose lerp(_Pose a, _Pose b, double t) => _Pose(
     head: Offset.lerp(a.head, b.head, t)!,
     neck: Offset.lerp(a.neck, b.neck, t)!,
@@ -1125,7 +1277,212 @@ const _neutralPose = _Pose(
   rightAnkle: Offset(86, 138),
 );
 
+const _lowerMachineKinds = {
+  ExerciseMotionKind.legPress,
+  ExerciseMotionKind.kneeExtension,
+  ExerciseMotionKind.seatedLegCurl,
+  ExerciseMotionKind.lyingLegCurl,
+  ExerciseMotionKind.seatedHipAbduction,
+  ExerciseMotionKind.seatedHipAdduction,
+  ExerciseMotionKind.calfRaise,
+  ExerciseMotionKind.seatedCalfRaise,
+  ExerciseMotionKind.hipThrust,
+  ExerciseMotionKind.seatedCrunch,
+};
+
+final _seatedFrontPose = _neutralPose.copyWith(
+  leftKnee: const Offset(48, 103),
+  rightKnee: const Offset(102, 103),
+  leftAnkle: const Offset(48, 136),
+  rightAnkle: const Offset(102, 136),
+);
+
+const _seatedSidePose = _Pose(
+  head: Offset(48, 17),
+  neck: Offset(48, 31),
+  leftShoulder: Offset(38, 40),
+  rightShoulder: Offset(58, 40),
+  leftElbow: Offset(30, 62),
+  rightElbow: Offset(69, 62),
+  leftHand: Offset(34, 83),
+  rightHand: Offset(74, 83),
+  leftHip: Offset(46, 82),
+  rightHip: Offset(58, 82),
+  leftKnee: Offset(85, 87),
+  rightKnee: Offset(97, 87),
+  leftAnkle: Offset(85, 131),
+  rightAnkle: Offset(97, 131),
+);
+
+_Pose _lowerMachinePose(ExerciseMotionKind kind, double progress) {
+  var start = _seatedSidePose;
+  var end = _seatedSidePose;
+  switch (kind) {
+    case ExerciseMotionKind.legPress:
+      start = start.copyWith(
+        leftKnee: const Offset(78, 94),
+        rightKnee: const Offset(90, 94),
+        leftAnkle: const Offset(96, 114),
+        rightAnkle: const Offset(108, 114),
+      );
+      end = start.copyWith(
+        leftKnee: const Offset(88, 67),
+        rightKnee: const Offset(100, 67),
+        leftAnkle: const Offset(117, 49),
+        rightAnkle: const Offset(129, 49),
+      );
+    case ExerciseMotionKind.kneeExtension:
+      end = start.copyWith(
+        leftAnkle: const Offset(126, 91),
+        rightAnkle: const Offset(138, 91),
+      );
+    case ExerciseMotionKind.seatedLegCurl:
+      start = start.copyWith(
+        leftAnkle: const Offset(126, 91),
+        rightAnkle: const Offset(138, 91),
+      );
+      end = start.copyWith(
+        leftAnkle: const Offset(75, 128),
+        rightAnkle: const Offset(87, 128),
+      );
+    case ExerciseMotionKind.lyingLegCurl:
+      start = const _Pose(
+        head: Offset(19, 62),
+        neck: Offset(32, 65),
+        leftShoulder: Offset(41, 64),
+        rightShoulder: Offset(45, 72),
+        leftElbow: Offset(34, 81),
+        rightElbow: Offset(39, 87),
+        leftHand: Offset(18, 84),
+        rightHand: Offset(23, 91),
+        leftHip: Offset(77, 70),
+        rightHip: Offset(81, 78),
+        leftKnee: Offset(108, 73),
+        rightKnee: Offset(112, 81),
+        leftAnkle: Offset(137, 77),
+        rightAnkle: Offset(141, 85),
+      );
+      end = start.copyWith(
+        leftAnkle: const Offset(112, 41),
+        rightAnkle: const Offset(116, 49),
+      );
+    case ExerciseMotionKind.seatedHipAbduction:
+    case ExerciseMotionKind.seatedHipAdduction:
+      final closed = _seatedFrontPose.copyWith(
+        leftKnee: const Offset(65, 103),
+        rightKnee: const Offset(85, 103),
+        leftAnkle: const Offset(65, 136),
+        rightAnkle: const Offset(85, 136),
+      );
+      final open = _seatedFrontPose.copyWith(
+        leftKnee: const Offset(37, 100),
+        rightKnee: const Offset(113, 100),
+        leftAnkle: const Offset(34, 132),
+        rightAnkle: const Offset(116, 132),
+      );
+      start = kind == ExerciseMotionKind.seatedHipAbduction ? closed : open;
+      end = kind == ExerciseMotionKind.seatedHipAbduction ? open : closed;
+    case ExerciseMotionKind.calfRaise:
+      start = _neutralPose;
+      end = start.copyWith(
+        head: const Offset(75, 9),
+        neck: const Offset(75, 23),
+        leftShoulder: const Offset(60, 33),
+        rightShoulder: const Offset(90, 33),
+        leftElbow: const Offset(55, 58),
+        rightElbow: const Offset(95, 58),
+        leftHand: const Offset(53, 80),
+        rightHand: const Offset(97, 80),
+        leftHip: const Offset(67, 72),
+        rightHip: const Offset(83, 72),
+        leftKnee: const Offset(66, 102),
+        rightKnee: const Offset(84, 102),
+        leftAnkle: const Offset(64, 132),
+        rightAnkle: const Offset(86, 132),
+      );
+    case ExerciseMotionKind.seatedCalfRaise:
+      end = start.copyWith(
+        leftKnee: const Offset(85, 83),
+        rightKnee: const Offset(97, 83),
+        leftAnkle: const Offset(85, 125),
+        rightAnkle: const Offset(97, 125),
+      );
+    case ExerciseMotionKind.hipThrust:
+      start = const _Pose(
+        head: Offset(23, 50),
+        neck: Offset(35, 56),
+        leftShoulder: Offset(42, 61),
+        rightShoulder: Offset(48, 67),
+        leftElbow: Offset(52, 81),
+        rightElbow: Offset(58, 87),
+        leftHand: Offset(71, 96),
+        rightHand: Offset(77, 102),
+        leftHip: Offset(72, 99),
+        rightHip: Offset(78, 105),
+        leftKnee: Offset(109, 99),
+        rightKnee: Offset(115, 105),
+        leftAnkle: Offset(109, 133),
+        rightAnkle: Offset(119, 137),
+      );
+      end = start.copyWith(
+        leftHip: const Offset(74, 70),
+        rightHip: const Offset(80, 76),
+        leftKnee: const Offset(109, 81),
+        rightKnee: const Offset(115, 87),
+        leftHand: const Offset(71, 69),
+        rightHand: const Offset(77, 75),
+      );
+    case ExerciseMotionKind.seatedCrunch:
+      start = _seatedFrontPose;
+      end = start.copyWith(
+        head: const Offset(86, 40),
+        neck: const Offset(80, 49),
+        leftShoulder: const Offset(65, 54),
+        rightShoulder: const Offset(94, 58),
+        leftElbow: const Offset(60, 68),
+        rightElbow: const Offset(101, 70),
+        leftHand: const Offset(66, 81),
+        rightHand: const Offset(98, 83),
+      );
+    default:
+      return _neutralPose;
+  }
+  return _Pose.lerp(start, end, progress);
+}
+
+_Pose _displayPose(ExerciseMotionKind kind, double progress, String equipment) {
+  final pose = _poseAt(kind, progress);
+  if ((equipment == 'machine' || equipment == 'smith_machine') &&
+      const {
+        ExerciseMotionKind.horizontalPush,
+        ExerciseMotionKind.verticalPush,
+        ExerciseMotionKind.verticalPull,
+        ExerciseMotionKind.horizontalPull,
+        ExerciseMotionKind.seatedRow,
+        ExerciseMotionKind.curl,
+        ExerciseMotionKind.elbowExtension,
+        ExerciseMotionKind.lateralRaise,
+        ExerciseMotionKind.chestFly,
+        ExerciseMotionKind.reverseFly,
+      }.contains(kind)) {
+    return pose.copyWith(
+      leftKnee: _seatedFrontPose.leftKnee,
+      rightKnee: _seatedFrontPose.rightKnee,
+      leftAnkle: _seatedFrontPose.leftAnkle,
+      rightAnkle: _seatedFrontPose.rightAnkle,
+    );
+  }
+  return pose;
+}
+
+({Offset start, Offset end}) anatomyLowerBodyMotionPath(
+  ExerciseMotionKind kind,
+) => (start: _poseAt(kind, 0).rightAnkle, end: _poseAt(kind, 1).rightAnkle);
+
 _Pose _poseAt(ExerciseMotionKind kind, double progress) {
+  if (_lowerMachineKinds.contains(kind)) {
+    return _lowerMachinePose(kind, progress);
+  }
   final target = switch (kind) {
     ExerciseMotionKind.squat => const _Pose(
       head: Offset(75, 31),
@@ -1580,7 +1937,7 @@ _Pose _poseAt(ExerciseMotionKind kind, double progress) {
       leftAnkle: Offset(64, 138),
       rightAnkle: Offset(86, 138),
     ),
-    ExerciseMotionKind.generic => _neutralPose,
+    _ => _neutralPose,
   };
   final start = switch (kind) {
     ExerciseMotionKind.benchPress ||
@@ -1944,6 +2301,18 @@ String _stageLabel(ExerciseMotionKind kind, double progress) {
     ExerciseMotionKind.gluteBridge => isStart ? '髋部贴近地面 · 起始' : '夹臀抬髋 · 发力',
     ExerciseMotionKind.kneelingCrunch =>
       isStart ? '跪姿躯干展开 · 起始' : '肋骨卷向骨盆 · 发力',
+    ExerciseMotionKind.legPress => isStart ? '屈髋屈膝 · 起始' : '蹬动踏板 · 发力',
+    ExerciseMotionKind.kneeExtension => isStart ? '坐姿屈膝 · 起始' : '伸膝抬起 · 发力',
+    ExerciseMotionKind.seatedLegCurl => isStart ? '小腿前伸 · 起始' : '屈膝向下拉 · 发力',
+    ExerciseMotionKind.lyingLegCurl => isStart ? '俯卧伸腿 · 起始' : '脚跟靠近臀部 · 发力',
+    ExerciseMotionKind.seatedHipAbduction =>
+      isStart ? '双膝靠近 · 起始' : '双膝外展 · 发力',
+    ExerciseMotionKind.seatedHipAdduction =>
+      isStart ? '双腿张开 · 起始' : '双膝内收 · 发力',
+    ExerciseMotionKind.calfRaise ||
+    ExerciseMotionKind.seatedCalfRaise => isStart ? '脚跟降低 · 起始' : '抬起脚跟 · 发力',
+    ExerciseMotionKind.hipThrust => isStart ? '肩背支撑 · 起始' : '伸髋抬起 · 发力',
+    ExerciseMotionKind.seatedCrunch => isStart ? '坐姿展开 · 起始' : '肋骨靠近骨盆 · 发力',
     _ => isStart ? '起始位' : '发力位',
   };
 }
@@ -1964,15 +2333,32 @@ String _directionLabel(ExerciseMotionKind kind) => switch (kind) {
   ExerciseMotionKind.plank => '绿线检查身体是否平直',
   ExerciseMotionKind.gluteBridge => '箭头指向抬髋方向',
   ExerciseMotionKind.kneelingCrunch => '箭头指向卷腹方向',
+  ExerciseMotionKind.legPress => '沿踏板方向伸腿',
+  ExerciseMotionKind.kneeExtension => '箭头指向伸膝方向',
+  ExerciseMotionKind.seatedLegCurl ||
+  ExerciseMotionKind.lyingLegCurl => '箭头指向屈膝方向',
+  ExerciseMotionKind.seatedHipAbduction => '箭头向外打开',
+  ExerciseMotionKind.seatedHipAdduction => '箭头向内夹合',
+  ExerciseMotionKind.calfRaise ||
+  ExerciseMotionKind.seatedCalfRaise => '脚跟向上抬起',
+  ExerciseMotionKind.hipThrust => '箭头指向伸髋方向',
+  ExerciseMotionKind.seatedCrunch => '箭头指向卷腹方向',
   _ => '绿色箭头看方向',
 };
 
-String _motionCaption(ExerciseMotionKind kind, String equipment) =>
+String _motionCaption(ExerciseMotionKind kind, String equipment, String name) =>
     switch (kind) {
       ExerciseMotionKind.squat => '观察髋、膝同步屈伸',
       ExerciseMotionKind.hinge => '观察髋部后移与躯干前倾',
       ExerciseMotionKind.lunge => '观察前后腿协同和重心下降',
-      ExerciseMotionKind.benchPress => '俯视：负重从胸部两侧推向上方',
+      ExerciseMotionKind.benchPress =>
+        equipment == 'smith_machine'
+            ? '俯视：${name.contains('上斜')
+                  ? '上斜凳'
+                  : name.contains('下斜')
+                  ? '下斜凳'
+                  : '平凳'}支撑，横杆沿导轨推起'
+            : '俯视：负重从胸部两侧推向上方',
       ExerciseMotionKind.horizontalPush => '观察手臂水平推出轨迹',
       ExerciseMotionKind.singleArmRow => '支撑侧保持稳定，单侧肘部沿躯干拉向髋部',
       ExerciseMotionKind.bentOverRow => '保持俯身，肘部沿躯干拉向髋部',
@@ -2000,5 +2386,15 @@ String _motionCaption(ExerciseMotionKind kind, String equipment) =>
       ExerciseMotionKind.gluteBridge => '侧视：脚掌踩稳，夹臀将髋部抬起',
       ExerciseMotionKind.kneelingCrunch => '保持髋部稳定，将肋骨卷向骨盆',
       ExerciseMotionKind.core => '观察躯干稳定与屈曲轨迹',
+      ExerciseMotionKind.legPress => '侧视：骨盆贴垫，屈髋屈膝后蹬动踏板',
+      ExerciseMotionKind.kneeExtension => '侧视：大腿保持支撑，小腿向前伸展',
+      ExerciseMotionKind.seatedLegCurl => '侧视：坐稳后将脚跟拉向座椅下方',
+      ExerciseMotionKind.lyingLegCurl => '侧视：髋部贴垫，屈膝让脚跟靠近臀部',
+      ExerciseMotionKind.seatedHipAbduction => '坐姿：骨盆保持稳定，双腿向两侧打开',
+      ExerciseMotionKind.seatedHipAdduction => '坐姿：骨盆保持稳定，双腿向中间夹合',
+      ExerciseMotionKind.calfRaise => '站姿：前脚掌支撑，缓慢抬高脚跟',
+      ExerciseMotionKind.seatedCalfRaise => '侧视：保持坐姿，以前脚掌支撑抬高脚跟',
+      ExerciseMotionKind.hipThrust => '侧视：肩背靠凳支撑，收紧腹部并抬髋',
+      ExerciseMotionKind.seatedCrunch => '坐姿：骨盆保持支撑，肋骨卷向骨盆',
       ExerciseMotionKind.generic => '观察关节轨迹与主要发力区域',
     };

@@ -56,6 +56,11 @@ class ProfileRepository implements ProfileDataSource {
       await _apiClient.get('/settings'),
       context: '应用设置接口',
     );
+    try {
+      await _apiClient.localRecords?.cache('/settings', null, json);
+    } on Object {
+      // The server already accepted the setting; retain its successful result.
+    }
     return AppSettings.fromJson(json);
   }
 
@@ -72,6 +77,8 @@ class ProfileRepository implements ProfileDataSource {
           'sex': input.sex,
           'birth_date': _dateOnly(input.birthDate),
           'height_cm': input.heightCm,
+          if (input.weightKg != null && input.weightKg != current.weightKg)
+            'weight_kg': input.weightKg,
           'experience_level': input.experienceLevel,
           'session_duration_minutes': input.sessionDurationMinutes,
           'expected_version': current.version,

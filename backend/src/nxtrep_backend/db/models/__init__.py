@@ -73,6 +73,7 @@ from nxtrep_backend.db.models.training import (
     TrainingPlanVersion,
     TrainingTemplate,
 )
+from nxtrep_backend.db.models.water import WaterEntry
 from nxtrep_backend.db.models.workout import (
     PersonalRecord,
     ProgressionDraft,
@@ -83,6 +84,7 @@ from nxtrep_backend.db.models.workout import (
 )
 
 __all__ = [
+    "WaterEntry",
     "AgentMemory",
     "AgentConversation",
     "AgentRun",

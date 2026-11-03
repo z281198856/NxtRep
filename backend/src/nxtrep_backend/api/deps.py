@@ -10,7 +10,7 @@ from nxtrep_backend.core.config import Settings, get_settings
 from nxtrep_backend.core.tokens import (
     AuthConfigurationError,
     InvalidAccessTokenError,
-    decode_access_token,
+    decode_access_token_claims,
 )
 from nxtrep_backend.db.models import User, UserStatus
 from nxtrep_backend.db.session import get_db_session
@@ -39,7 +39,7 @@ async def get_current_user(
         )
 
     try:
-        user_id = decode_access_token(
+        claims = decode_access_token_claims(
             credentials.credentials,
             settings,
         )
@@ -58,7 +58,7 @@ async def get_current_user(
         ) from exc
 
     repository = SqlAlchemyUserRepository(session)
-    user = await repository.get_by_id(user_id)
+    user = await repository.get_by_id(claims.user_id)
 
     if user is None:
         raise ApiError(
@@ -82,10 +82,45 @@ async def get_current_user(
             message="Password setup is required",
         )
 
+    if claims.session_id is None:
+        # Existing clients can exchange their still-active refresh token once.
+        # Unbound access tokens must never bypass device revocation.
+        raise ApiError(
+            status_code=401,
+            code="INVALID_ACCESS_TOKEN",
+            message="Refresh login to upgrade this session",
+        )
+    else:
+        active_session = await repository.get_active_refresh_session_by_id(
+            user_id=user.id,
+            session_id=claims.session_id,
+        )
+        if active_session is None:
+            raise ApiError(
+                status_code=401, code="INVALID_ACCESS_TOKEN", message="Login session has ended"
+            )
+
+    user._access_session_id = claims.session_id
+
     return user
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+async def get_current_session_id(user: CurrentUser) -> UUID:
+    session_id = getattr(user, "_access_session_id", None)
+    if session_id is None:
+        # The App refreshes this legacy token once before managing devices.
+        raise ApiError(
+            status_code=401,
+            code="INVALID_ACCESS_TOKEN",
+            message="Refresh login before managing sessions",
+        )
+    return session_id
+
+
+CurrentSessionId = Annotated[UUID, Depends(get_current_session_id)]
 
 
 async def get_current_user_id(

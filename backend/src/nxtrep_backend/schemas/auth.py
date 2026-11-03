@@ -81,6 +81,7 @@ class RefreshSessionResponse(BaseModel):
     created_at: datetime
     expires_at: datetime
     last_used_at: datetime | None
+    is_current: bool = False
 
 
 class RefreshSessionListResponse(BaseModel):

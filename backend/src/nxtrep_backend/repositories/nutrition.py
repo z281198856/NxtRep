@@ -31,6 +31,8 @@ class SqlAlchemyNutritionRepository:
         state: str | None,
         page: int,
         page_size: int,
+        *,
+        custom_only: bool = False,
     ) -> tuple[list[tuple[Food, FoodVersion]], int]:
         latest = (
             select(FoodVersion.food_id, func.max(FoodVersion.version).label("version"))
@@ -48,6 +50,8 @@ class SqlAlchemyNutritionRepository:
         ]
         if region:
             conditions.append(Food.region == region)
+        if custom_only:
+            conditions.append(Food.owner_user_id == user_id)
         if state:
             conditions.append(Food.state == state)
         base = (
@@ -237,7 +241,7 @@ class SqlAlchemyNutritionRepository:
             NutritionEntry.deleted_at.is_(None),
         )
         if lock:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update().execution_options(populate_existing=True)
         return await self.session.scalar(statement)
 
     async def list_entries(
@@ -258,6 +262,18 @@ class SqlAlchemyNutritionRepository:
                 select(NutritionEntry).where(*conditions).order_by(NutritionEntry.eaten_at)
             )
         )
+
+    async def list_recent_entries(
+        self, user_id: UUID, through: date, limit: int = 20
+    ) -> list[NutritionEntry]:
+        end = datetime.combine(through, time.max, tzinfo=CHINA_TIMEZONE)
+        return list(await self.session.scalars(
+            select(NutritionEntry).where(
+                NutritionEntry.user_id == user_id,
+                NutritionEntry.deleted_at.is_(None),
+                NutritionEntry.eaten_at <= end,
+            ).order_by(NutritionEntry.eaten_at.desc(), NutritionEntry.id.desc()).limit(limit)
+        ))
 
     async def add_entry_revision(self, revision: NutritionEntryRevision) -> None:
         self.session.add(revision)

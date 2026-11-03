@@ -2,6 +2,7 @@ from nxtrep_backend.schemas.agent import AgentBranchResult, AgentCitation
 from nxtrep_backend.services.agent_context import build_contextual_user_payload
 from nxtrep_backend.services.agent_execution import AgentBranchInput
 from nxtrep_backend.services.agent_media import AgentImageAssetResolver, ResolvedAgentImage
+from nxtrep_backend.services.agent_resolution import observation_input_fields
 from nxtrep_backend.services.body_image import BodyImageWorkflow
 from nxtrep_backend.services.body_progress import BodyProgressPhotoService
 
@@ -49,9 +50,14 @@ class BodyProgressComparisonBranchHandler:
             ),
             images=images,
         )
+        missing_fields = observation_input_fields(task, missing_fields, {"comparison_body_images"})
         if not all(item.usable_for_assessment for item in assessment.photo_quality):
             if "comparable_body_images" not in missing_fields:
                 missing_fields.append("comparable_body_images")
+        else:
+            missing_fields = observation_input_fields(
+                task, missing_fields, {"comparable_body_images"},
+            )
 
         return AgentBranchResult(
             task_type=task.task_type,

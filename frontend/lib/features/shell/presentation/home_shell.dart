@@ -1,4 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import '../../../core/offline/local_records_page.dart';
+import '../../../core/notifications/reminder_models.dart';
+import '../../profile/presentation/local_reminders_page.dart';
 
 import '../../../core/media/image_upload.dart';
 import '../../../core/theme/app_theme.dart';
@@ -8,11 +14,15 @@ import '../../agent/presentation/agent_controller.dart';
 import '../../agent/presentation/agent_page.dart';
 import '../../agent/presentation/proactive_controller.dart';
 import '../../auth/presentation/session_controller.dart';
+import '../../auth/presentation/account_security_controller.dart';
+import '../../auth/presentation/account_security_page.dart';
 import '../../exercises/data/exercise_repository.dart';
 import '../../exercises/presentation/exercise_library_page.dart';
 import '../../nutrition/data/nutrition_repository.dart';
 import '../../nutrition/presentation/nutrition_controller.dart';
 import '../../nutrition/presentation/nutrition_page.dart';
+import '../../nutrition/presentation/nutrition_photo_page.dart';
+import '../../nutrition/presentation/water_entry_sheet.dart';
 import '../../progress/data/body_repository.dart';
 import '../../progress/data/body_progress_repository.dart';
 import '../../progress/presentation/body_progress_controller.dart';
@@ -37,8 +47,9 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int _index = 0;
+  DateTime _selectedDate = DateUtils.dateOnly(DateTime.now());
   late final TrainingController _trainingController;
   late final ImageUploadRepository _imageUploadRepository;
   late final AgentController _agentController;
@@ -49,10 +60,17 @@ class _HomeShellState extends State<HomeShell> {
   late final PlanController _planController;
   late final ProfileController _profileController;
   late final ExerciseRepository _exerciseRepository;
+  Timer? _syncTimer;
+  bool _reminderNavigationQueued = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    widget.controller.systemReminders?.addListener(_onReminderChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onReminderChanged());
+    _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) => _sync());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _sync());
     _trainingController = TrainingController(
       TrainingRepository(widget.controller.authRepository.apiClient),
     );
@@ -86,6 +104,9 @@ class _HomeShellState extends State<HomeShell> {
     );
     _profileController = ProfileController(
       ProfileRepository(widget.controller.authRepository.apiClient),
+      onSettingsChanged: (settings) {
+        if (mounted) widget.controller.applySettings(settings);
+      },
     );
     _exerciseRepository = ExerciseRepository(
       widget.controller.authRepository.apiClient,
@@ -94,6 +115,9 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    widget.controller.systemReminders?.removeListener(_onReminderChanged);
+    _syncTimer?.cancel();
     _trainingController.dispose();
     _agentController.dispose();
     _proactiveController.dispose();
@@ -106,6 +130,161 @@ class _HomeShellState extends State<HomeShell> {
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _sync();
+  }
+
+  Future<void> _sync() async {
+    if (!mounted ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.paused) {
+      return;
+    }
+    final before = widget.controller.localRecords?.syncRevision;
+    await widget.controller.reconnectAndSync();
+    if (!mounted || before == widget.controller.localRecords?.syncRevision) {
+      return;
+    }
+    await Future.wait([
+      _trainingController.refresh(),
+      _nutritionController.refresh(),
+      _progressController.refresh(),
+    ]);
+  }
+
+  void _openLocalRecords() {
+    final records = widget.controller.localRecords;
+    if (records == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => LocalRecordsPage(
+          records: records,
+          onSync: _sync,
+          onOpenDraft: _resumeDraft,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _resumeDraft(String key) async {
+    Navigator.of(context).pop();
+    if (key == 'agent-input') {
+      _selectTab(4);
+      return;
+    }
+    if (key.startsWith('photo:')) {
+      final date = DateTime.tryParse(key.substring(6));
+      if (date != null) {
+        _selectDate(date);
+        _selectTab(2);
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => NutritionPhotoPage(
+              controller: _nutritionController,
+              recordDate: date,
+            ),
+          ),
+        );
+      }
+      return;
+    }
+    final meal = RegExp(r'^meal:(.+):(breakfast|lunch|dinner|snack|other)$')
+        .firstMatch(key);
+    if (meal != null) {
+      final date = DateTime.parse(meal.group(1)!);
+      _selectDate(date);
+      _selectTab(2);
+      await showManualNutritionEntry(
+        context,
+        _nutritionController,
+        date,
+        meal.group(2)!,
+      );
+      return;
+    }
+    if (key.startsWith('water:')) {
+      final date = DateTime.parse(key.substring(6));
+      _selectDate(date);
+      _selectTab(2);
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => WaterEntrySheet(controller: _nutritionController),
+      );
+      return;
+    }
+    if (key.startsWith('measurement:')) {
+      _selectTab(3);
+      if (key == 'measurement:new') {
+        await showBodyMeasurementEntry(context, _progressController);
+      } else {
+        final measurements = _progressController.measurements.where(
+          (e) => key == 'measurement:${e.id}',
+        );
+        if (measurements.isNotEmpty) {
+          await showBodyMeasurementEntry(
+            context,
+            _progressController,
+            measurement: measurements.first,
+          );
+        }
+      }
+      return;
+    }
+    if (key.startsWith('set:')) {
+      _selectTab(0);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('打开进行中的训练，再选择对应动作，即可恢复训练组输入')),
+      );
+    }
+  }
+
+  void _openSystemReminders() {
+    final reminders = widget.controller.systemReminders;
+    if (reminders == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => LocalRemindersPage(controller: reminders),
+      ),
+    );
+  }
+
+  void _onReminderChanged() {
+    if (!mounted ||
+        _reminderNavigationQueued ||
+        widget.controller.systemReminders?.hasNavigation != true) {
+      return;
+    }
+    _reminderNavigationQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reminderNavigationQueued = false;
+      if (!mounted || widget.controller.phase != SessionPhase.authenticated) {
+        return;
+      }
+      final kind = widget.controller.systemReminders?.takeNavigation();
+      if (kind == null) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      if (kind == ReminderKind.training) {
+        _selectTab(0);
+        return;
+      }
+      if (kind == ReminderKind.measurement) {
+        _selectTab(3);
+        showBodyMeasurementEntry(context, _progressController);
+        return;
+      }
+      _selectDate(DateUtils.dateOnly(DateTime.now()));
+      _selectTab(2);
+      if (kind == ReminderKind.water) {
+        showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          builder: (_) => WaterEntrySheet(controller: _nutritionController),
+        );
+      }
+    });
+  }
+
   void _selectTab(int value) {
     if (value == 0) {
       _trainingController.refresh();
@@ -114,7 +293,35 @@ class _HomeShellState extends State<HomeShell> {
     if (value == 1) _planController.refresh();
     if (value == 2) _nutritionController.refresh();
     if (value == 3) _progressController.refresh();
+    if (value == 5) _profileController.refresh();
     setState(() => _index = value);
+  }
+
+  void _selectDate(DateTime date) {
+    setState(() => _selectedDate = DateUtils.dateOnly(date));
+    _nutritionController.selectDate(_selectedDate);
+  }
+
+  void _openExerciseLibrary() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => ExerciseLibraryPage(repository: _exerciseRepository),
+    ),
+  );
+
+  Future<void> _openAccountSecurity() async {
+    final security = AccountSecurityController(
+      widget.controller.authRepository,
+      onRequireLogin: widget.controller.requireLogin,
+    );
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => AccountSecurityPage(controller: security),
+        ),
+      );
+    } finally {
+      security.dispose();
+    }
   }
 
   @override
@@ -128,6 +335,7 @@ class _HomeShellState extends State<HomeShell> {
         onOpenPlan: () => _selectTab(1),
         onOpenProgress: () => _selectTab(3),
         onOpenAgent: () => _selectTab(4),
+        onOpenExerciseLibrary: _openExerciseLibrary,
         onDiscussNotice: (notice) async {
           final prompt = switch (notice.kind) {
             'missed_workout' =>
@@ -145,18 +353,21 @@ class _HomeShellState extends State<HomeShell> {
       ),
       PlanPage(
         controller: _planController,
-        onOpenExerciseLibrary: () => Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) =>
-                ExerciseLibraryPage(repository: _exerciseRepository),
-          ),
-        ),
+        selectedDate: _selectedDate,
+        onDateSelected: _selectDate,
+        onOpenNutrition: () => _selectTab(2),
+        onOpenExerciseLibrary: _openExerciseLibrary,
         onAskCoach: (prompt) async {
           _selectTab(4);
           await _agentController.send(prompt);
         },
       ),
-      NutritionPage(controller: _nutritionController, embedded: true),
+      NutritionPage(
+        controller: _nutritionController,
+        embedded: true,
+        onDateSelected: _selectDate,
+        onOpenPlan: () => _selectTab(1),
+      ),
       ProgressPage(
         controller: _progressController,
         onOpenBodyProgress: () => Navigator.of(context).push(
@@ -172,11 +383,68 @@ class _HomeShellState extends State<HomeShell> {
         username: widget.controller.account?.username ?? '',
         loggingOut: widget.controller.submitting,
         onLogout: widget.controller.logout,
+        onOpenSecurity: _openAccountSecurity,
+        onOpenSystemReminders: widget.controller.systemReminders == null
+            ? null
+            : _openSystemReminders,
+        onOpenLocalRecords: widget.controller.localRecords == null
+            ? null
+            : _openLocalRecords,
       ),
     ];
 
     return Scaffold(
-      body: IndexedStack(index: _index, children: pages),
+      body: Column(
+        children: [
+          if (widget.controller.localRecords case final records?)
+            ListenableBuilder(
+              listenable: records,
+              builder: (context, _) {
+                if (!records.localOnly &&
+                    !records.usingCache &&
+                    records.pending.isEmpty &&
+                    records.storageError == null) {
+                  return const SizedBox.shrink();
+                }
+                return SafeArea(
+                  bottom: false,
+                  child: Material(
+                    color: AppColors.amberSoft,
+                    child: InkWell(
+                      onTap: _openLocalRecords,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.cloud_off_outlined, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                records.storageError ??
+                                    (records.needsAttention
+                                        ? '${records.pending.length} 条待同步，部分需要核对 · 查看'
+                                        : records.pending.isNotEmpty
+                                        ? '已保存在本机 · ${records.pending.length} 条待同步 · 查看'
+                                        : '正在查看本机缓存 · 联网后刷新'),
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right, size: 18),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          Expanded(
+            child: IndexedStack(index: _index, children: pages),
+          ),
+        ],
+      ),
       bottomNavigationBar: DecoratedBox(
         decoration: const BoxDecoration(
           color: Colors.white,
@@ -209,7 +477,7 @@ class _HomeShellState extends State<HomeShell> {
             NavigationDestination(
               icon: Icon(Icons.auto_awesome_outlined),
               selectedIcon: Icon(Icons.auto_awesome_rounded),
-              label: 'AI教练',
+              label: 'AI私人教练',
             ),
             NavigationDestination(
               icon: Icon(Icons.person_outline_rounded),

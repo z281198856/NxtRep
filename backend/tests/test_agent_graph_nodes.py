@@ -12,6 +12,7 @@ from nxtrep_backend.schemas.agent import (
     AgentBranchError,
     AgentBranchResult,
     AgentChatRequest,
+    AgentCitation,
     AgentConfirmationCard,
     AgentExecutionBundle,
     AgentIntentPlan,
@@ -38,6 +39,65 @@ def make_dependencies():
 
 def make_request() -> AgentChatRequest:
     return AgentChatRequest(message="分析这顿饭")
+
+
+def test_knowledge_excerpts_with_personal_facts_are_synthesized_not_returned_verbatim():
+    bundle = AgentExecutionBundle(
+        branch_results=[
+            AgentBranchResult(
+                task_type="knowledge_retrieval",
+                status="completed",
+                result={
+                    "answer": "通用公式",
+                    "personal_context": {"profile": {"height_cm": "173"}},
+                },
+            )
+        ]
+    )
+    assert AgentGraphNodes._direct_knowledge_answer(bundle) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("task_type", ["general_question", "knowledge_retrieval"])
+@pytest.mark.parametrize("selected", [True, False])
+async def test_direct_answers_only_keep_selected_web_sources_visible(task_type, selected):
+    planner, executor, synthesizer = make_dependencies()
+    nodes = AgentGraphNodes(planner=planner, executor=executor, synthesizer=synthesizer)
+    bundle = AgentExecutionBundle(
+        branch_results=[
+            AgentBranchResult(
+                task_type=task_type,
+                status="completed",
+                result={
+                    "answer": (
+                        "简短回答。[资料](https://example.com/evidence)"
+                        if selected
+                        else "简短回答。"
+                    ),
+                },
+                citations=[
+                    AgentCitation(
+                        source_type="web",
+                        source_id="https://example.com/evidence",
+                        label="资料 / 查询时间 2026-10-05",
+                    )
+                ],
+            )
+        ]
+    )
+    writer = MagicMock()
+    result = await nodes.synthesize_response(
+        {
+            "request": AgentChatRequest(message="普通问句"),
+            "execution_bundle": bundle,
+            "streaming": True,
+        },
+        writer,
+    )
+    assert ("https://example.com/evidence" in result["response_message"]) is selected
+    assert writer.call_args.args[0]["delta"] == result["response_message"]
+    synthesizer.synthesize.assert_not_awaited()
+    synthesizer.astream.assert_not_called()
 
 
 def make_planned_request() -> PlannedAgentRequest:
@@ -89,7 +149,10 @@ async def test_plan_node_adds_planned_request_to_state() -> None:
         }
     )
 
-    assert update == {"planned_request": planned_request}
+    assert update == {
+        "planned_request": planned_request,
+        "conversation_context": planned_request.conversation_context,
+    }
     planner.plan.assert_awaited_once_with(
         user_id=user_id,
         request=request,
@@ -375,11 +438,49 @@ async def test_training_plan_reply_is_short_and_uses_confirmation_preview_data()
     )
 
     answer = update["response_message"]
-    assert "回答：已生成「三日全身计划」" in answer
-    assert "分析：草稿包含 3 个训练日" in answer
+    assert "「三日全身计划」按每周 3 次安排" in answer
+    assert "包含 3 个训练日" in answer
+    assert "草稿" not in answer
+    assert "确认后" not in answer
+    assert "回答：" not in answer
+    assert "分析：" not in answer
     assert "@RIR" not in answer
     assert "|" not in answer
     synthesizer.synthesize.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_task_content_reply_preserves_the_existing_fast_path(streaming):
+    planner, executor, synthesizer = make_dependencies()
+    answer = "鸡胸肉按200克计算，用油多少会影响热量。"
+    synthesizer.synthesize.return_value = answer
+
+    async def stream(**kwargs):
+        yield answer
+
+    synthesizer.astream.side_effect = stream
+    bundle = AgentExecutionBundle(branch_results=[AgentBranchResult(
+        task_type="nutrition_record_draft", status="completed",
+        result={"task_answer": answer},
+        requires_confirmation=True,
+        confirmation_cards=[AgentConfirmationCard(
+            confirmation_id=uuid4(), operation_type="nutrition_entry_create",
+            status="pending", impact="确认后保存", version=1,
+            expires_at="2026-10-19T00:00:00+08:00",
+        )],
+    )])
+    events = []
+    nodes = AgentGraphNodes(planner=planner, executor=executor, synthesizer=synthesizer)
+    update = await nodes.synthesize_response({
+        "request": AgentChatRequest(message="鸡胸肉改成200克"),
+        "execution_bundle": bundle, "streaming": streaming,
+    }, writer=events.append)
+    assert update["response_message"] == answer
+    if streaming:
+        assert "".join(event["delta"] for event in events) == answer
+    else:
+        synthesizer.synthesize.assert_not_awaited()
 
 
 def test_training_plan_analysis_explains_facts_without_inventing_missing_metrics() -> None:
@@ -393,15 +494,14 @@ def test_training_plan_analysis_explains_facts_without_inventing_missing_metrics
             "body_fat_recorded_at": "2026-09-20",
         },
     }
-    analysis = AgentGraphNodes._training_plan_analysis(
-        context, frequency=3, day_count=3
-    )
+    analysis = AgentGraphNodes._training_plan_analysis(context, frequency=3, day_count=3)
 
     assert "减脂保肌" in analysis
     assert "每周 3 次与你填写的可训练天数一致" in analysis
     assert "身高 178 cm" in analysis
-    assert "体重 78.5 kg（2026-09-20 记录）" in analysis
-    assert "体脂 24.0%（2026-09-20 记录）" in analysis
+    assert "体重 78.5 kg" in analysis
+    assert "体脂 24.0%" in analysis
+    assert "2026-09-20" not in analysis
     assert "不能单凭" in analysis
 
     missing = AgentGraphNodes._training_plan_analysis(
@@ -409,7 +509,7 @@ def test_training_plan_analysis_explains_facts_without_inventing_missing_metrics
         frequency=3,
         day_count=3,
     )
-    assert "确认前请核对是否可执行" in missing
+    assert "可以按实际空闲时间调整" in missing
     assert "尚无身高、体重、体脂记录" in missing
     assert "78.5" not in missing
 

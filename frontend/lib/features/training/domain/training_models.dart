@@ -236,6 +236,26 @@ class CalendarEvent {
   final String? actualWorkoutId;
 }
 
+class CalendarEventDetail {
+  const CalendarEventDetail({required this.event, this.contentSnapshot});
+
+  factory CalendarEventDetail.fromJson(Map<String, dynamic> json) =>
+      CalendarEventDetail(
+        event: CalendarEvent.fromJson(json),
+        contentSnapshot: json['content_snapshot'] == null
+            ? null
+            : Map<String, dynamic>.from(json['content_snapshot'] as Map),
+      );
+
+  final CalendarEvent event;
+  final Map<String, dynamic>? contentSnapshot;
+
+  List<Map<String, dynamic>> get exercises =>
+      (contentSnapshot?['exercises'] as List<dynamic>? ?? const [])
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList(growable: false);
+}
+
 class PreWorkoutCheckInput {
   const PreWorkoutCheckInput({
     required this.sleepQuality,
@@ -341,7 +361,7 @@ class WorkoutExercise {
   final bool skipped;
   final List<WorkoutSet> sets;
 
-  int get targetSets => target['target_sets'] as int? ?? 3;
+  int get targetSets => (target['sets'] ?? target['target_sets']) as int? ?? 3;
   int get repMin => target['rep_min'] as int? ?? 8;
   int get repMax => target['rep_max'] as int? ?? 12;
   int get restSeconds => target['rest_seconds'] as int? ?? 0;
@@ -350,16 +370,22 @@ class WorkoutExercise {
 }
 
 class WorkoutRestTimer {
-  const WorkoutRestTimer({required this.durationSeconds, required this.endsAt});
+  const WorkoutRestTimer({
+    required this.durationSeconds,
+    required this.endsAt,
+    this.workoutExerciseId,
+  });
 
   factory WorkoutRestTimer.fromJson(Map<String, dynamic> json) =>
       WorkoutRestTimer(
         durationSeconds: json['duration_seconds'] as int,
         endsAt: DateTime.parse(json['ends_at'] as String),
+        workoutExerciseId: json['workout_exercise_id'] as String?,
       );
 
   final int durationSeconds;
   final DateTime endsAt;
+  final String? workoutExerciseId;
 
   int remainingAt(DateTime now) =>
       endsAt.difference(now.toUtc()).inSeconds.clamp(0, durationSeconds);
@@ -376,12 +402,16 @@ class Workout {
     this.restTimer,
     this.pausedAt,
     this.totalPausedSeconds = 0,
+    this.calendarEventId,
+    this.planDayId,
   });
 
   factory Workout.fromJson(Map<String, dynamic> json) => Workout(
     id: json['id'] as String,
     status: json['status'] as String,
     startedAt: DateTime.parse(json['started_at'] as String),
+    calendarEventId: json['calendar_event_id'] as String?,
+    planDayId: json['plan_day_id'] as String?,
     pausedAt: json['paused_at'] == null
         ? null
         : DateTime.parse(json['paused_at'] as String),
@@ -399,6 +429,9 @@ class Workout {
   final String id;
   final String status;
   final DateTime startedAt;
+  final String? calendarEventId;
+  final String? planDayId;
+  bool get isPlanBased => calendarEventId != null || planDayId != null;
   final DateTime? pausedAt;
   final int totalPausedSeconds;
   final int elapsedSeconds;

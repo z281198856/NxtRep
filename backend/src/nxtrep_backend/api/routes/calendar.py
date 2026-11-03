@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import date
 from uuid import UUID
 
@@ -53,12 +54,29 @@ async def get_calendar_event(
     user: CurrentUser,
     session: DbSession,
 ) -> CalendarEventDetailResponse:
-    item = await SqlAlchemyTrainingRepository(session).get_calendar_event(user.id, event_id)
+    repository = SqlAlchemyTrainingRepository(session)
+    item = await repository.get_calendar_event(user.id, event_id)
     if item is None:
         from nxtrep_backend.api.errors import ApiError
 
         raise ApiError(status_code=404, code="CALENDAR_EVENT_NOT_FOUND", message="Event not found")
-    return CalendarEventDetailResponse.model_validate(item, from_attributes=True)
+    response = CalendarEventDetailResponse.model_validate(item, from_attributes=True)
+    if response.content_snapshot is None:
+        return response
+    # Older snapshots store exercise IDs only. Enrich the response, leaving the
+    # saved plan and any names already captured in its snapshot unchanged.
+    snapshot = deepcopy(response.content_snapshot)
+    exercises = snapshot.get("exercises", [])
+    missing_ids = {
+        UUID(str(exercise["exercise_id"]))
+        for exercise in exercises
+        if exercise.get("exercise_id") and not exercise.get("exercise_name")
+    }
+    names = await repository.plan_exercise_names(user.id, missing_ids) if missing_ids else {}
+    for exercise in exercises:
+        if not exercise.get("exercise_name"):
+            exercise["exercise_name"] = names.get(str(exercise.get("exercise_id")), "动作已不可用")
+    return response.model_copy(update={"content_snapshot": snapshot})
 
 
 @router.post("/events", response_model=CalendarEventDetailResponse, status_code=201)

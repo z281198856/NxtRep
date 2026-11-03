@@ -20,6 +20,10 @@ class PlanController extends ChangeNotifier {
 
   ActiveTrainingPlan? activePlan;
   List<CalendarEvent> events = const [];
+  DateTime calendarMonth = DateTime(DateTime.now().year, DateTime.now().month);
+  bool calendarLoading = false;
+  String? calendarErrorMessage;
+  int _calendarRequest = 0;
   List<TrainingTemplate> templates = const [];
   List<WorkoutHistoryItem> history = const [];
   bool loading = false;
@@ -108,6 +112,9 @@ class PlanController extends ChangeNotifier {
   Future<TrainingTemplateDetail> getTemplateDetail(String id) =>
       _repository.getTemplateDetail(id);
 
+  Future<CalendarEventDetail> getCalendarEvent(String id) =>
+      _repository.getCalendarEvent(id);
+
   Future<void> refresh() async {
     if (loading) return;
     loading = true;
@@ -115,16 +122,13 @@ class PlanController extends ChangeNotifier {
     notifyListeners();
     final recommendationFuture = _refreshRecommendationContext();
     try {
-      final start = DateTime.now();
-      final end = start.add(const Duration(days: 13));
       final values = await Future.wait<Object?>([
         _repository.getActivePlan(),
-        _repository.getCalendar(start, end),
+        _refreshCalendar(),
         _repository.getTemplates(),
         _repository.getWorkoutHistory(pageSize: 20),
       ]);
       activePlan = values[0] as ActiveTrainingPlan?;
-      events = values[1] as List<CalendarEvent>;
       templates = values[2] as List<TrainingTemplate>;
       history = (values[3] as WorkoutHistoryPageData).items;
     } on ApiException catch (error) {
@@ -161,11 +165,7 @@ class PlanController extends ChangeNotifier {
     notifyListeners();
     try {
       activePlan = await _repository.activateTemplate(template);
-      final now = DateTime.now();
-      events = await _repository.getCalendar(
-        now,
-        now.add(const Duration(days: 13)),
-      );
+      await _refreshCalendar();
       return true;
     } on ApiException catch (error) {
       errorMessage = _messageFor(error);
@@ -309,12 +309,41 @@ class PlanController extends ChangeNotifier {
     }
   }
 
+  Future<void> showCalendarMonth(DateTime date) async {
+    final month = DateTime(date.year, date.month);
+    if (month == calendarMonth) return;
+    calendarMonth = month;
+    events = const [];
+    try {
+      await _refreshCalendar();
+    } on ApiException {
+      // The month view displays its own retryable error.
+    }
+  }
+
   Future<void> _refreshCalendar() async {
-    final now = DateTime.now();
-    events = await _repository.getCalendar(
-      now,
-      now.add(const Duration(days: 13)),
-    );
+    final request = ++_calendarRequest;
+    final month = calendarMonth;
+    calendarLoading = true;
+    calendarErrorMessage = null;
+    notifyListeners();
+    try {
+      final loaded = await _repository.getCalendar(
+        month,
+        DateTime(month.year, month.month + 1, 0),
+      );
+      if (request == _calendarRequest) events = loaded;
+    } on ApiException catch (error) {
+      if (request == _calendarRequest) {
+        calendarErrorMessage = _messageFor(error);
+      }
+      rethrow;
+    } finally {
+      if (request == _calendarRequest) {
+        calendarLoading = false;
+        notifyListeners();
+      }
+    }
   }
 
   Future<Workout?> loadWorkout(String workoutId) async {

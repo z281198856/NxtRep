@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/settings/app_preferences.dart';
+
 import '../../../core/network/api_exception.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_widgets.dart';
@@ -31,6 +33,7 @@ class _ExerciseLibraryPageState extends State<ExerciseLibraryPage> {
     'barbell': '杠铃',
     'dumbbell': '哑铃',
     'machine': '固定器械',
+    'smith_machine': '史密斯机',
     'cable': '绳索',
   };
 
@@ -736,7 +739,7 @@ class _ExerciseHistoryCard extends StatelessWidget {
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
-                      '${set.index}组 · ${set.weightKg.toStringAsFixed(1)} kg × ${set.reps}',
+                      '${set.index}组 · ${AppPreferencesScope.unitsOf(context).formatWeight(set.weightKg)} × ${set.reps}',
                       style: const TextStyle(
                         color: AppColors.indigo,
                         fontWeight: FontWeight.w600,
@@ -865,6 +868,10 @@ class _CustomExerciseSheetState extends State<_CustomExerciseSheet> {
                     DropdownMenuItem(value: 'barbell', child: Text('杠铃')),
                     DropdownMenuItem(value: 'dumbbell', child: Text('哑铃')),
                     DropdownMenuItem(value: 'machine', child: Text('固定器械')),
+                    DropdownMenuItem(
+                      value: 'smith_machine',
+                      child: Text('史密斯机'),
+                    ),
                     DropdownMenuItem(value: 'cable', child: Text('绳索器械')),
                     DropdownMenuItem(value: 'kettlebell', child: Text('壶铃')),
                     DropdownMenuItem(value: 'band', child: Text('弹力带')),

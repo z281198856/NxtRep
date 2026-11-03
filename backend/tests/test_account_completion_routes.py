@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nxtrep_backend.api.deps import get_current_user, get_db_session
+from nxtrep_backend.api.deps import get_current_session_id, get_current_user, get_db_session
 from nxtrep_backend.api.routes import admin as admin_route
 from nxtrep_backend.api.routes import auth as auth_route
 from nxtrep_backend.db.models import Profile, RefreshSession, User
@@ -38,6 +38,7 @@ def client(current_user: User) -> Iterator[TestClient]:
 
     app.dependency_overrides[get_db_session] = override_db_session
     app.dependency_overrides[get_current_user] = lambda: current_user
+    app.dependency_overrides[get_current_session_id] = lambda: current_user.id
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

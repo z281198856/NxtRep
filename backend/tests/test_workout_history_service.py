@@ -74,6 +74,7 @@ async def test_list_history_calculates_duration_volume_and_local_date() -> None:
         "completed",
         1,
         2,
+        timezone="Asia/Shanghai",
     )
     repository.list_sets.assert_awaited_once_with(workout_id)
     repository.count_records.assert_awaited_once_with(workout_id)

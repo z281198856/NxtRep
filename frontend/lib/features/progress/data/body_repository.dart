@@ -120,6 +120,7 @@ class BodyRepository {
       await _apiClient.post(
         '/body/measurements',
         idempotencyKey: _uuid.v4(),
+        localDraftKey: 'measurement:new',
         body: _measurementBody(input),
       ),
       context: '新增身体测量接口',

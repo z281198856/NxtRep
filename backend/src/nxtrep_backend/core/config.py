@@ -61,8 +61,14 @@ class Settings(BaseSettings):
     deepseek_thinking_enabled: bool = False
     glm_api_key: SecretStr | None = None
     glm_model: str = "glm-5.1"
+    conversation_title_model: str = "glm-4-flash-250414"
+    conversation_title_timeout_seconds: int = Field(default=8, ge=1, le=20)
     glm_vision_model: str = "glm-4.6v-flash"
     glm_vision_fallback_model: str | None = "glm-4v-flash"
+    food_vision_model: str | None = None
+    food_vision_fallback_model: str | None = None
+    food_vision_timeout_seconds: int = Field(default=40, ge=10, le=45)
+    food_vision_thinking_enabled: bool = False
     embedding_provider: Literal["glm"] = "glm"
     glm_embedding_model: str = "embedding-3"
     embedding_model_version: str = Field(
@@ -75,6 +81,8 @@ class Settings(BaseSettings):
     embedding_timeout_seconds: int = Field(default=45, ge=1, le=300)
     embedding_max_retries: int = Field(default=2, ge=0, le=10)
     rag_enabled: bool = False
+    web_search_enabled: bool = True
+    web_search_timeout_seconds: int = Field(default=15, ge=1, le=60)
     rag_candidate_k: int = Field(default=20, ge=5, le=100)
     rag_top_k: int = Field(default=5, ge=1, le=10)
     rag_min_vector_score: float = Field(default=0.5, ge=0, le=1)
@@ -83,8 +91,9 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.2, ge=0, le=2)
     llm_timeout_seconds: int = Field(default=45, ge=1, le=300)
     llm_max_retries: int = Field(default=2, ge=0, le=10)
-    agent_intent_router_timeout_seconds: int = Field(default=12, ge=1, le=300)
+    agent_intent_router_timeout_seconds: int = Field(default=30, ge=1, le=300)
     agent_intent_router_max_retries: int = Field(default=0, ge=0, le=10)
+    agent_workflow_timeout_seconds: int = Field(default=120, ge=15, le=600)
     vision_temperature: float = Field(default=0.1, ge=0, le=2)
     vision_timeout_seconds: int = Field(default=60, ge=1, le=300)
     vision_max_retries: int = Field(default=1, ge=0, le=3)

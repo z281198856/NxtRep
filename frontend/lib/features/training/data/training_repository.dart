@@ -290,12 +290,19 @@ class TrainingRepository {
         .toList(growable: false);
   }
 
+  Future<CalendarEventDetail> getCalendarEvent(String id) async {
+    final json = expectJsonObject(
+      await _apiClient.get('/calendar/events/$id'),
+      context: '当天训练安排详情接口',
+    );
+    return CalendarEventDetail.fromJson(json);
+  }
+
   Future<Workout?> getActiveWorkout() async {
     try {
-      final json = expectJsonObject(
-        await _apiClient.get('/workouts/active'),
-        context: '当前训练接口',
-      );
+      final value = await _apiClient.get('/workouts/active');
+      if (value == null) return null;
+      final json = expectJsonObject(value, context: '当前训练接口');
       return Workout.fromJson(json);
     } on ApiException catch (error) {
       if (error.code == 'WORKOUT_NOT_FOUND') return null;
@@ -326,7 +333,7 @@ class TrainingRepository {
   }
 
   Future<Workout> startWorkout(
-    CalendarEvent event, {
+    CalendarEvent? event, {
     PreWorkoutCheckInput? preCheck,
   }) async {
     final operationId = _uuid.v4();
@@ -335,8 +342,8 @@ class TrainingRepository {
         '/workouts',
         idempotencyKey: operationId,
         body: {
-          'calendar_event_id': event.id,
-          'plan_day_id': event.planDayId,
+          'calendar_event_id': event?.id,
+          'plan_day_id': event?.planDayId,
           'started_at': DateTime.now().toUtc().toIso8601String(),
           'pre_check': preCheck?.toJson(),
         },
@@ -357,10 +364,16 @@ class TrainingRepository {
       await _apiClient.post(
         '/workouts/${workout.id}/sets',
         idempotencyKey: clientGeneratedId,
+        localDraftKey: 'set:${exercise.id}:new',
         body: {
           'client_generated_id': clientGeneratedId,
           'workout_exercise_id': exercise.id,
-          'set_index': exercise.sets.length + 1,
+          'set_index':
+              exercise.sets.fold(
+                0,
+                (last, set) => set.setIndex > last ? set.setIndex : last,
+              ) +
+              1,
           'weight_kg': weightKg,
           'reps': reps,
           'rir': null,
@@ -424,6 +437,26 @@ class TrainingRepository {
         },
       ),
       context: '临时添加训练动作接口',
+    );
+    return Workout.fromJson(json);
+  }
+
+  Future<Workout> updateExerciseTarget({
+    required Workout workout,
+    required WorkoutExercise exercise,
+    int? targetSets,
+    int? restSeconds,
+  }) async {
+    final json = expectJsonObject(
+      await _apiClient.patch(
+        '/workouts/${workout.id}/exercises/${exercise.id}/target',
+        body: {
+          'target_sets': ?targetSets,
+          'rest_seconds': ?restSeconds,
+          'expected_workout_version': workout.version,
+        },
+      ),
+      context: '调整本次训练动作接口',
     );
     return Workout.fromJson(json);
   }

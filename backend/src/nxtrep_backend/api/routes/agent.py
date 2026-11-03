@@ -6,7 +6,7 @@ from time import monotonic
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 from nxtrep_backend.agents.factory import (
@@ -44,16 +44,20 @@ from nxtrep_backend.schemas.conversation import (
     AgentConversationUpdateRequest,
     AgentMessageListResponse,
     AgentMessageResponse,
+    ConversationConfirmationResponse,
 )
+from nxtrep_backend.services.agent_errors import public_agent_error
 from nxtrep_backend.services.agent_media import (
     AgentImageAssetNotFoundError,
     AgentImageAssetNotReadyError,
 )
 from nxtrep_backend.services.agent_run import (
     AgentRunConflictError,
+    AgentRunInProgressError,
     AgentRunNotFoundError,
     AgentRunService,
 )
+from nxtrep_backend.services.agent_turn import AgentTurnReplayError
 from nxtrep_backend.services.agent_workflow import (
     AgentWorkflowResultError,
 )
@@ -61,6 +65,10 @@ from nxtrep_backend.services.conversation import (
     AgentConversationConflictError,
     AgentConversationNotFoundError,
     ConversationService,
+)
+from nxtrep_backend.services.idempotency import (
+    IdempotencyKeyConflictError,
+    IdempotencyRequestInProgressError,
 )
 
 router = APIRouter()
@@ -92,6 +100,13 @@ async def list_tool_runs(
     items = []
     for run in runs:
         tool_runs = run.checkpoint.get("tool_runs", [])
+        if not tool_runs and isinstance(run.result_payload, dict):
+            tool_runs = [
+                item
+                for branch in run.result_payload.get("analysis_results", [])
+                if isinstance(branch, dict)
+                for item in branch.get("tool_runs", [])
+            ]
         for tool_run in tool_runs if isinstance(tool_runs, list) else []:
             if isinstance(tool_run, dict):
                 items.append({"run_id": str(run.id), **tool_run})
@@ -219,6 +234,27 @@ async def chat(
             request=body,
         )
 
+    except (
+        AgentRunInProgressError,
+        IdempotencyKeyConflictError,
+        IdempotencyRequestInProgressError,
+        AgentTurnReplayError,
+    ) as exc:
+        error = public_agent_error(exc)
+        raise ApiError(
+            status_code=status.HTTP_409_CONFLICT,
+            code=error.code,
+            message=error.message,
+        ) from exc
+
+    except TimeoutError as exc:
+        error = public_agent_error(exc)
+        raise ApiError(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            code=error.code,
+            message=error.message,
+        ) from exc
+
     except AgentImageAssetNotFoundError as exc:
         raise ApiError(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -252,10 +288,15 @@ async def chat(
         AgentResponseSynthesisError,
         AgentWorkflowResultError,
     ) as exc:
+        error = public_agent_error(exc)
         raise ApiError(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            code="AGENT_INVALID_MODEL_RESPONSE",
-            message="Agent model returned an invalid response",
+            code=(
+                error.code
+                if error.code != "BRANCH_EXECUTION_FAILED"
+                else "AGENT_INVALID_MODEL_RESPONSE"
+            ),
+            message=error.message,
         ) from exc
 
     except (
@@ -301,13 +342,18 @@ async def stream_chat(
                 disconnect_poll_interval_seconds=(settings.agent_sse_disconnect_poll_seconds),
             ):
                 yield payload
-        except Exception:
+        except Exception as exc:
             logger.exception("Agent stream failed before execution started")
+            error = public_agent_error(exc)
             yield _encode_sse(
                 AgentStreamEvent(
                     event="failed",
-                    error_code="AGENT_STREAM_FAILED",
-                    message="Agent stream failed before execution started",
+                    error_code=(
+                        error.code
+                        if error.code != "BRANCH_EXECUTION_FAILED"
+                        else "AGENT_STREAM_FAILED"
+                    ),
+                    message=error.message,
                 )
             )
 
@@ -326,6 +372,7 @@ async def stream_chat(
 async def list_conversations(
     user_id: CurrentUserId,
     session: DbSession,
+    background_tasks: BackgroundTasks,
     status_filter: Literal["active", "archived"] | None = Query(
         default=None,
         alias="status",
@@ -339,6 +386,9 @@ async def list_conversations(
         page=page,
         page_size=page_size,
     )
+    from nxtrep_backend.services.conversation_title import schedule_conversation_titles
+
+    schedule_conversation_titles(background_tasks, user_id, items)
     return AgentConversationListResponse(
         list=[AgentConversationResponse.model_validate(item) for item in items],
         total=total,
@@ -457,6 +507,25 @@ async def list_conversation_messages(
     )
 
 
+@router.get(
+    "/conversations/{conversation_id}/confirmations",
+    response_model=ConversationConfirmationResponse,
+)
+async def restore_conversation_confirmations(
+    conversation_id: UUID,
+    user_id: CurrentUserId,
+    session: DbSession,
+) -> ConversationConfirmationResponse:
+    try:
+        return await _conversation_service(session).restore_confirmations(
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+    except RuntimeError as exc:
+        _raise_conversation_error(exc)
+        raise
+
+
 @router.post(
     "/conversations/{conversation_id}/messages",
     response_class=StreamingResponse,
@@ -483,6 +552,7 @@ async def create_conversation_message(
             message=body.message,
             conversation_id=conversation_id,
             image_asset_ids=body.image_asset_ids,
+            client_turn_id=body.client_turn_id,
             context_hints=body.context_hints,
         ),
         user_id=user_id,

@@ -1,10 +1,10 @@
-import 'package:flutter/foundation.dart';
+import '../../../core/state/lifecycle_notifier.dart';
 
 import '../../../core/network/api_exception.dart';
 import '../data/training_repository.dart';
 import '../domain/training_models.dart';
 
-class TrainingController extends ChangeNotifier {
+class TrainingController extends LifecycleNotifier {
   TrainingController(this._repository);
 
   final TrainingRepository _repository;
@@ -37,7 +37,7 @@ class TrainingController extends ChangeNotifier {
   }
 
   Future<bool> start(
-    CalendarEvent event, {
+    CalendarEvent? event, {
     PreWorkoutCheckInput? preCheck,
   }) async {
     return _perform(() async {
@@ -97,6 +97,23 @@ class TrainingController extends ChangeNotifier {
       activeWorkout = await _repository.addExercise(
         workout: workout,
         exerciseId: exerciseId,
+      );
+    });
+  }
+
+  Future<bool> updateExerciseTarget(
+    WorkoutExercise exercise, {
+    int? targetSets,
+    int? restSeconds,
+  }) async {
+    final workout = activeWorkout;
+    if (workout == null) return false;
+    return _perform(() async {
+      activeWorkout = await _repository.updateExerciseTarget(
+        workout: workout,
+        exercise: exercise,
+        targetSets: targetSets,
+        restSeconds: restSeconds,
       );
     });
   }
@@ -184,6 +201,14 @@ class TrainingController extends ChangeNotifier {
       await action();
       return true;
     } on ApiException catch (error) {
+      if (error.code == 'RECORD_SAVED_LOCALLY') {
+        try {
+          activeWorkout = await _repository.getActiveWorkout();
+        } on ApiException {
+          /* Retain last view. */
+        }
+        return true;
+      }
       errorMessage = _messageFor(error);
       return false;
     } finally {
@@ -195,7 +220,7 @@ class TrainingController extends ChangeNotifier {
   String _messageFor(ApiException error) => switch (error.code) {
     'WORKOUT_VERSION_CONFLICT' => '训练记录已在其他设备更新，已停止本次提交，请刷新后重试',
     'ACTIVE_WORKOUT_EXISTS' => '已有一场进行中的训练',
-    'NETWORK_ERROR' => '暂时无法连接后端，训练离线队列将在后续版本启用',
+    'NETWORK_ERROR' => '当前离线，已开始的训练可继续记组；其他操作请联网后重试',
     _ => error.message,
   };
 }

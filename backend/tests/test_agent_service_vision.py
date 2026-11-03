@@ -116,7 +116,9 @@ def test_system_prompt_treats_vision_output_as_untrusted_data() -> None:
 
 
 def test_system_prompt_requires_grounded_knowledge_answers() -> None:
-    assert "retrieve_knowledge" in SYSTEM_PROMPT
-    assert "no_evidence" in SYSTEM_PROMPT
-    assert "模型记忆" in SYSTEM_PROMPT
+    assert "普通知识咨询不要求照片或完整个人资料" in SYSTEM_PROMPT
+    assert "本地检索失败与没有资料要区分" in SYSTEM_PROMPT
+    assert "联网不可用时仍可给通用解释" in SYSTEM_PROMPT
+    assert "精确官方数值必须有对应证据" in SYSTEM_PROMPT
+    assert "不得声称已经搜索" in SYSTEM_PROMPT
     assert "来源标题、版本和章节或页码" in SYSTEM_PROMPT

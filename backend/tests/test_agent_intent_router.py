@@ -9,10 +9,16 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from nxtrep_backend.agents.intent_router import (
     AgentIntentRouter,
     AgentIntentRoutingError,
+    is_confirmation_status_query,
+    meal_nutrient_follow_up_task,
 )
 from nxtrep_backend.schemas.agent import AgentIntentPlan, AgentIntentTask
 from nxtrep_backend.schemas.media import ImagePurpose
 from nxtrep_backend.services.agent_media import ResolvedAgentImage
+from nxtrep_backend.services.conversation import (
+    AgentConversationContext,
+    ConversationMessageContext,
+)
 
 
 def make_image(purpose: ImagePurpose) -> ResolvedAgentImage:
@@ -44,6 +50,13 @@ def make_dependencies() -> tuple[MagicMock, MagicMock]:
     return model, structured_model
 
 
+def supply_plan(structured, task_type, required_context=()):
+    structured.ainvoke.return_value = {"parsed": AgentIntentPlan(tasks=[AgentIntentTask(
+        task_type=task_type, confidence="high", routing_reason="模型语义规划",
+        required_context=list(required_context),
+    )]), "raw": None, "parsing_error": None}
+
+
 def test_router_uses_agent_intent_plan_structured_output() -> None:
     model, _ = make_dependencies()
 
@@ -54,6 +67,174 @@ def test_router_uses_agent_intent_plan_structured_output() -> None:
         method="function_calling",
         include_raw=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_router_repairs_one_malformed_plan_before_returning_validated_intent():
+    model, structured = make_dependencies()
+    expected = AgentIntentPlan(tasks=[make_task("general_question", [])])
+    structured.ainvoke.side_effect = [
+        {"parsed": None, "parsing_error": ValueError("invalid enum")},
+        {"parsed": expected, "parsing_error": None},
+    ]
+    result = await AgentIntentRouter(model).route(message="解释一下训练容量", images=[])
+    assert result == expected
+    assert structured.ainvoke.await_count == 2
+    repair_messages = structured.ainvoke.await_args_list[1].args[0]
+    assert "不补造用户意图" in repair_messages[-2].content
+
+
+@pytest.mark.asyncio
+async def test_router_format_repair_is_bounded():
+    model, structured = make_dependencies()
+    structured.ainvoke.return_value = {"parsed": None}
+    with pytest.raises(AgentIntentRoutingError):
+        await AgentIntentRouter(model).route(message="解释一下训练容量", images=[])
+    assert structured.ainvoke.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "只用两句话解释一下，这份草稿还没保存对吗？",
+        "这个草稿现在生效了吗",
+        "刚才的提案是否已经执行？",
+    ],
+)
+async def test_concrete_draft_status_uses_read_tools_without_public_knowledge(message):
+    model, structured_model = make_dependencies()
+    supply_plan(structured_model, "structured_data_query", ["confirmation"])
+    plan = await AgentIntentRouter(model).route(message=message, images=[])
+    assert plan.tasks[0].task_type == "structured_data_query"
+    assert plan.tasks[0].required_context == ["confirmation"]
+    structured_model.ainvoke.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "草稿是什么？",
+        "取消这份草稿",
+        "这份草稿改成100克，保存了吗？",
+        "请批准这张卡，马上执行",
+        "这份提案确认机制为什么这样设计？",
+        "这份草稿保存了吗，另外查一下今天的训练和饮食",
+    ],
+)
+def test_status_shortcut_does_not_drop_mutations_or_product_questions(message):
+    assert not is_confirmation_status_query(message)
+
+
+def meal_context():
+    return AgentConversationContext(
+        recent_messages=(
+            ConversationMessageContext(role="user", content="午饭是泡脚鸡胗饭"),
+            ConversationMessageContext(
+                role="assistant",
+                content="已创建午餐草稿，碳水约68克，待确认。",
+            ),
+            ConversationMessageContext(role="user", content="碳水应该不超过六十克"),
+            ConversationMessageContext(role="assistant", content="没有完成长期记忆修改，请重试。"),
+        )
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("碳水应该不超过六十克", "structured_data_query"),
+        ("热量应该只有500千卡", "structured_data_query"),
+        ("这餐蛋白质至少30g吧", "structured_data_query"),
+        ("把米饭减少，让整餐碳水控制在60克以内，先改草稿", "nutrition_record_draft"),
+    ],
+)
+async def test_meal_nutrient_followup_never_becomes_long_term_memory(message, expected):
+    model, structured = make_dependencies()
+    supply_plan(structured, expected, ["confirmation"])
+    result = await AgentIntentRouter(model).route(
+        message=message,
+        images=[],
+        conversation_context=meal_context(),
+    )
+    assert [task.task_type for task in result.tasks] == [expected]
+    assert result.tasks[0].required_context == ["confirmation"]
+    structured.ainvoke.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "记住以后每餐碳水不超过60克",
+        "每天碳水目标改成60克",
+        "我的长期偏好是每餐碳水60克以内",
+        "取消草稿，碳水不超过60克",
+        "碳水控制60克以内，另外查训练记录",
+        "碳水是什么",
+        "不要减少米饭，碳水应该不超过60克",
+        "不要改鸡胗，只减少米饭，碳水控制60克以内",
+    ],
+)
+def test_meal_followup_does_not_override_explicit_memory_or_mixed_tasks(message):
+    assert meal_nutrient_follow_up_task(message, meal_context()) is None
+
+
+def test_nutrient_statement_without_meal_context_requires_semantic_routing():
+    assert meal_nutrient_follow_up_task("碳水应该不超过六十克", None) is None
+
+
+@pytest.mark.asyncio
+async def test_nutrient_feedback_reviews_a_proposed_write_before_any_execution():
+    model, structured = make_dependencies()
+    wrong = AgentIntentPlan(tasks=[make_task("nutrition_record_draft", [])])
+    corrected = AgentIntentPlan(tasks=[make_task("structured_data_query", [])])
+    structured.ainvoke.side_effect = [
+        {"parsed": wrong, "raw": None, "parsing_error": None},
+        {"parsed": corrected, "raw": None, "parsing_error": None},
+    ]
+    result = await AgentIntentRouter(model).route(
+        message="碳水应该不超过六十克", images=[], conversation_context=meal_context(),
+    )
+    assert result == corrected
+    assert structured.ainvoke.await_count == 2
+    feedback = json.loads(structured.ainvoke.await_args_list[1].args[0][1].content)
+    assert feedback["validation_conflicts"][0]["code"] == "MEAL_FEEDBACK_IS_READ_ONLY"
+
+
+@pytest.mark.asyncio
+async def test_nutrient_feedback_repeated_write_plan_is_rejected():
+    model, structured = make_dependencies()
+    supply_plan(structured, "nutrition_record_draft")
+    with pytest.raises(AgentIntentRoutingError, match="目标仍有冲突"):
+        await AgentIntentRouter(model).route(
+            message="碳水应该不超过六十克", images=[], conversation_context=meal_context(),
+        )
+    assert structured.ainvoke.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_nutrient_correction_passes_saved_meal_state_to_model():
+    from dataclasses import replace
+
+    context = replace(
+        meal_context(),
+        meal_confirmations=(
+            {
+                "status": "succeeded",
+                "operation_type": "nutrition_entry_create",
+                "entry_id": str(uuid4()),
+            },
+        ),
+    )
+    model, structured = make_dependencies()
+    supply_plan(structured, "nutrition_entry_update_draft")
+    plan = await AgentIntentRouter(model).route(
+        message="把米饭减少，让整餐碳水控制在60克以内", images=[], conversation_context=context
+    )
+    assert [t.task_type for t in plan.tasks] == ["nutrition_entry_update_draft"]
+    structured.ainvoke.assert_awaited_once()
+    assert meal_nutrient_follow_up_task("碳水应该不超过六十克", AgentConversationContext()) is None
 
 
 @pytest.mark.asyncio
@@ -208,13 +389,14 @@ async def test_router_uses_fallback_after_invalid_primary_output() -> None:
     )
 
     assert result == expected
-    primary_structured.ainvoke.assert_awaited_once()
+    assert primary_structured.ainvoke.await_count == 2
     fallback_structured.ainvoke.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_router_locally_routes_clear_knowledge_question_without_model() -> None:
+async def test_router_semantically_routes_clear_knowledge_question() -> None:
     model, structured_model = make_dependencies()
+    supply_plan(structured_model, "knowledge_retrieval")
 
     result = await AgentIntentRouter(model).route(
         message="力量训练后为什么通常需要摄入蛋白质？",
@@ -223,12 +405,13 @@ async def test_router_locally_routes_clear_knowledge_question_without_model() ->
 
     assert [task.task_type for task in result.tasks] == ["knowledge_retrieval"]
     assert result.tasks[0].confidence == "high"
-    structured_model.ainvoke.assert_not_awaited()
+    structured_model.ainvoke.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_router_prioritizes_explicit_plan_creation_over_why_explanation() -> None:
     model, structured_model = make_dependencies()
+    supply_plan(structured_model, "training_plan_draft")
 
     result = await AgentIntentRouter(model).route(
         message=(
@@ -240,12 +423,13 @@ async def test_router_prioritizes_explicit_plan_creation_over_why_explanation() 
 
     assert [task.task_type for task in result.tasks] == ["training_plan_draft"]
     assert result.tasks[0].confidence == "high"
-    structured_model.ainvoke.assert_not_awaited()
+    structured_model.ainvoke.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_router_keeps_how_to_create_a_plan_as_read_only_knowledge() -> None:
     model, structured_model = make_dependencies()
+    supply_plan(structured_model, "knowledge_retrieval")
 
     result = await AgentIntentRouter(model).route(
         message="请解释如何制定一份力量训练计划？",
@@ -253,7 +437,7 @@ async def test_router_keeps_how_to_create_a_plan_as_read_only_knowledge() -> Non
     )
 
     assert [task.task_type for task in result.tasks] == ["knowledge_retrieval"]
-    structured_model.ainvoke.assert_not_awaited()
+    structured_model.ainvoke.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -276,10 +460,11 @@ async def test_router_keeps_multiple_explicit_tasks_for_model_routing() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("message", ["你好！", "hello", "Hi", "你能做什么？"])
-async def test_router_locally_routes_simple_conversation_without_model(
+async def test_router_interprets_simple_conversation_with_model(
     message: str,
 ) -> None:
     model, structured_model = make_dependencies()
+    supply_plan(structured_model, "general_question")
 
     result = await AgentIntentRouter(model).route(
         message=message,
@@ -289,13 +474,14 @@ async def test_router_locally_routes_simple_conversation_without_model(
     assert [task.task_type for task in result.tasks] == ["general_question"]
     assert result.tasks[0].required_context == []
     assert result.tasks[0].confidence == "high"
-    structured_model.ainvoke.assert_not_awaited()
+    structured_model.ainvoke.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("message", ["今天怎么练？", "How should I train today?"])
-async def test_router_locally_routes_today_training_query_without_model(message: str) -> None:
+async def test_router_semantically_routes_today_training_query(message: str) -> None:
     model, structured_model = make_dependencies()
+    supply_plan(structured_model, "structured_data_query", ["training_plan", "calendar", "workout"])
 
     result = await AgentIntentRouter(model).route(
         message=message,
@@ -305,7 +491,7 @@ async def test_router_locally_routes_today_training_query_without_model(message:
     assert [task.task_type for task in result.tasks] == ["structured_data_query"]
     assert result.tasks[0].required_context == ["training_plan", "calendar", "workout"]
     assert result.tasks[0].confidence == "high"
-    structured_model.ainvoke.assert_not_awaited()
+    structured_model.ainvoke.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -355,3 +541,23 @@ async def test_router_rejects_blank_message_before_model_call() -> None:
         await router.route(message="   ", images=[])
 
     structured_model.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "我今天已经吃了多少热量和碳水蛋白脂肪？",
+        "我这周训练了多少次？",
+        "今天练什么，顺便告诉我今天吃了多少热量？",
+        "请把明天的训练改到周五，并告诉我为什么这样安排。",
+        "我每天训练需要多少蛋白质？",
+    ],
+)
+async def test_personal_and_mixed_questions_reach_semantic_router(message):
+    model, structured = make_dependencies()
+    expected = AgentIntentPlan(tasks=[make_task("structured_data_query", [])])
+    structured.ainvoke.return_value = {"parsed": expected, "parsing_error": None}
+    result = await AgentIntentRouter(model).route(message=message, images=[])
+    assert result == expected
+    structured.ainvoke.assert_awaited_once()

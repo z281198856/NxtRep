@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -113,13 +114,21 @@ async def test_training_plan_includes_verified_personal_context_without_inventin
     tools.profile_service.get_profile = AsyncMock(
         return_value=SimpleNamespace(
             height_cm=Decimal("178"),
+            sex="male",
+            birth_date=date(2000, 1, 1),
+            timezone="Asia/Shanghai",
             experience_level="beginner",
             weekly_training_days=3,
             session_duration_minutes=45,
         )
     )
     tools.goals_service.get_goals_and_constraints = AsyncMock(
-        return_value=SimpleNamespace(goal=SimpleNamespace(goal_type="fat_loss_retain"))
+        return_value=SimpleNamespace(
+            goal=SimpleNamespace(goal_type="fat_loss_retain"),
+            constraints=SimpleNamespace(
+                equipment=["dumbbell"], pain_or_injuries=[], allergies=[], dietary_preferences=[]
+            ),
+        )
     )
     tools.body_service.recent_measurement_summary = AsyncMock(
         return_value={
@@ -133,7 +142,9 @@ async def test_training_plan_includes_verified_personal_context_without_inventin
         return_value={str(exercise_id): "哑铃卧推"}
     )
 
-    result = await TrainingPlanBranchHandler(react, tools).execute(make_input())
+    request = make_input()
+    tools.user_id = request.user_id
+    result = await TrainingPlanBranchHandler(react, tools).execute(request)
 
     sent = react.execute.await_args.args[0]
     payload = json.loads(sent.message)
@@ -162,14 +173,14 @@ async def test_training_plan_marks_missing_profile_and_body_data_as_missing() ->
     )
     tools = MagicMock()
     tools.profile_service.get_profile = AsyncMock(side_effect=ProfileNotFoundError())
-    tools.goals_service.get_goals_and_constraints = AsyncMock(
-        side_effect=GoalsNotFoundError()
-    )
+    tools.goals_service.get_goals_and_constraints = AsyncMock(side_effect=GoalsNotFoundError())
     tools.body_service.recent_measurement_summary = AsyncMock(
         return_value={"weight_kg": None, "body_fat_percent": None}
     )
 
-    result = await TrainingPlanBranchHandler(react, tools).execute(make_input())
+    request = make_input()
+    tools.user_id = request.user_id
+    result = await TrainingPlanBranchHandler(react, tools).execute(request)
 
     assert result.status == "needs_input"
     assert "personal_context" not in (result.result or {})

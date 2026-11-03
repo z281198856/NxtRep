@@ -8,12 +8,138 @@ import 'package:http/testing.dart';
 import 'package:nxtrep/core/config/api_config.dart';
 import 'package:nxtrep/core/media/image_upload.dart';
 import 'package:nxtrep/core/network/api_client.dart';
+import 'package:nxtrep/core/network/api_exception.dart';
 import 'package:nxtrep/core/network/sse_event.dart';
 import 'package:nxtrep/features/agent/data/agent_repository.dart';
 import 'package:nxtrep/features/agent/domain/agent_models.dart';
 import 'package:nxtrep/features/agent/presentation/agent_controller.dart';
 
 void main() {
+  testWidgets('follow-up advice preserves an unconfirmed card', (tester) async {
+    final repository = _FakeAgentRepository();
+    final controller = AgentController(repository);
+    addTearDown(controller.dispose);
+    addTearDown(repository.close);
+    controller.confirmations = const [
+      AgentConfirmationCard(
+        id: 'meal',
+        operationType: 'nutrition_entry_create',
+        status: 'pending',
+        impact: '确认后记录',
+        version: 1,
+      ),
+    ];
+    repository.messageStream = Stream<SseEvent>.value(
+      _event('completed', {
+        'response': {'status': 'completed', 'confirmation_cards': <Object>[]},
+      }),
+    );
+    final send = controller.send('这餐蛋白质够吗？');
+    await tester.pump();
+    await tester.pump();
+    await send;
+    expect(controller.confirmations.map((card) => card.id), ['meal']);
+  });
+
+  testWidgets('replacement and cancellation remove only the affected card', (
+    tester,
+  ) async {
+    final repository = _FakeAgentRepository();
+    final controller = AgentController(repository);
+    addTearDown(controller.dispose);
+    addTearDown(repository.close);
+    controller.confirmations = const [
+      AgentConfirmationCard(
+        id: 'old',
+        operationType: 'calendar_reschedule',
+        status: 'pending',
+        impact: '改期',
+        version: 1,
+      ),
+      AgentConfirmationCard(
+        id: 'meal',
+        operationType: 'nutrition_entry_create',
+        status: 'pending',
+        impact: '记餐',
+        version: 1,
+      ),
+    ];
+    repository.messageStream = Stream<SseEvent>.value(
+      _event('completed', {
+        'response': {
+          'status': 'completed',
+          'confirmation_cards': [
+            {
+              'confirmation_id': 'new',
+              'operation_type': 'calendar_reschedule',
+              'status': 'pending',
+              'impact': '改期',
+              'version': 1,
+              'after': {'replaces_confirmation_id': 'old'},
+            },
+          ],
+        },
+      }),
+    );
+    var send = controller.send('改到周五');
+    await tester.pump();
+    await tester.pump();
+    await send;
+    expect(controller.confirmations.map((card) => card.id), ['meal', 'new']);
+    repository.messageStream = Stream<SseEvent>.value(
+      _event('completed', {
+        'response': {
+          'status': 'completed',
+          'confirmation_cards': <Object>[],
+          'analysis_results': [
+            {
+              'operation_results': [
+                {
+                  'status': 'cancelled',
+                  'confirmation': {'confirmation_id': 'new'},
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    send = controller.send('取消刚才的改期草稿');
+    await tester.pump();
+    await tester.pump();
+    await send;
+    expect(controller.confirmations.map((card) => card.id), ['meal']);
+  });
+
+  for (final status in ['failed', 'partial']) {
+    testWidgets('keeps specific timeout explanation for $status', (
+      tester,
+    ) async {
+      final repository = _FakeAgentRepository();
+      repository.messageStream = Stream<SseEvent>.value(
+        _event('completed', {
+          'response': {
+            'status': status,
+            'analysis_results': [
+              {
+                'status': 'failed',
+                'error': {'code': 'AGENT_TIMEOUT', 'message': '处理超时，请核对记录后重试。'},
+              },
+            ],
+          },
+        }),
+      );
+      final controller = AgentController(repository);
+      addTearDown(controller.dispose);
+      addTearDown(repository.close);
+      final send = controller.send('查询训练和饮食');
+      await tester.pump();
+      await tester.pump();
+      await send;
+      expect(controller.errorMessage, '处理超时，请核对记录后重试。');
+      expect(controller.errorMessage, isNot(contains('评估失败')));
+    });
+  }
   testWidgets(
     'shows the optimistic user message before conversation creation',
     (tester) async {
@@ -92,7 +218,7 @@ void main() {
   );
 
   testWidgets(
-    'uses adaptive batches instead of rebuilding for every character',
+    'keeps a large burst and its final tail at a constant display pace',
     (tester) async {
       final repository = _FakeAgentRepository();
       final reply = List<String>.filled(400, '练').join();
@@ -103,10 +229,7 @@ void main() {
           'response': {'message': reply},
         }),
       ]);
-      final controller = AgentController(
-        repository,
-        typingInterval: const Duration(milliseconds: 30),
-      );
+      final controller = AgentController(repository);
       addTearDown(controller.dispose);
       addTearDown(repository.close);
       var notifications = 0;
@@ -117,19 +240,75 @@ void main() {
       await tester.pump();
       final beforeFirstTick = notifications;
 
-      await tester.pump(const Duration(milliseconds: 30));
-      final firstBatchLength = controller.messages.last.content.length;
-      expect(firstBatchLength, greaterThan(1));
-      expect(firstBatchLength, lessThan(reply.length));
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(controller.messages.last.content, '练练');
       expect(notifications, beforeFirstTick + 1);
 
-      await tester.pump(const Duration(seconds: 6));
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(controller.messages.last.content, '练练练练');
+
+      await tester.pump(const Duration(milliseconds: 1920));
+      expect(controller.messages.last.content.length, 100);
+      expect(controller.messages.last.pending, isTrue);
+      expect(controller.sending, isTrue);
+      expect(repository.listCalls, 0);
+
+      await tester.pump(const Duration(milliseconds: 5960));
+      expect(controller.messages.last.content.length, 398);
+      expect(controller.messages.last.pending, isTrue);
+      expect(repository.listCalls, 0);
+
+      await tester.pump(const Duration(milliseconds: 40));
       await tester.pump();
       await sendFuture;
       expect(controller.messages.last.content, reply);
-      expect(notifications, lessThan(reply.length ~/ 2));
+      expect(controller.messages.last.pending, isFalse);
+      expect(controller.sending, isFalse);
+      expect(repository.listCalls, 1);
     },
   );
+
+  testWidgets('resumes at the same pace after a pause between chunks', (
+    tester,
+  ) async {
+    final repository = _FakeAgentRepository();
+    const firstChunk = '练💪🏽';
+    const secondChunk = '恢复👨‍👩‍👧‍👦好';
+    const reply = '$firstChunk$secondChunk';
+    repository.canonicalMessages = _canonicalMessages(reply);
+    final controller = AgentController(repository);
+    addTearDown(controller.dispose);
+    addTearDown(repository.close);
+
+    final sendFuture = controller.send('给点建议');
+    await tester.pump();
+    repository.events.add(_event('message_delta', {'delta': firstChunk}));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+    expect(controller.messages.last.content, firstChunk);
+    expect(controller.messages.last.pending, isTrue);
+
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(controller.messages.last.content, firstChunk);
+    repository.events.add(_event('message_delta', {'delta': secondChunk}));
+    repository.events.add(
+      _event('completed', {
+        'response': {'message': reply},
+      }),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(controller.messages.last.content, firstChunk);
+    await tester.pump(const Duration(milliseconds: 40));
+    expect(controller.messages.last.content, '$firstChunk恢复');
+    expect(repository.listCalls, 0);
+    await tester.pump(const Duration(milliseconds: 40));
+    await tester.pump();
+    await sendFuture;
+    expect(controller.messages.last.content, reply);
+    expect(controller.messages.last.pending, isFalse);
+    expect(repository.listCalls, 1);
+  });
 
   testWidgets(
     'keeps received text when the SSE stream ends without a terminal event',
@@ -159,6 +338,29 @@ void main() {
       expect(repository.listCalls, 0);
     },
   );
+
+  testWidgets('reply timeout preserves text and ends the busy state', (
+    tester,
+  ) async {
+    final repository = _FakeAgentRepository();
+    repository.messageStream = (() async* {
+      yield _event('message_delta', {'delta': '收到的部分回复'});
+      throw const ApiException(code: 'REQUEST_TIMEOUT', message: 'AI 处理等待超时');
+    })();
+    final controller = AgentController(repository);
+    addTearDown(controller.dispose);
+    addTearDown(repository.close);
+    final sent = controller.send('记午餐');
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    await sent;
+    expect(controller.sending, isFalse);
+    expect(controller.activityLabel, isNull);
+    expect(controller.messages.last.content, '收到的部分回复');
+    expect(controller.messages.last.pending, isFalse);
+    expect(controller.errorMessage, contains('超时'));
+  });
 
   testWidgets('maps backend agent failures to a helpful Chinese message', (
     tester,
@@ -504,6 +706,8 @@ class _FakeAgentRepository extends AgentRepository {
     required String conversationId,
     required String message,
     List<String> imageAssetIds = const [],
+    String? clientTurnId,
+    Map<String, Object> contextHints = const {},
   }) {
     lastImageAssetIds = imageAssetIds;
     return messageStream ?? events.stream;

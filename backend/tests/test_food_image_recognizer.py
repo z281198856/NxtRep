@@ -2,12 +2,15 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
+import httpx
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
+from openai import APITimeoutError
 
 from nxtrep_backend.agents.nutrition_vision import (
     FoodImageRecognitionError,
+    FoodVisionUnavailableError,
     GlmFoodImageRecognizer,
 )
 from nxtrep_backend.schemas.media import ImagePurpose
@@ -29,10 +32,8 @@ def make_food_image() -> ResolvedAgentImage:
 
 def make_dependencies() -> tuple[MagicMock, MagicMock]:
     model = MagicMock(spec=BaseChatModel)
-    structured_model = MagicMock()
-    structured_model.ainvoke = AsyncMock()
-    model.with_structured_output.return_value = structured_model
-    return model, structured_model
+    model.ainvoke = AsyncMock()
+    return model, model
 
 
 def make_result() -> FoodImageRecognitionResult:
@@ -58,27 +59,43 @@ def make_result() -> FoodImageRecognitionResult:
     )
 
 
-def test_recognizer_configures_function_calling_structured_output() -> None:
+def test_recognizer_does_not_use_unreliable_vision_tool_calling() -> None:
     model, _ = make_dependencies()
 
     GlmFoodImageRecognizer(model)
 
-    model.with_structured_output.assert_called_once_with(
-        FoodImageRecognitionResult,
-        method="function_calling",
-        include_raw=True,
-    )
+    model.with_structured_output.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recognizer_accepts_text_blocks_without_guessing_missing_values():
+    model, _ = make_dependencies()
+    expected = make_result()
+    model.ainvoke.return_value = AIMessage(content=[
+        {"type": "text", "text": expected.model_dump_json()},
+    ])
+    result = await GlmFoodImageRecognizer(model).recognize(images=[make_food_image()], notes=None)
+    assert result == expected
+    model.ainvoke.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error", [TimeoutError(), httpx.ReadTimeout("provider response timed out")]
+)
+async def test_recognizer_normalizes_transport_timeout_without_reupload_or_retry(error):
+    model, _ = make_dependencies()
+    model.ainvoke.side_effect = error
+    with pytest.raises(FoodVisionUnavailableError):
+        await GlmFoodImageRecognizer(model).recognize(images=[make_food_image()], notes=None)
+    model.ainvoke.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_recognizer_returns_multiple_food_candidates() -> None:
     model, structured_model = make_dependencies()
     expected = make_result()
-    structured_model.ainvoke.return_value = {
-        "raw": None,
-        "parsed": expected,
-        "parsing_error": None,
-    }
+    structured_model.ainvoke.return_value = AIMessage(content=expected.model_dump_json())
     recognizer = GlmFoodImageRecognizer(model)
 
     result = await recognizer.recognize(
@@ -94,11 +111,7 @@ async def test_recognizer_returns_multiple_food_candidates() -> None:
 @pytest.mark.asyncio
 async def test_recognizer_prompt_contains_notes_and_nutrition_boundary() -> None:
     model, structured_model = make_dependencies()
-    structured_model.ainvoke.return_value = {
-        "raw": None,
-        "parsed": make_result(),
-        "parsing_error": None,
-    }
+    structured_model.ainvoke.return_value = AIMessage(content=make_result().model_dump_json())
     recognizer = GlmFoodImageRecognizer(model)
 
     await recognizer.recognize(
@@ -118,11 +131,7 @@ async def test_recognizer_prompt_contains_notes_and_nutrition_boundary() -> None
 @pytest.mark.asyncio
 async def test_recognizer_reports_structured_output_parsing_failure() -> None:
     model, structured_model = make_dependencies()
-    structured_model.ainvoke.return_value = {
-        "raw": None,
-        "parsed": None,
-        "parsing_error": ValueError("invalid food output"),
-    }
+    structured_model.ainvoke.return_value = AIMessage(content="invalid food output")
     recognizer = GlmFoodImageRecognizer(model)
 
     with pytest.raises(FoodImageRecognitionError, match="structured output"):
@@ -130,3 +139,68 @@ async def test_recognizer_reports_structured_output_parsing_failure() -> None:
             images=[make_food_image()],
             notes=None,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "{}",
+        '{"foods":[{"name":"米饭","estimated_amount_g":0,'
+        '"amount_min_g":0,"amount_max_g":0,"confidence":"low"}]}',
+    ],
+)
+async def test_recognizer_rejects_missing_foods_or_zero_weights(raw):
+    model, _ = make_dependencies()
+    model.ainvoke.return_value = AIMessage(content=raw)
+    with pytest.raises(FoodImageRecognitionError):
+        await GlmFoodImageRecognizer(model).recognize(images=[make_food_image()], notes=None)
+
+
+@pytest.mark.asyncio
+async def test_recognizer_accepts_json_fence_and_explicit_no_food():
+    model, _ = make_dependencies()
+    model.ainvoke.return_value = AIMessage(
+        content='```json\n{"foods":[],"assumptions":["照片没有食物"]}\n```'
+    )
+    result = await GlmFoodImageRecognizer(model).recognize(images=[make_food_image()], notes=None)
+    assert result.foods == []
+    assert result.assumptions == ["照片没有食物"]
+
+
+@pytest.mark.asyncio
+async def test_recognizer_uses_configured_single_image_fallback_when_primary_busy():
+    model, _ = make_dependencies()
+    busy = RuntimeError("capacity")
+    busy.status_code = 429
+    model.ainvoke.side_effect = busy
+    fallback, _ = make_dependencies()
+    fallback.ainvoke.return_value = AIMessage(content=make_result().model_dump_json())
+    result = await GlmFoodImageRecognizer(model, fallback).recognize(
+        images=[make_food_image()], notes=None
+    )
+    assert result == make_result()
+    model.ainvoke.assert_awaited_once()
+    fallback.ainvoke.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recognizer_falls_back_on_timeout_without_unbounded_retry():
+    primary, _ = make_dependencies()
+    primary.ainvoke.side_effect = APITimeoutError(
+        request=httpx.Request("POST", "https://example.test")
+    )
+    fallback, _ = make_dependencies()
+    fallback.ainvoke.return_value = AIMessage(content=make_result().model_dump_json())
+    result = await GlmFoodImageRecognizer(primary, fallback).recognize(
+        images=[make_food_image()], notes=None
+    )
+    assert result == make_result()
+    primary.ainvoke.assert_awaited_once()
+    fallback.ainvoke.assert_awaited_once()
+    fallback.ainvoke.side_effect = primary.ainvoke.side_effect
+    with pytest.raises(FoodVisionUnavailableError):
+        await GlmFoodImageRecognizer(primary, fallback).recognize(
+            images=[make_food_image()], notes=None
+        )
+    assert primary.ainvoke.await_count == fallback.ainvoke.await_count == 2

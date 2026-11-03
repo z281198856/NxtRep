@@ -23,8 +23,56 @@ def make_repository() -> MagicMock:
     repository.append_message = AsyncMock()
     repository.list_recent = AsyncMock(return_value=[])
     repository.list_unsummarized = AsyncMock(return_value=[])
+    repository.list_conversation_confirmations = AsyncMock(return_value=[])
     repository.flush = AsyncMock()
     return repository
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["pending", "succeeded", "cancelled", "expired"])
+async def test_meal_context_uses_current_command_state_over_old_pending_reply(status):
+    from datetime import timedelta
+
+    user_id, conversation_id, entry_id = uuid4(), uuid4(), uuid4()
+    repository = make_repository()
+    repository.get_for_user.return_value = AgentConversation(
+        id=conversation_id, user_id=user_id, next_sequence=3
+    )
+    repository.list_recent.return_value = [
+        SimpleNamespace(role="assistant", content="已创建午餐草稿，等待确认。")
+    ]
+    card = SimpleNamespace(
+        id=uuid4(),
+        status="pending" if status == "expired" else status,
+        operation_type="nutrition_entry_create",
+        after={
+            "entry": {
+                "meal_type": "lunch",
+                "eaten_at": "2026-10-07T12:30:00+08:00",
+                "items": [{"name": "熟米饭", "amount_g": "200"}],
+            }
+        },
+        result={"resource_id": str(entry_id)} if status == "succeeded" else None,
+        expires_at=datetime.now(UTC) + timedelta(hours=-1 if status == "expired" else 1),
+    )
+    repository.list_conversation_confirmations.return_value = [card]
+    _, context = await ConversationService(repository).begin_turn(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        user_message="米饭约两百五十克",
+        image_asset_ids=[],
+    )
+    assert context.recent_messages[0].content == "已创建午餐草稿，等待确认。"
+    assert context.meal_confirmations[0]["status"] == status
+    assert context.meal_confirmations[0]["entry_id"] == (
+        str(entry_id) if status == "succeeded" else None
+    )
+    assert context.as_dict()["meal_confirmations"][0]["foods"] == [
+        {"name": "熟米饭", "amount_g": "200"}
+    ]
+    repository.list_conversation_confirmations.assert_awaited_once_with(
+        user_id=user_id, conversation_id=conversation_id
+    )
 
 
 @pytest.mark.asyncio
@@ -96,6 +144,51 @@ async def test_begin_turn_rejects_unknown_or_other_users_conversation() -> None:
         )
 
     repository.append_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_busy_turn_is_rejected_under_conversation_lock_before_any_message_or_summary():
+    repository = make_repository()
+    user_id = uuid4()
+    conversation = AgentConversation(id=uuid4(), user_id=user_id, next_sequence=3)
+    repository.get_for_user.return_value = conversation
+    guard = AsyncMock(side_effect=RuntimeError("conversation busy"))
+    service = ConversationService(repository, turn_guard=guard)
+
+    with pytest.raises(RuntimeError, match="conversation busy"):
+        await service.begin_turn(
+            user_id=user_id,
+            conversation_id=conversation.id,
+            user_message="同一会话的第二条请求",
+            image_asset_ids=[],
+        )
+
+    repository.get_for_user.assert_awaited_once_with(
+        user_id=user_id, conversation_id=conversation.id, lock=True,
+    )
+    guard.assert_awaited_once_with(user_id, conversation.id)
+    repository.list_unsummarized.assert_not_awaited()
+    repository.append_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_finish_turn_relocks_fresh_conversation_before_appending_assistant():
+    repository = make_repository()
+    user_id, conversation_id = uuid4(), uuid4()
+    stale = AgentConversation(id=conversation_id, user_id=user_id, next_sequence=3)
+    fresh = AgentConversation(id=conversation_id, user_id=user_id, next_sequence=5)
+    repository.get_for_user.return_value = fresh
+
+    await ConversationService(repository).finish_turn(
+        conversation=stale, assistant_message="  本轮结果  ",
+    )
+
+    repository.get_for_user.assert_awaited_once_with(
+        user_id=user_id, conversation_id=conversation_id, lock=True, active_only=False,
+    )
+    repository.append_message.assert_awaited_once_with(
+        conversation=fresh, role="assistant", content="本轮结果",
+    )
 
 
 @pytest.mark.asyncio

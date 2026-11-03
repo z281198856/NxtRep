@@ -9,6 +9,7 @@ from nxtrep_backend.db.models import (
     Exercise,
     PersonalRecord,
     ProgressionDraft,
+    User,
     Workout,
     WorkoutExercise,
     WorkoutSet,
@@ -55,7 +56,7 @@ class SqlAlchemyWorkoutRepository:
     ) -> Workout | None:
         statement = select(Workout).where(Workout.id == workout_id, Workout.user_id == user_id)
         if lock:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update().execution_options(populate_existing=True)
         return await self.session.scalar(statement)
 
     async def get_aggregate(self, user_id: UUID, workout_id: UUID) -> WorkoutAggregate | None:
@@ -92,12 +93,15 @@ class SqlAlchemyWorkoutRepository:
         status: str | None,
         page: int,
         page_size: int,
+        *,
+        timezone: str = "Asia/Shanghai",
     ) -> tuple[list[Workout], int]:
         conditions = [Workout.user_id == user_id]
+        local_date = func.date(func.timezone(timezone, Workout.started_at))
         if start_date:
-            conditions.append(func.date(Workout.started_at) >= start_date)
+            conditions.append(local_date >= start_date)
         if end_date:
-            conditions.append(func.date(Workout.started_at) <= end_date)
+            conditions.append(local_date <= end_date)
         if status:
             conditions.append(Workout.status == status)
         total = await self.session.scalar(
@@ -183,7 +187,7 @@ class SqlAlchemyWorkoutRepository:
             WorkoutSet.id == set_id, WorkoutSet.workout_id == workout_id
         )
         if lock:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update().execution_options(populate_existing=True)
         return await self.session.scalar(statement)
 
     async def get_set_by_client_id(self, workout_id: UUID, client_id: UUID) -> WorkoutSet | None:
@@ -209,6 +213,15 @@ class SqlAlchemyWorkoutRepository:
         self.session.add(item)
         await self.session.flush()
         return item
+
+    async def next_set_index(self, workout_exercise_id: UUID) -> int:
+        # Voided rows retain their indices and history under the unique constraint.
+        maximum = await self.session.scalar(
+            select(func.max(WorkoutSet.set_index)).where(
+                WorkoutSet.workout_exercise_id == workout_exercise_id
+            )
+        )
+        return (maximum or 0) + 1
 
     async def add_set_revision(self, revision: WorkoutSetRevision) -> None:
         self.session.add(revision)
@@ -271,6 +284,53 @@ class SqlAlchemyWorkoutRepository:
         self.session.add_all(records)
         await self.session.flush()
 
+    async def lock_record_owner(self, user_id: UUID) -> None:
+        await self.session.scalar(select(User.id).where(User.id == user_id).with_for_update())
+
+    async def record_source_sets(self, user_id: UUID, exercise_id: UUID):
+        return (
+            await self.session.execute(
+                select(Workout, WorkoutExercise, WorkoutSet)
+                .join(WorkoutExercise, WorkoutExercise.workout_id == Workout.id)
+                .join(WorkoutSet, WorkoutSet.workout_exercise_id == WorkoutExercise.id)
+                .where(
+                    Workout.user_id == user_id,
+                    Workout.status.in_(("completed", "interrupted")),
+                    WorkoutExercise.exercise_id == exercise_id,
+                    WorkoutSet.voided_at.is_(None),
+                )
+                .order_by(
+                    Workout.ended_at,
+                    Workout.started_at,
+                    Workout.id,
+                    WorkoutSet.set_index,
+                    WorkoutSet.id,
+                )
+            )
+        ).all()
+
+    async def sync_personal_records(
+        self, user_id: UUID, exercise_id: UUID, records: list[PersonalRecord]
+    ):
+        existing = list(
+            await self.session.scalars(
+                select(PersonalRecord).where(
+                    PersonalRecord.user_id == user_id,
+                    PersonalRecord.exercise_id == exercise_id,
+                )
+            )
+        )
+        desired = {(item.workout_id, item.record_type): item for item in records}
+        for old in existing:
+            new = desired.pop((old.workout_id, old.record_type), None)
+            if new is None:
+                await self.session.delete(old)
+            else:
+                for field in ("set_id", "value", "exercise_name_snapshot", "occurred_at"):
+                    setattr(old, field, getattr(new, field))
+        self.session.add_all(desired.values())
+        await self.session.flush()
+
     async def best_record(self, user_id: UUID, exercise_id: UUID, record_type: str):
         return await self.session.scalar(
             select(func.max(PersonalRecord.value)).where(
@@ -295,4 +355,11 @@ class SqlAlchemyWorkoutRepository:
                 .where(PersonalRecord.workout_id == workout_id)
                 .order_by(PersonalRecord.occurred_at, PersonalRecord.id)
             )
+        )
+
+    async def last_set_revision_at(self, workout_id: UUID):
+        return await self.session.scalar(
+            select(func.max(WorkoutSetRevision.created_at))
+            .join(WorkoutSet, WorkoutSet.id == WorkoutSetRevision.set_id)
+            .where(WorkoutSet.workout_id == workout_id)
         )

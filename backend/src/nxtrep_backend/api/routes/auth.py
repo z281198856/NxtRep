@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Response, status
 
-from nxtrep_backend.api.deps import CurrentUser, DbSession
+from nxtrep_backend.api.deps import CurrentSessionId, CurrentUser, DbSession
 from nxtrep_backend.api.errors import ApiError
 from nxtrep_backend.core.tokens import AuthConfigurationError
 from nxtrep_backend.repositories.user import SqlAlchemyUserRepository
@@ -219,10 +219,18 @@ async def change_password(
             device_name=body.device_name,
         )
     except InvalidCredentialsError as exc:
+        await session.commit()
         raise ApiError(
             status_code=status.HTTP_401_UNAUTHORIZED,
             code="INVALID_CURRENT_PASSWORD",
             message="Current password is invalid",
+        ) from exc
+    except AccountLockedError as exc:
+        await session.commit()
+        raise ApiError(
+            status_code=423,
+            code="ACCOUNT_LOCKED",
+            message="Too many attempts; try again in 15 minutes",
         ) from exc
     except PasswordReuseError as exc:
         raise ApiError(
@@ -262,14 +270,40 @@ async def change_password(
 @router.get("/sessions", response_model=RefreshSessionListResponse)
 async def list_sessions(
     user: CurrentUser,
+    current_session_id: CurrentSessionId,
     session: DbSession,
+    response: Response,
 ) -> RefreshSessionListResponse:
     sessions = await AccountService(SqlAlchemyUserRepository(session)).list_sessions(
         user_id=user.id
     )
+    _disable_token_caching(response)
     return RefreshSessionListResponse(
-        sessions=[RefreshSessionResponse.model_validate(item) for item in sessions]
+        sessions=[
+            RefreshSessionResponse.model_validate(item).model_copy(
+                update={"is_current": item.id == current_session_id}
+            )
+            for item in sessions
+        ]
     )
+
+
+@router.post("/sessions/revoke-others", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_other_sessions(
+    user: CurrentUser,
+    current_session_id: CurrentSessionId,
+    session: DbSession,
+) -> Response:
+    try:
+        await AccountService(SqlAlchemyUserRepository(session)).revoke_other_sessions(
+            user_id=user.id,
+            current_session_id=current_session_id,
+        )
+    except RefreshSessionNotFoundError as exc:
+        raise ApiError(
+            status_code=401, code="INVALID_ACCESS_TOKEN", message="Current login session has ended"
+        ) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete(

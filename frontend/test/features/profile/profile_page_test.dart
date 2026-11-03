@@ -1,11 +1,66 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nxtrep/core/settings/app_preferences.dart';
 import 'package:nxtrep/features/profile/data/profile_repository.dart';
 import 'package:nxtrep/features/profile/domain/profile_models.dart';
 import 'package:nxtrep/features/profile/presentation/profile_controller.dart';
 import 'package:nxtrep/features/profile/presentation/profile_page.dart';
 
 void main() {
+  testWidgets('imperial profile input converts before saving', (tester) async {
+    final source = _FakeProfileDataSource();
+    final controller = ProfileController(source);
+    addTearDown(controller.dispose);
+    await controller.refresh();
+    await tester.pumpWidget(
+      AppPreferencesScope(
+        settings: const AppSettings(
+          unitSystem: 'imperial',
+          timezone: 'Asia/Shanghai',
+          privacyMode: 'private',
+          shareAnonymousAnalytics: false,
+          version: 1,
+        ),
+        child: MaterialApp(home: PersonalProfilePage(controller: controller)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final weight = find.widgetWithText(TextFormField, '体重（lb）');
+    await tester.ensureVisible(weight);
+    await tester.enterText(weight, '154');
+    final save = find.text('保存个人资料');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(source.savedPersonal?.weightKg, closeTo(69.85322498, 1e-7));
+    expect(
+      source.savedPersonal?.heightCm,
+      178,
+    ); // Unchanged rounded inches stay exact.
+  });
+
+  testWidgets('personal profile displays and saves optional weight', (
+    tester,
+  ) async {
+    final source = _FakeProfileDataSource();
+    final controller = ProfileController(source);
+    addTearDown(controller.dispose);
+    await controller.refresh();
+    await tester.pumpWidget(
+      MaterialApp(home: PersonalProfilePage(controller: controller)),
+    );
+    await tester.pumpAndSettle();
+    final weight = find.widgetWithText(TextFormField, '体重（kg）');
+    await tester.ensureVisible(weight);
+    await tester.enterText(weight, '70.5');
+    final save = find.text('保存个人资料');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(source.savedPersonal?.weightKg, 70.5);
+    expect(source.savedPersonal?.heightCm, 178);
+  });
+
   testWidgets('profile hub opens the two supported training modes', (
     tester,
   ) async {
@@ -40,6 +95,7 @@ void main() {
 }
 
 class _FakeProfileDataSource implements ProfileDataSource {
+  PersonalProfileInput? savedPersonal;
   @override
   Future<UserProfile> getProfile() async => const UserProfile(
     displayName: '小齐',
@@ -82,7 +138,10 @@ class _FakeProfileDataSource implements ProfileDataSource {
   Future<UserProfile> updatePersonalProfile(
     UserProfile current,
     PersonalProfileInput input,
-  ) async => current;
+  ) async {
+    savedPersonal = input;
+    return current;
+  }
 
   @override
   Future<({UserProfile profile, TrainingPreferences preferences})>

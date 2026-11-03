@@ -57,7 +57,7 @@ async def test_current_user_accepts_valid_access_token(
     )
     get_by_id = install_repository_mock(monkeypatch, user=user)
     session = MagicMock(spec=AsyncSession)
-    token = create_access_token(user.id, settings)
+    token = create_access_token(user.id, settings, session_id=uuid4())
 
     result = await deps.get_current_user(
         bearer_credentials(token),
