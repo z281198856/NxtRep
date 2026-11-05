@@ -1,0 +1,62 @@
+workflows:
+  native-ios-simulator:
+    name: NxtRep Native iOS Simulator
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: '26.0'
+    scripts:
+      - name: Build NxtRep Native for iOS Simulator
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          output_dir="$CM_BUILD_DIR/.local/native-ios"
+          mkdir -p "$output_dir"
+          xcodebuild \
+            -project "$CM_BUILD_DIR/ios-native/NxtRepNative.xcodeproj" \
+            -scheme NxtRepNative \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$output_dir/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee "$output_dir/xcodebuild.log"
+      - name: Package simulator app
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          output_dir="$CM_BUILD_DIR/.local/native-ios"
+          app="$output_dir/DerivedData/Build/Products/Debug-iphonesimulator/NxtRepNative.app"
+          ditto -c -k --keepParent "$app" "$output_dir/NxtRepNative-simulator.zip"
+      - name: Launch on iPhone 16 and capture the home screen
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          output_dir="$CM_BUILD_DIR/.local/native-ios"
+          app="$output_dir/DerivedData/Build/Products/Debug-iphonesimulator/NxtRepNative.app"
+          device_id="$(xcrun simctl list devices available --json | python3 -c '
+          import json
+          import sys
+
+          devices = json.load(sys.stdin)["devices"].get("com.apple.CoreSimulator.SimRuntime.iOS-18-5", [])
+          for device in devices:
+              if device["name"] == "iPhone 16" and device["isAvailable"]:
+                  print(device["udid"])
+                  break
+          else:
+              sys.exit("iPhone 16 with iOS 18.5 is unavailable on this build machine.")
+          ')"
+
+          xcrun simctl bootstatus "$device_id" -b
+          xcrun simctl install "$device_id" "$app"
+          xcrun simctl launch "$device_id" com.zengsiqi.nxtrep.native
+          sleep 2
+          xcrun simctl io "$device_id" screenshot "$output_dir/NxtRepNative-home.png"
+          test -s "$output_dir/NxtRepNative-home.png"
+    artifacts:
+      - .local/native-ios/NxtRepNative-simulator.zip
+      - .local/native-ios/xcodebuild.log
+      - .local/native-ios/NxtRepNative-home.png

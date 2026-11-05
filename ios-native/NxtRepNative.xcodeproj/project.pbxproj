@@ -1,0 +1,230 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		F4E461FD2BFB000100000001 /* NxtRepNativeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E461FD2BFB000200000001 /* NxtRepNativeApp.swift */; };
+		F4E461FD2BFB000100000002 /* NativeTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E461FD2BFB000200000002 /* NativeTheme.swift */; };
+		F4E461FD2BFB000100000003 /* TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E461FD2BFB000200000003 /* TodayView.swift */; };
+		F4E461FD2BFB000100000004 /* DemoContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E461FD2BFB000200000004 /* DemoContent.swift */; };
+		F4E461FD2BFB000100000005 /* FeatureViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E461FD2BFB000200000005 /* FeatureViews.swift */; };
+		F4E461FD2BFB000100000006 /* WorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E461FD2BFB000200000006 /* WorkoutView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		F4E461FD2BFB000200000001 /* NxtRepNativeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NxtRepNativeApp.swift; sourceTree = "<group>"; };
+		F4E461FD2BFB000200000002 /* NativeTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTheme.swift; sourceTree = "<group>"; };
+		F4E461FD2BFB000200000003 /* TodayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayView.swift; sourceTree = "<group>"; };
+		F4E461FD2BFB000200000004 /* DemoContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoContent.swift; sourceTree = "<group>"; };
+		F4E461FD2BFB000200000005 /* FeatureViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureViews.swift; sourceTree = "<group>"; };
+		F4E461FD2BFB000200000006 /* WorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutView.swift; sourceTree = "<group>"; };
+		F4E461FD2BFB000200000007 /* NxtRepNative.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NxtRepNative.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		F4E461FD2BFB000300000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		F4E461FD2BFB000400000001 = {
+			isa = PBXGroup;
+			children = (
+				F4E461FD2BFB000400000002 /* NxtRepNative */,
+				F4E461FD2BFB000400000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F4E461FD2BFB000400000002 /* NxtRepNative */ = {
+			isa = PBXGroup;
+			children = (
+				F4E461FD2BFB000200000001 /* NxtRepNativeApp.swift */,
+				F4E461FD2BFB000200000002 /* NativeTheme.swift */,
+				F4E461FD2BFB000200000003 /* TodayView.swift */,
+				F4E461FD2BFB000200000004 /* DemoContent.swift */,
+				F4E461FD2BFB000200000005 /* FeatureViews.swift */,
+				F4E461FD2BFB000200000006 /* WorkoutView.swift */,
+			);
+			path = NxtRepNative;
+			sourceTree = "<group>";
+		};
+		F4E461FD2BFB000400000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F4E461FD2BFB000200000007 /* NxtRepNative.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F4E461FD2BFB000500000001 /* NxtRepNative */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F4E461FD2BFB000800000002 /* Build configuration list for PBXNativeTarget "NxtRepNative" */;
+			buildPhases = (
+				F4E461FD2BFB000600000001 /* Sources */,
+				F4E461FD2BFB000300000001 /* Frameworks */,
+				F4E461FD2BFB000600000002 /* Resources */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = NxtRepNative;
+			productName = NxtRepNative;
+			productReference = F4E461FD2BFB000200000007 /* NxtRepNative.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		F4E461FD2BFB000500000002 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					F4E461FD2BFB000500000001 = {CreatedOnToolsVersion = 16.0; };
+				};
+			};
+			buildConfigurationList = F4E461FD2BFB000800000001 /* Build configuration list for PBXProject "NxtRepNative" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				"zh-Hans",
+				Base,
+			);
+			mainGroup = F4E461FD2BFB000400000001;
+			productRefGroup = F4E461FD2BFB000400000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F4E461FD2BFB000500000001 /* NxtRepNative */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F4E461FD2BFB000600000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		F4E461FD2BFB000600000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F4E461FD2BFB000100000001 /* NxtRepNativeApp.swift in Sources */,
+				F4E461FD2BFB000100000002 /* NativeTheme.swift in Sources */,
+				F4E461FD2BFB000100000003 /* TodayView.swift in Sources */,
+				F4E461FD2BFB000100000004 /* DemoContent.swift in Sources */,
+				F4E461FD2BFB000100000005 /* FeatureViews.swift in Sources */,
+				F4E461FD2BFB000100000006 /* WorkoutView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		F4E461FD2BFB000700000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_PREVIEWS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		F4E461FD2BFB000700000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		F4E461FD2BFB000700000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = NxtRep;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zengsiqi.nxtrep.native;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		F4E461FD2BFB000700000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = NxtRep;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zengsiqi.nxtrep.native;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		F4E461FD2BFB000800000001 /* Build configuration list for PBXProject "NxtRepNative" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F4E461FD2BFB000700000001 /* Debug */,
+				F4E461FD2BFB000700000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F4E461FD2BFB000800000002 /* Build configuration list for PBXNativeTarget "NxtRepNative" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F4E461FD2BFB000700000003 /* Debug */,
+				F4E461FD2BFB000700000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = F4E461FD2BFB000500000002 /* Project object */;
+}
