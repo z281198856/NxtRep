@@ -123,7 +123,7 @@ workflows:
           output_dir="$CM_BUILD_DIR/.local/native-ios-device"
           app="$output_dir/DerivedData/Build/Products/Release-iphoneos/NxtRepNative.app"
           plutil -lint "$app/Info.plist"
-          xcrun lipo -verify_arch arm64 "$app/NxtRepNative"
+          xcrun lipo "$app/NxtRepNative" -verify_arch arm64
           python3 - "$app" <<'PY'
           from pathlib import Path
           import plistlib
