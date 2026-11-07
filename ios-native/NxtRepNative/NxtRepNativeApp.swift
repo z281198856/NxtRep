@@ -85,11 +85,11 @@ private struct PreviewShell: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "waveform.path")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.white)
+            Image("BrandMark")
+                .resizable()
+                .scaledToFit()
                 .frame(width: 25, height: 25)
-                .background(NativeTheme.accent, in: RoundedRectangle(cornerRadius: 7))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
                 .accessibilityHidden(true)
             Text("NxtRep").font(.system(.headline, design: .rounded, weight: .bold))
             Spacer()

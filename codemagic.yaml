@@ -60,3 +60,100 @@ workflows:
       - .local/native-ios/NxtRepNative-simulator.zip
       - .local/native-ios/xcodebuild.log
       - .local/native-ios/NxtRepNative-home.png
+
+  native-ios-device:
+    name: NxtRep Native iPhone Unsigned IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: '26.0'
+    scripts:
+      - name: Validate app icon source
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          icon_set="$CM_BUILD_DIR/ios-native/NxtRepNative/Assets.xcassets/AppIcon.appiconset"
+          python3 - "$icon_set" <<'PY'
+          import json
+          from pathlib import Path
+          import struct
+          import sys
+
+          icon_set = Path(sys.argv[1])
+          contents = json.loads((icon_set / "Contents.json").read_text())
+          if not any(image.get("filename") == "AppIcon.png" and image.get("size") == "1024x1024" for image in contents.get("images", [])):
+              sys.exit("AppIcon Contents.json must reference a 1024x1024 AppIcon.png.")
+          image = (icon_set / "AppIcon.png").read_bytes()
+          if image[:8] != b"\x89PNG\r\n\x1a\n" or len(image) < 33:
+              sys.exit("AppIcon.png must be a valid PNG image.")
+          width, height, depth, color_type, _, _, _ = struct.unpack(">IIBBBBB", image[16:29])
+          if (width, height) != (1024, 1024) or depth != 8 or color_type != 2:
+              sys.exit("AppIcon.png must be a 1024x1024 opaque 8-bit RGB image.")
+          offset = 8
+          while offset + 12 <= len(image):
+              chunk_length = struct.unpack(">I", image[offset:offset + 4])[0]
+              chunk_type = image[offset + 4:offset + 8]
+              if chunk_type == b"tRNS":
+                  sys.exit("AppIcon.png must have no transparency.")
+              offset += chunk_length + 12
+          print("Validated 1024x1024 opaque AppIcon.png.")
+          PY
+      - name: Build NxtRep Native for iPhone
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          output_dir="$CM_BUILD_DIR/.local/native-ios-device"
+          mkdir -p "$output_dir"
+          xcodebuild \
+            -project "$CM_BUILD_DIR/ios-native/NxtRepNative.xcodeproj" \
+            -scheme NxtRepNative \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$output_dir/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee "$output_dir/xcodebuild.log"
+      - name: Validate device app and compiled icon
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          output_dir="$CM_BUILD_DIR/.local/native-ios-device"
+          app="$output_dir/DerivedData/Build/Products/Release-iphoneos/NxtRepNative.app"
+          plutil -lint "$app/Info.plist"
+          xcrun lipo -verify_arch arm64 "$app/NxtRepNative"
+          python3 - "$app" <<'PY'
+          from pathlib import Path
+          import plistlib
+          import sys
+
+          app = Path(sys.argv[1])
+          with (app / "Info.plist").open("rb") as source:
+              info = plistlib.load(source)
+          if info.get("CFBundleIdentifier") != "com.zengsiqi.nxtrep.native" or info.get("CFBundleExecutable") != "NxtRepNative":
+              sys.exit("Built app has an unexpected bundle identifier or executable.")
+          if "iPhoneOS" not in info.get("CFBundleSupportedPlatforms", []) or 1 not in info.get("UIDeviceFamily", []):
+              sys.exit("Built app must target a physical iPhone.")
+          icon = info.get("CFBundleIcons", {}).get("CFBundlePrimaryIcon", {})
+          if icon.get("CFBundleIconName") != "AppIcon" or not icon.get("CFBundleIconFiles"):
+              sys.exit("Info.plist must contain the compiled AppIcon declaration.")
+          if not (app / "Assets.car").is_file() or not any(app.glob("AppIcon*.png")):
+              sys.exit("Compiled app icon assets are missing from the app bundle.")
+          print("Validated iPhone Info.plist, arm64 executable and compiled app icon.")
+          PY
+      - name: Package unsigned IPA for local signing
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          output_dir="$CM_BUILD_DIR/.local/native-ios-device"
+          app="$output_dir/DerivedData/Build/Products/Release-iphoneos/NxtRepNative.app"
+          package_dir="$(mktemp -d "$output_dir/package.XXXXXX")"
+          mkdir -p "$package_dir/Payload"
+          ditto "$app" "$package_dir/Payload/NxtRepNative.app"
+          ditto -c -k --keepParent "$package_dir/Payload" "$output_dir/NxtRepNative-unsigned.ipa"
+    artifacts:
+      - .local/native-ios-device/NxtRepNative-unsigned.ipa
+      - .local/native-ios-device/xcodebuild.log
