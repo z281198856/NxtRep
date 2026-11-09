@@ -13,6 +13,8 @@
 		F4E461FD2BFB000100000005 /* FeatureViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E461FD2BFB000200000005 /* FeatureViews.swift */; };
 		F4E461FD2BFB000100000006 /* WorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E461FD2BFB000200000006 /* WorkoutView.swift */; };
 		F4E461FD2BFB000100000007 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F4E461FD2BFB000200000008 /* Assets.xcassets */; };
+		F4E461FD2BFB000100000008 /* NativeAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E461FD2BFB000200000009 /* NativeAPI.swift */; };
+		F4E461FD2BFB000100000009 /* NativeConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E461FD2BFB00020000000A /* NativeConnectionView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +26,9 @@
 		F4E461FD2BFB000200000006 /* WorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutView.swift; sourceTree = "<group>"; };
 		F4E461FD2BFB000200000007 /* NxtRepNative.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NxtRepNative.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F4E461FD2BFB000200000008 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F4E461FD2BFB000200000009 /* NativeAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAPI.swift; sourceTree = "<group>"; };
+		F4E461FD2BFB00020000000A /* NativeConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeConnectionView.swift; sourceTree = "<group>"; };
+		F4E461FD2BFB00020000000B /* LocalNetwork.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = LocalNetwork.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -54,6 +59,9 @@
 				F4E461FD2BFB000200000005 /* FeatureViews.swift */,
 				F4E461FD2BFB000200000006 /* WorkoutView.swift */,
 				F4E461FD2BFB000200000008 /* Assets.xcassets */,
+				F4E461FD2BFB000200000009 /* NativeAPI.swift */,
+				F4E461FD2BFB00020000000A /* NativeConnectionView.swift */,
+				F4E461FD2BFB00020000000B /* LocalNetwork.plist */,
 			);
 			path = NxtRepNative;
 			sourceTree = "<group>";
@@ -137,6 +145,8 @@
 				F4E461FD2BFB000100000004 /* DemoContent.swift in Sources */,
 				F4E461FD2BFB000100000005 /* FeatureViews.swift in Sources */,
 				F4E461FD2BFB000100000006 /* WorkoutView.swift in Sources */,
+				F4E461FD2BFB000100000008 /* NativeAPI.swift in Sources */,
+				F4E461FD2BFB000100000009 /* NativeConnectionView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -171,14 +181,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = NxtRepNative/LocalNetwork.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = NxtRep;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zengsiqi.nxtrep.native;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -193,14 +204,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = NxtRepNative/LocalNetwork.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = NxtRep;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zengsiqi.nxtrep.native;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

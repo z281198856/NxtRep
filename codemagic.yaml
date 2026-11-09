@@ -68,6 +68,17 @@ workflows:
     environment:
       xcode: '26.0'
     scripts:
+      - name: Verify native API client contracts
+        script: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          output_dir="$CM_BUILD_DIR/.local/native-ios-device"
+          mkdir -p "$output_dir"
+          swiftc -parse-as-library -swift-version 5 -target "$(uname -m)-apple-macosx14.0" \
+            "$CM_BUILD_DIR/ios-native/NxtRepNative/NativeAPI.swift" \
+            "$CM_BUILD_DIR/ios-native/Tests/APIContractChecks.swift" \
+            -o "$output_dir/api-contract-checks"
+          "$output_dir/api-contract-checks" | tee "$output_dir/api-contract-checks.log"
       - name: Validate app icon source
         script: |
           #!/usr/bin/env bash
@@ -157,3 +168,4 @@ workflows:
     artifacts:
       - .local/native-ios-device/NxtRepNative-unsigned.ipa
       - .local/native-ios-device/xcodebuild.log
+      - .local/native-ios-device/api-contract-checks.log

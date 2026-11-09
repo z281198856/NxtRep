@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$BackendOnly,
+    [switch]$Lan,
     [switch]$Rebuild,
     [switch]$RestartBackend,
     [switch]$LoginTestAccount,
@@ -43,6 +44,7 @@ try {
     $apiState = Read-LocalJson $apiPath
     $listener = @(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue)
     $signature = Invoke-Helper @('fingerprint', '--area', 'backend')
+    $apiHost = if ($Lan) { '0.0.0.0' } else { '127.0.0.1' }
     if ($listener.Count -gt 0) {
         if (-not (Test-OwnedApi $apiState) -or $listener[0].OwningProcess -ne $apiState.pid) {
             throw 'Port 8000 belongs to an unmanaged process. Stop that API explicitly before using this launcher.'
@@ -51,6 +53,8 @@ try {
             Stop-Process -Id $apiState.pid
             Wait-Process -Id $apiState.pid -Timeout 15 -ErrorAction SilentlyContinue
             $listener = @()
+        } elseif (($apiState.host -and $apiState.host -ne $apiHost) -or (-not $apiState.host -and $Lan)) {
+            throw 'API binding changed. Add -RestartBackend to explicitly restart with the requested -Lan setting.'
         } elseif ($apiState.signature -ne $signature) {
             throw 'Backend code/config changed. Run Start-NxtRep.cmd -RestartBackend to reload it.'
         } elseif (-not (Test-ApiReady)) {
@@ -59,7 +63,7 @@ try {
     }
     if ($listener.Count -eq 0) {
         $runId = [guid]::NewGuid().ToString('N')
-        $arguments = '"{0}" serve --run-id {1}' -f $Helper, $runId
+        $arguments = '"{0}" serve --run-id {1} --host {2}' -f $Helper, $runId, $apiHost
         $api = Start-Process -FilePath $Python -ArgumentList $arguments -WorkingDirectory (Join-Path $RepoRoot 'backend') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $LocalDir 'api.out.log') -RedirectStandardError (Join-Path $LocalDir 'api.err.log')
         $ready = $false
         for ($attempt = 0; $attempt -lt 45; $attempt++) {
@@ -74,6 +78,7 @@ try {
         if (-not $ready) { throw 'API did not become ready. Inspect .local/api.err.log.' }
     }
     Write-Host 'API ready: http://127.0.0.1:8000/api/v1/health/ready'
+    if ($Lan) { Write-Host 'LAN mode: API listens on local network interfaces. Database settings are unchanged; firewall access must be scoped separately.' }
     if ($LoginTestAccount) { & "$PSScriptRoot/Local-TestAccount.ps1" -Setup }
     if ($BackendOnly) { return }
 

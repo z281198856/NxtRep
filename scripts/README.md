@@ -17,6 +17,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Enable-LocalDatabase
 # 只启动数据库与后端
 .\Start-NxtRep.cmd -BackendOnly
 
+# iPhone 联调，显式允许 API 监听网络接口（已有 API 时加 -RestartBackend）
+.\Start-NxtRep.cmd -BackendOnly -Lan
+
 # 后端源码或 .env 变化后显式重启
 .\Start-NxtRep.cmd -RestartBackend
 
@@ -30,7 +33,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Enable-LocalDatabase
 ## 固定环境与账号
 
 - 数据库严格使用 `backend/.env` 的 `NXTREP_DATABASE_URL`，仅接受本地环境、回环地址、5432 端口。不切换临时数据库；环境变量覆盖了不同数据库时拒绝启动。原有用户与业务记录不会被重置。
-- API 使用 `127.0.0.1:8000`，通过 `/api/v1/health/ready` 验证数据库连接。Android 模拟器访问 `10.0.2.2:8000`。真机、iOS、生产部署不使用此入口。
+- API 默认使用 `127.0.0.1:8000`，通过 `/api/v1/health/ready` 验证数据库连接。Android 模拟器访问 `10.0.2.2:8000`。个人 iPhone 联调可显式加 `-Lan` 切换为 `0.0.0.0:8000`，再按 `ios-native/README.md` 限定 USB 防火墙访问；该入口不用于生产部署。
 - 正常入口 APK 缓存在 `.local/nxtrep-main-debug.apk`，根据源码摘要按需构建，不复用集成测试生成的 APK。安装使用 `-r`，不清空 App 数据。SDK 升级或手动改变外部构建环境后使用 `-Rebuild`。
 - 首次生成非管理员专用测试账号及合成基础资料，之后复用，不自动重置密码。训练计划和历史记录仍需在 App 内设置，不代表具备所有集成测试的预置数据。
 - 账号通过 Windows DPAPI 加密保存在 `.local/test-account.xml`，只能由同一台电脑的同一 Windows 用户解密；旁边的数据库标识防止误用到其他库。整个 `.local/` 被 Git 忽略，不应上传或分享。

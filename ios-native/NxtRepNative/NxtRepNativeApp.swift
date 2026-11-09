@@ -4,7 +4,7 @@ import SwiftUI
 struct NxtRepNativeApp: App {
     var body: some Scene {
         WindowGroup {
-            PreviewShell()
+            NativeRootView()
                 .preferredColorScheme(.light)
         }
     }
@@ -22,8 +22,11 @@ private enum PreviewSheet: Identifiable {
     }
 }
 
-private struct PreviewShell: View {
+struct PreviewShell: View {
+    @ObservedObject var session: NativeSession
+    let isPreview: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: AppTab = .today
     @State private var activeSheet: PreviewSheet?
     @State private var workout: WorkoutMode?
@@ -36,20 +39,53 @@ private struct PreviewShell: View {
                 ScrollView {
                     Group {
                         if selectedTab == .today {
-                            TodayView(
+                            if !isPreview, session.summary == nil {
+                                VStack(spacing: 16) {
+                                    if let error = session.error {
+                                        Text(error).foregroundStyle(NativeTheme.muted)
+                                        Button("重新连接") { Task { await session.reload() } }
+                                            .frame(minHeight: 44)
+                                    } else {
+                                        ProgressView("正在读取今日数据…")
+                                    }
+                                }
+                                .frame(maxWidth: .infinity).padding(.vertical, 60)
+                            } else {
+                              VStack(spacing: 10) {
+                                if !isPreview {
+                                    Text("营养与饮水已连接 · 训练等入口为界面预览")
+                                        .font(.caption).foregroundStyle(NativeTheme.muted)
+                                    if let error = session.error {
+                                        Text(error + " 下拉可重新读取。")
+                                            .font(.caption).foregroundStyle(.red)
+                                    }
+                                }
+                                TodayView(
                                 waterML: waterRecords.reduce(0, +),
+                                summary: isPreview ? nil : session.summary,
+                                connected: !isPreview,
                                 onStart: { workout = .planned },
                                 onNutrient: { activeSheet = .nutrient($0) },
                                 onEntry: openEntry,
                                 onMeals: { select(.meals) },
                                 onProgress: { select(.progress) }
                             )
+                              }
+                            }
+                        } else if selectedTab == .account && !isPreview {
+                            NativeAccountView(session: session)
                         } else {
-                            FeatureTabView(
+                            VStack(spacing: 10) {
+                              if !isPreview {
+                                  Text("此页面为界面预览，暂未连接真实业务数据")
+                                      .font(.caption).foregroundStyle(NativeTheme.muted)
+                              }
+                              FeatureTabView(
                                 tab: selectedTab,
                                 onEntry: openEntry,
                                 onStartWorkout: { workout = .planned }
                             )
+                            }
                         }
                     }
                     .padding(.horizontal, 20)
@@ -59,6 +95,7 @@ private struct PreviewShell: View {
                 .id(selectedTab)
                 .scrollIndicators(.hidden)
                 .transition(.opacity)
+                .refreshable { if !isPreview { await session.reload() } }
             }
             .background(NativeTheme.background.ignoresSafeArea())
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -76,10 +113,17 @@ private struct PreviewShell: View {
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .nutrient(let kind):
-                NutrientDetailSheet(waterRecords: $waterRecords, kind: kind)
+                if isPreview {
+                    NutrientDetailSheet(waterRecords: $waterRecords, kind: kind)
+                } else {
+                    ConnectedNutrientSheet(session: session, kind: kind)
+                }
             case .feature(let feature):
                 FeatureDetailView(feature: feature)
             }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active && !isPreview { Task { await session.reload() } }
         }
     }
 
@@ -93,7 +137,8 @@ private struct PreviewShell: View {
                 .accessibilityHidden(true)
             Text("NxtRep").font(.system(.headline, design: .rounded, weight: .bold))
             Spacer()
-            Text("演示数据").font(.caption2).foregroundStyle(NativeTheme.muted)
+            Text(isPreview ? "演示数据" : (selectedTab == .today || selectedTab == .account ? "本机联调" : "界面预览"))
+                .font(.caption2).foregroundStyle(NativeTheme.muted)
             Button {
                 select(.account)
             } label: {

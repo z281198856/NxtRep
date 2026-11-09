@@ -91,6 +91,8 @@ enum NutrientKind: String, CaseIterable, Identifiable {
 
 struct TodayView: View {
     let waterML: Int
+    var summary: DailySummary? = nil
+    var connected: Bool = false
     let onStart: () -> Void
     let onNutrient: (NutrientKind) -> Void
     let onEntry: (DemoFeature) -> Void
@@ -142,7 +144,8 @@ struct TodayView: View {
             Divider()
             HStack {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(DemoNutrition.calories.formatted()).font(.title3.weight(.semibold)).monospacedDigit()
+                    Text((summary.map { Int($0.consumed.kcal.value.rounded()) } ?? DemoNutrition.calories).formatted())
+                        .font(.title3.weight(.semibold)).monospacedDigit()
                     Text("千卡").font(.caption).foregroundStyle(NativeTheme.muted)
                 }
                 Spacer()
@@ -158,7 +161,9 @@ struct TodayView: View {
             }
             HStack(spacing: 3) {
                 ForEach(NutrientKind.allCases) { kind in
-                    NutrientRing(kind: kind, amount: DemoNutrition.amount(for: kind, waterML: waterML)) {
+                    NutrientRing(kind: kind,
+                                 amount: summary?.amount(kind) ?? DemoNutrition.amount(for: kind, waterML: waterML),
+                                 usesLiveData: connected, goal: summary?.goal(kind)) {
                         onNutrient(kind)
                     }
                 }
@@ -212,7 +217,7 @@ struct TodayView: View {
                     .background(NativeTheme.softAccent, in: RoundedRectangle(cornerRadius: 10))
                 VStack(alignment: .leading, spacing: 3) {
                     Text("本周进展").font(.subheadline.weight(.semibold))
-                    Text("完成 2 次训练").font(.caption).foregroundStyle(NativeTheme.muted)
+                    Text(connected ? "训练进展界面预览" : "完成 2 次训练").font(.caption).foregroundStyle(NativeTheme.muted)
                 }
                 Spacer()
                 Image(systemName: "chevron.right").font(.caption).foregroundStyle(NativeTheme.muted)
@@ -277,10 +282,14 @@ private struct NutrientRing: View {
 
     let kind: NutrientKind
     let amount: Int
+    var usesLiveData: Bool = false
+    var goal: Int? = nil
     let onTap: () -> Void
 
     private var fraction: CGFloat {
-        CGFloat(min(1, max(0, Double(amount) / Double(kind.upperGoal))))
+        let limit = usesLiveData ? goal : kind.upperGoal
+        guard let limit, limit > 0 else { return 0 }
+        return CGFloat(min(1, max(0, Double(amount) / Double(limit))))
     }
 
     var body: some View {
@@ -320,7 +329,7 @@ private struct NutrientRing: View {
         }
         .buttonStyle(PreviewPressStyle())
         .accessibilityLabel(kind.title)
-        .accessibilityValue("\(amount.formatted()) \(kind.unit)，示例目标 \(kind.goalLabel)")
+        .accessibilityValue(usesLiveData ? "\(amount.formatted()) \(kind.unit)" : "\(amount.formatted()) \(kind.unit)，示例目标 \(kind.goalLabel)")
         .onAppear { updateFill() }
         .onChange(of: fraction) { updateFill() }
     }

@@ -184,6 +184,7 @@ def main() -> None:
     )
     parser.add_argument("--area", choices=["frontend", "backend"], default="backend")
     parser.add_argument("--run-id")
+    parser.add_argument("--host", choices=["127.0.0.1", "0.0.0.0"], default="127.0.0.1")
     args = parser.parse_args()
     try:
         if args.command == "fingerprint":
@@ -208,11 +209,12 @@ def main() -> None:
                         "runId": args.run_id,
                         "signature": fingerprint("backend"),
                         "startedAt": datetime.now(UTC).isoformat(),
+                        "host": args.host,
                     }
                 ),
                 encoding="utf-8",
             )
-            uvicorn.run(app, host="127.0.0.1", port=8000)
+            uvicorn.run(app, host=args.host, port=8000)
     except LocalSetupError as exc:
         print(f"Local setup: {exc}", file=sys.stderr)
         raise SystemExit(1) from None

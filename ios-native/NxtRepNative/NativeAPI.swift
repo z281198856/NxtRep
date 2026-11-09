@@ -1,0 +1,405 @@
+import Foundation
+import Security
+import Combine
+
+struct APINumber: Decodable {
+    let value: Double
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let number = try? container.decode(Double.self) {
+            value = number
+        } else {
+            let string = try container.decode(String.self)
+            guard let number = Double(string), number.isFinite else {
+                throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid numeric value")
+            }
+            value = number
+        }
+    }
+}
+
+struct NutritionAmounts: Decodable {
+    let kcal: APINumber
+    let proteinG: APINumber
+    let carbsG: APINumber
+    let fatG: APINumber
+}
+
+struct DailySummary: Decodable {
+    let date: String
+    let waterMl: Int
+    let consumed: NutritionAmounts
+    let target: [String: APINumber]?
+
+    func amount(_ kind: NutrientKind) -> Int {
+        switch kind {
+        case .carbs: Int(consumed.carbsG.value.rounded())
+        case .protein: Int(consumed.proteinG.value.rounded())
+        case .fat: Int(consumed.fatG.value.rounded())
+        case .water: waterMl
+        }
+    }
+
+    func goal(_ kind: NutrientKind) -> Int? {
+        let key: String
+        switch kind {
+        case .carbs: key = "carbs_max_g"
+        case .protein: key = "protein_max_g"
+        case .fat: key = "fat_max_g"
+        case .water: return nil
+        }
+        guard let value = target?[key]?.value else { return nil }
+        return Int(value.rounded())
+    }
+}
+
+struct WaterRecord: Decodable, Identifiable {
+    let id: String
+    let amountMl: Int
+    let consumedAt: String
+}
+
+struct NativeUser: Codable {
+    let id: String
+    let username: String
+}
+
+struct NativeTokens: Decodable {
+    let accessToken: String
+    let refreshToken: String
+    let user: NativeUser
+}
+
+struct SavedNativeSession: Codable {
+    let server: String
+    let refreshToken: String
+    let user: NativeUser
+}
+
+enum NativeAPIError: LocalizedError {
+    case message(String)
+    case response(Int, String)
+
+    var errorDescription: String? {
+        switch self {
+        case .message(let message): return message
+        case .response(_, let code):
+            switch code {
+            case "INVALID_CREDENTIALS": return "账号或密码不正确。请使用 NxtRep 账号。"
+            case "ACCOUNT_LOCKED": return "账号暂时锁定，请稍后再试。"
+            case "ACCOUNT_DISABLED": return "这个账号已停用。"
+            case "INVALID_REFRESH_TOKEN", "INVALID_ACCESS_TOKEN": return "登录已失效，请重新登录。"
+            case "IDEMPOTENCY_IN_PROGRESS": return "这条记录正在保存，请稍后核对。"
+            case "IDEMPOTENCY_KEY_REUSED": return "这条记录的提交标识冲突，请先核对饮水记录。"
+            default: return "请求未能完成（\(code)），请稍后重试。"
+            }
+        }
+    }
+}
+
+enum SessionKeychain {
+    private static var query: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: "com.zengsiqi.nxtrep.native.session",
+         kSecAttrAccount as String: "active-session"]
+    }
+
+    static func load() -> SavedNativeSession? {
+        var lookup = query
+        lookup[kSecReturnData as String] = true
+        lookup[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(lookup as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return try? JSONDecoder().decode(SavedNativeSession.self, from: data)
+    }
+
+    static func save(_ session: SavedNativeSession) throws {
+        let data = try JSONEncoder().encode(session)
+        let update = [kSecValueData as String: data]
+        var status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        if status == errSecItemNotFound {
+            var addition = query
+            addition[kSecValueData as String] = data
+            addition[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            status = SecItemAdd(addition as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else {
+            throw NativeAPIError.message("无法安全保存登录状态，请解锁手机后重试。")
+        }
+    }
+
+    static func clear() { SecItemDelete(query as CFDictionary) }
+}
+
+@MainActor
+final class NativeSession: ObservableObject {
+    @Published private(set) var user: NativeUser?
+    @Published private(set) var summary: DailySummary?
+    @Published private(set) var water: [WaterRecord] = []
+    @Published private(set) var busy = false
+    @Published private(set) var savingWater = false
+    @Published var error: String?
+    @Published var waterMessage: String?
+    @Published private(set) var restoring = true
+    @Published var serverText = UserDefaults.standard.string(forKey: "native-api-server") ?? "http://172.20.10.10:8000/api/v1"
+
+    private var baseURL: URL?
+    private var accessToken: String?
+    private var refreshToken: String?
+    private var refreshTask: Task<NativeTokens, Error>?
+    private var generation = UUID()
+    private var latestRead = UUID()
+    // An uncertain write keeps its exact payload and key, so a manual retry cannot duplicate it.
+    private var pendingWater: (body: Data, key: String)?
+    private var pendingWaterAcknowledged = false
+    private let transport: URLSession
+    private let saveSession: (SavedNativeSession) throws -> Void
+    private let loadSession: () -> SavedNativeSession?
+    private let clearSessionStore: () -> Void
+
+    init(transport: URLSession? = nil,
+         saveSession: @escaping (SavedNativeSession) throws -> Void = SessionKeychain.save,
+         loadSession: @escaping () -> SavedNativeSession? = SessionKeychain.load,
+         clearSessionStore: @escaping () -> Void = SessionKeychain.clear) {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 25
+        config.urlCache = nil
+        self.transport = transport ?? URLSession(configuration: config)
+        self.saveSession = saveSession
+        self.loadSession = loadSession
+        self.clearSessionStore = clearSessionStore
+    }
+
+    var signedIn: Bool { user != nil }
+    var hasPendingWater: Bool { pendingWater != nil }
+
+    static func validatedURL(_ text: String) throws -> URL {
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let host = url.host?.lowercased(), url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil,
+              url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == "api/v1" else {
+            throw NativeAPIError.message("请输入完整的服务器地址，例如 http://172.20.10.10:8000/api/v1。")
+        }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        let privateIP = parts.count == 4 && parts.allSatisfy { (0...255).contains($0) } &&
+            (parts[0] == 10 || (parts[0] == 172 && (16...31).contains(parts[1])) ||
+             (parts[0] == 192 && parts[1] == 168) || parts[0] == 127)
+        guard url.scheme == "https" || (url.scheme == "http" && (privateIP || host == "localhost" || host.hasSuffix(".local"))) else {
+            throw NativeAPIError.message("HTTP 联调仅支持本地网络地址；公网服务器请使用 HTTPS。")
+        }
+        return url
+    }
+
+    func restore() async {
+        defer { restoring = false }
+        guard let saved = loadSession() else { return }
+        do {
+            baseURL = try Self.validatedURL(saved.server)
+            serverText = saved.server
+            refreshToken = saved.refreshToken
+            user = saved.user
+            _ = try await refresh()
+            await reload()
+        } catch {
+            self.error = Self.readable(error)
+            // Keep the saved refresh credential on transport failure, allowing a later retry.
+            if case NativeAPIError.response(let status, _) = error, status == 401 {
+                clearSession()
+            }
+        }
+    }
+
+    func login(username: String, password: String) async {
+        guard !busy else { return }
+        busy = true
+        error = nil
+        defer { busy = false }
+        do {
+            baseURL = try Self.validatedURL(serverText)
+            let body = try JSONSerialization.data(withJSONObject: [
+                "username": username.trimmingCharacters(in: .whitespacesAndNewlines),
+                "password": password, "device_name": "NxtRep iPhone"
+            ])
+            let tokens: NativeTokens = try await send("auth/login", method: "POST", body: body)
+            try accept(tokens)
+            UserDefaults.standard.set(serverText, forKey: "native-api-server")
+        } catch { self.error = Self.readable(error) }
+        if signedIn { await reload() }
+    }
+
+    func reload() async {
+        guard signedIn else { return }
+        let current = generation
+        let readID = UUID()
+        latestRead = readID
+        do {
+            let day = Self.today()
+            let nextSummary: DailySummary = try await authorized("nutrition/daily-summary?date=\(day)")
+            let nextWater: [WaterRecord] = try await authorized("nutrition/water?date=\(day)")
+            guard current == generation, readID == latestRead else { return }
+            summary = nextSummary
+            water = nextWater
+            error = nil
+        } catch {
+            guard current == generation, readID == latestRead else { return }
+            self.error = Self.readable(error)
+        }
+    }
+
+    func addWater(amount: Int) async {
+        guard !savingWater, signedIn else { return }
+        savingWater = true
+        waterMessage = nil
+        defer { savingWater = false }
+        let current = generation
+        do {
+            if pendingWater == nil {
+                pendingWater = (try JSONSerialization.data(withJSONObject: [
+                    "amount_ml": amount,
+                    "consumed_at": ISO8601DateFormatter().string(from: .now)
+                ]), UUID().uuidString)
+                pendingWaterAcknowledged = false
+            }
+            guard let pending = pendingWater else { return }
+            if !pendingWaterAcknowledged {
+                let _: WaterRecord = try await authorized("nutrition/water", method: "POST", body: pending.body, key: pending.key)
+                guard current == generation else { return }
+                pendingWaterAcknowledged = true
+            }
+            await reload()
+            guard current == generation else { return }
+            if error == nil {
+                pendingWater = nil
+                pendingWaterAcknowledged = false
+                waterMessage = "饮水记录已保存，首页已更新。"
+            } else {
+                waterMessage = "记录已保存，暂时无法刷新。请重试核对记录。"
+            }
+        } catch {
+            guard current == generation else { return }
+            if case NativeAPIError.response(let status, _) = error, (400..<500).contains(status), status != 408, status != 409, status != 429 {
+                pendingWater = nil
+            }
+            waterMessage = Self.readable(error) + " 请先核对记录；重试会沿用本次提交标识。"
+        }
+    }
+
+    func logout() async {
+        guard !savingWater else { return }
+        if let token = refreshToken,
+           let body = try? JSONSerialization.data(withJSONObject: ["refresh_token": token]) {
+            let _: EmptyResponse? = try? await send("auth/logout", method: "POST", body: body)
+        }
+        clearSession()
+    }
+
+    private func clearSession() {
+        generation = UUID()
+        refreshTask?.cancel()
+        refreshTask = nil
+        accessToken = nil
+        refreshToken = nil
+        user = nil
+        summary = nil
+        water = []
+        pendingWater = nil
+        waterMessage = nil
+        clearSessionStore()
+    }
+
+    private func accept(_ tokens: NativeTokens) throws {
+        try saveSession(SavedNativeSession(server: serverText, refreshToken: tokens.refreshToken, user: tokens.user))
+        accessToken = tokens.accessToken
+        refreshToken = tokens.refreshToken
+        user = tokens.user
+    }
+
+    private func refresh() async throws -> NativeTokens {
+        if let task = refreshTask { return try await task.value }
+        guard let token = refreshToken else { throw NativeAPIError.message("请先登录 NxtRep。") }
+        let current = generation
+        let task = Task { () throws -> NativeTokens in
+            let body = try JSONSerialization.data(withJSONObject: ["refresh_token": token])
+            let tokens: NativeTokens = try await send("auth/refresh", method: "POST", body: body)
+            guard current == generation else { throw CancellationError() }
+            try accept(tokens)
+            return tokens
+        }
+        refreshTask = task
+        defer { if current == generation { refreshTask = nil } }
+        do { return try await task.value }
+        catch {
+            if current == generation,
+               case NativeAPIError.response(let status, _) = error,
+               status == 401 || status == 403 {
+                self.error = Self.readable(error)
+                clearSession()
+            }
+            throw error
+        }
+    }
+
+    private func authorized<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil, key: String? = nil) async throws -> T {
+        if accessToken == nil { _ = try await refresh() }
+        let sentToken = accessToken
+        do { return try await send(path, method: method, body: body, token: sentToken, key: key) }
+        catch NativeAPIError.response(let status, _) where status == 401 {
+            do {
+                // A slower request may return 401 after another request already rotated the token.
+                if accessToken == sentToken { _ = try await refresh() }
+            }
+            catch {
+                if case NativeAPIError.response(let refreshStatus, _) = error, refreshStatus == 401 { clearSession() }
+                throw error
+            }
+            return try await send(path, method: method, body: body, token: accessToken, key: key)
+        }
+    }
+
+    private func send<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil, token: String? = nil, key: String? = nil) async throws -> T {
+        guard let baseURL, let url = URL(string: baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/" + path) else {
+            throw NativeAPIError.message("请先设置服务器地址。")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
+        if let key { request.setValue(key, forHTTPHeaderField: "Idempotency-Key") }
+        let (data, response) = try await transport.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw NativeAPIError.message("服务器响应无法识别。") }
+        guard (200..<300).contains(http.statusCode) else {
+            let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let info = envelope?["error"] as? [String: Any]
+            throw NativeAPIError.response(http.statusCode, info?["code"] as? String ?? "HTTP_\(http.statusCode)")
+        }
+        if http.statusCode == 204, let empty = EmptyResponse() as? T { return empty }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        do { return try decoder.decode(T.self, from: data) }
+        catch { throw NativeAPIError.message("接口数据格式与 App 不一致，请更新 App 后重试。") }
+    }
+
+    static func today() -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 8 * 3600)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: .now)
+    }
+
+    static func readable(_ error: Error) -> String {
+        if let api = error as? NativeAPIError { return api.localizedDescription }
+        if let url = error as? URLError {
+            if url.code == .cancelled { return "请求已取消。" }
+            return "暂时无法连接电脑。请保持数据线连接，并检查本地网络权限和服务器是否启动。"
+        }
+        return "操作未完成，请稍后重试。"
+    }
+}
+
+private struct EmptyResponse: Decodable {}
