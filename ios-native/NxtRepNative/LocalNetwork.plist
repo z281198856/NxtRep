@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>NSCameraUsageDescription</key>
+    <string>拍摄餐食、训练计划或身体进展照片，并在你确认后上传。</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>连接你电脑上的 NxtRep 服务，读取营养数据并保存饮水记录。</string>
     <key>NSAppTransportSecurity</key>

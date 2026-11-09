@@ -4,6 +4,7 @@ import SwiftUI
 final class NativeResource: ObservableObject {
     @Published var value: NativeJSON = .null
     @Published var loading = false
+    @Published var loadedAt: Date?
     @Published var error: String?
     private var revision = UUID()
 
@@ -15,6 +16,7 @@ final class NativeResource: ObservableObject {
             let response = try await operation()
             guard id == revision else { return }
             value = response
+            loadedAt = .now
             error = nil
         } catch {
             guard id == revision else { return }

@@ -20,6 +20,10 @@
 		6F08EAD18AB365734C201F31 /* NativeCatalogViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 760F08472C356E7D7D7C3698 /* NativeCatalogViews.swift */; };
 		B781AB8E6F27E76A895E591D /* NativeComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCE16FED8F41992956BBD0ED /* NativeComponents.swift */; };
 		4E2879C9CBA6DA516627D5DA /* NativeJSON.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36C8281C64031E9C10DABD14 /* NativeJSON.swift */; };
+		FA1E1D62CC8C0E8B2B816C40 /* NativeMedia.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21A4F2D9E11115219ABE6FA5 /* NativeMedia.swift */; };
+		B3A399ABF347FF6AFC4790F8 /* NativeNutritionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5EA7731D8CD6BE5D54257C0 /* NativeNutritionViews.swift */; };
+		42E16F1AC362D52D78F9ACB9 /* NativePlanViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F8373408DD035EC0B0089AC /* NativePlanViews.swift */; };
+		DD37CF5BEF636293AE6D242A /* NativeWorkoutViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40E3447CBDB7056199734241 /* NativeWorkoutViews.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -39,6 +43,10 @@
 		760F08472C356E7D7D7C3698 /* NativeCatalogViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCatalogViews.swift; sourceTree = "<group>"; };
 		CCE16FED8F41992956BBD0ED /* NativeComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeComponents.swift; sourceTree = "<group>"; };
 		36C8281C64031E9C10DABD14 /* NativeJSON.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeJSON.swift; sourceTree = "<group>"; };
+		21A4F2D9E11115219ABE6FA5 /* NativeMedia.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeMedia.swift; sourceTree = "<group>"; };
+		D5EA7731D8CD6BE5D54257C0 /* NativeNutritionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeNutritionViews.swift; sourceTree = "<group>"; };
+		3F8373408DD035EC0B0089AC /* NativePlanViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlanViews.swift; sourceTree = "<group>"; };
+		40E3447CBDB7056199734241 /* NativeWorkoutViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeWorkoutViews.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,6 +77,10 @@
 				F4E461FD2BFB000200000005 /* FeatureViews.swift */,
 				F4E461FD2BFB000200000006 /* WorkoutView.swift */,
 				F4E461FD2BFB000200000008 /* Assets.xcassets */,
+				40E3447CBDB7056199734241 /* NativeWorkoutViews.swift */,
+				3F8373408DD035EC0B0089AC /* NativePlanViews.swift */,
+				D5EA7731D8CD6BE5D54257C0 /* NativeNutritionViews.swift */,
+				21A4F2D9E11115219ABE6FA5 /* NativeMedia.swift */,
 				36C8281C64031E9C10DABD14 /* NativeJSON.swift */,
 				CCE16FED8F41992956BBD0ED /* NativeComponents.swift */,
 				760F08472C356E7D7D7C3698 /* NativeCatalogViews.swift */,
@@ -156,6 +168,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				F4E461FD2BFB000100000001 /* NxtRepNativeApp.swift in Sources */,
+				DD37CF5BEF636293AE6D242A /* NativeWorkoutViews.swift in Sources */,
+				42E16F1AC362D52D78F9ACB9 /* NativePlanViews.swift in Sources */,
+				B3A399ABF347FF6AFC4790F8 /* NativeNutritionViews.swift in Sources */,
+				FA1E1D62CC8C0E8B2B816C40 /* NativeMedia.swift in Sources */,
 				4E2879C9CBA6DA516627D5DA /* NativeJSON.swift in Sources */,
 				B781AB8E6F27E76A895E591D /* NativeComponents.swift in Sources */,
 				6F08EAD18AB365734C201F31 /* NativeCatalogViews.swift in Sources */,

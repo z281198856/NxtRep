@@ -14,6 +14,12 @@ private final class StubServer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let path = request.url!.path
+        if path.hasSuffix("/foods/search") {
+            let query = URLComponents(url:request.url!,resolvingAgainstBaseURL:false)!.queryItems!
+            precondition(query.first {$0.name == "keyword"}?.value == "鸡胸肉 & 米饭")
+            let page = query.first {$0.name == "page"}!.value!
+            return (200,Data("{\"list\":[{\"id\":\"food-\(page)\",\"food_version_id\":\"version-\(page)\",\"basis_amount_g\":\"100\"}],\"has_more\":\(page == "1" ? "true" : "false")}".utf8))
+        }
         if path.hasSuffix("/auth/login") || path.hasSuffix("/auth/refresh") {
             let refreshing = path.hasSuffix("/auth/refresh")
             if refreshing { refreshCount += 1 }
@@ -101,6 +107,10 @@ private enum APIContractChecks {
         precondition(session.summary?.goal(.fat) == nil)
         precondition(saved?.refreshToken == "abcdefghijklmnopqrstuvwxyz0123456789")
         print("PASS: login, decimal strings, numeric values and range targets decode")
+        let foods = try await session.allPages("foods/search",query:["keyword":"鸡胸肉 & 米饭"])
+        precondition(foods.count == 2 && foods[1]["food_version_id"].text == "version-2")
+        precondition(foods[0]["basis_amount_g"].double == 100)
+        print("PASS: complete pagination, Chinese query encoding and original API field names")
 
         StubProtocol.server.rejectOldAccess = true
         async let first: Void = session.reload()
