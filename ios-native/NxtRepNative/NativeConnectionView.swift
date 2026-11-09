@@ -15,6 +15,7 @@ struct NativeRootView: View {
             }
         }
         .tint(NativeTheme.accent)
+        .environmentObject(session)
         .task {
             guard !didRestore else { return }
             didRestore = true
@@ -59,7 +60,7 @@ struct NativeConnectionView: View {
                     Button {
                         Task {
                             await session.login(username: username, password: password)
-                            password = ""
+                            if session.signedIn { password = "" }
                         }
                     } label: {
                         HStack {

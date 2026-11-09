@@ -1,0 +1,51 @@
+name: Native iOS parity checks
+on:
+  push:
+    branches: [codex/ios-native-preview]
+    paths: [ios-native/**, .github/workflows/native-ios.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  iphone:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check native API contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .local/native-ci
+          swiftc -parse-as-library -swift-version 5 -target "$(uname -m)-apple-macosx14.0" \
+            ios-native/NxtRepNative/NativeJSON.swift \
+            ios-native/NxtRepNative/NativeAPI.swift \
+            ios-native/Tests/APIContractChecks.swift \
+            -o .local/native-ci/api-checks
+          .local/native-ci/api-checks | tee .local/native-ci/api-checks.log
+      - name: Build physical iPhone app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -project ios-native/NxtRepNative.xcodeproj -scheme NxtRepNative \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath .local/native-ci/DerivedData CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee .local/native-ci/xcodebuild.log
+          mkdir -p .local/native-ci/package/Payload
+          ditto .local/native-ci/DerivedData/Build/Products/Release-iphoneos/NxtRepNative.app \
+            .local/native-ci/package/Payload/NxtRepNative.app
+          ditto -c -k --keepParent .local/native-ci/package/Payload .local/native-ci/NxtRepNative-unsigned.ipa
+      - name: Preserve build output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NxtRepNative-${{ github.sha }}
+          path: |
+            .local/native-ci/*.ipa
+            .local/native-ci/*.log
+          retention-days: 3

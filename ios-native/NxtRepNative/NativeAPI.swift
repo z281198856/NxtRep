@@ -140,6 +140,7 @@ final class NativeSession: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var savingWater = false
     @Published var error: String?
+    @Published var selectedDate = Date()
     @Published var waterMessage: String?
     @Published private(set) var restoring = true
     @Published var serverText = UserDefaults.standard.string(forKey: "native-api-server") ?? "http://172.20.10.10:8000/api/v1"
@@ -164,7 +165,7 @@ final class NativeSession: ObservableObject {
          clearSessionStore: @escaping () -> Void = SessionKeychain.clear) {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 25
+        config.timeoutIntervalForResource = 300
         config.urlCache = nil
         self.transport = transport ?? URLSession(configuration: config)
         self.saveSession = saveSession
@@ -174,6 +175,39 @@ final class NativeSession: ObservableObject {
 
     var signedIn: Bool { user != nil }
     var hasPendingWater: Bool { pendingWater != nil }
+
+    func api(_ path: String, method: String = "GET", query: [String: String] = [:], body: [String: NativeJSON]? = nil, key: String? = nil) async throws -> NativeJSON {
+        var components = URLComponents()
+        components.path = path.hasPrefix("/") ? path : "/" + path
+        if !query.isEmpty { components.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) } }
+        let resource = String((components.string ?? path).drop(while: { $0 == "/" }))
+        let data = try body.map { try JSONEncoder().encode($0) }
+        return try await authorized(resource, method: method, body: data, key: key ?? (method == "POST" ? UUID().uuidString : nil))
+    }
+
+    func allPages(_ path: String, query: [String: String] = [:], limit: Int = 100) async throws -> [NativeJSON] {
+        var result: [NativeJSON] = []
+        var page = 1
+        while true {
+            var params = query
+            params["page"] = String(page)
+            params["page_size"] = String(limit)
+            let response = try await api(path, query: params)
+            let items = response.records
+            result += items
+            if !response["has_more"].flag { return result }
+            guard !items.isEmpty, page < 1000 else { throw NativeAPIError.message("列表分页异常，请重新加载。") }
+            page += 1
+        }
+    }
+
+    func approve(_ confirmationID: String) async throws -> NativeJSON {
+        let detail = try await api("confirmations/" + confirmationID)
+        let result = try await api("confirmations/" + confirmationID + "/approve", method: "POST", body: ["expected_version": .int(detail.version)])
+        guard result["status"].text == "succeeded" else { throw NativeAPIError.message("本次确认未能执行，请核对确认单状态。") }
+        await reload()
+        return result
+    }
 
     static func validatedURL(_ text: String) throws -> URL {
         guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -235,7 +269,7 @@ final class NativeSession: ObservableObject {
         let readID = UUID()
         latestRead = readID
         do {
-            let day = Self.today()
+            let day = NativeDates.day(selectedDate)
             let nextSummary: DailySummary = try await authorized("nutrition/daily-summary?date=\(day)")
             let nextWater: [WaterRecord] = try await authorized("nutrition/water?date=\(day)")
             guard current == generation, readID == latestRead else { return }
@@ -365,6 +399,7 @@ final class NativeSession: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
+        request.timeoutInterval = method == "GET" ? 30 : 180
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
@@ -379,7 +414,7 @@ final class NativeSession: ObservableObject {
         if http.statusCode == 204, let empty = EmptyResponse() as? T { return empty }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        do { return try decoder.decode(T.self, from: data) }
+        do { return try decoder.decode(T.self, from: http.statusCode == 204 ? Data("null".utf8) : data) }
         catch { throw NativeAPIError.message("接口数据格式与 App 不一致，请更新 App 后重试。") }
     }
 
@@ -396,7 +431,9 @@ final class NativeSession: ObservableObject {
         if let api = error as? NativeAPIError { return api.localizedDescription }
         if let url = error as? URLError {
             if url.code == .cancelled { return "请求已取消。" }
-            return "暂时无法连接电脑。请保持数据线连接，并检查本地网络权限和服务器是否启动。"
+            if url.code == .notConnectedToInternet { return "系统没有提供可用网络（-1009）。请检查 NxtRep 的无线数据和本地网络权限。" }
+            if url.code == .appTransportSecurityRequiresSecureConnection { return "系统限制了这个 HTTP 连接（-1022），请核对本地地址或使用 HTTPS。" }
+            return "暂时无法连接服务器（\(url.code.rawValue)）。请检查网络连接和服务器状态。"
         }
         return "操作未完成，请稍后重试。"
     }

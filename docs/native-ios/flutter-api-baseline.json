@@ -1,0 +1,917 @@
+{
+  "baseline_commit": "b6df170",
+  "repositories": [
+    {
+      "source": "frontend/lib/core/media/image_upload.dart",
+      "sha256": "81f8caf156e3a96134af03c1b73c5e5f7d54b87e40b8507118bd6c6465d42e02",
+      "public_methods": [
+        "prepare",
+        "uploadBodyProgressImage",
+        "uploadChatImage",
+        "uploadNutritionImage",
+        "uploadTrainingPlanImage"
+      ],
+      "api_calls": [
+        {
+          "method": "POST",
+          "path": "/media/images/upload-intents",
+          "line": 321
+        },
+        {
+          "method": "POST",
+          "path": "/media/images/$assetId/complete",
+          "line": 361
+        },
+        {
+          "method": "GET",
+          "path": "/media/images/capabilities",
+          "line": 398
+        }
+      ]
+    },
+    {
+      "source": "frontend/lib/features/agent/data/agent_repository.dart",
+      "sha256": "77a6be43551105225b6d84bad74c2596369a2944bfbb1de7c32ba102d87f2313",
+      "public_methods": [
+        "approve",
+        "confirmationStatus",
+        "createConversation",
+        "createMemory",
+        "deleteConversation",
+        "deleteMemory",
+        "getConversation",
+        "getRun",
+        "listConversations",
+        "listMemories",
+        "listMessages",
+        "reject",
+        "restoreConfirmations",
+        "reviseMealPortions",
+        "updateConversation",
+        "updateMemory"
+      ],
+      "api_calls": [
+        {
+          "method": "POST",
+          "path": "/agent/conversations",
+          "line": 16
+        },
+        {
+          "method": "GET",
+          "path": "/agent/conversations",
+          "line": 26
+        },
+        {
+          "method": "GET",
+          "path": "/agent/conversations/$id",
+          "line": 43
+        },
+        {
+          "method": "PATCH",
+          "path": "/agent/conversations/${conversation.id}",
+          "line": 55
+        },
+        {
+          "method": "GET",
+          "path": "/agent/conversations/$conversationId/messages",
+          "line": 80
+        },
+        {
+          "method": "GET",
+          "path": "/agent/runs/$runId",
+          "line": 124
+        },
+        {
+          "method": "POST",
+          "path": "/agent/conversations/$conversationId/messages",
+          "line": 145
+        },
+        {
+          "method": "POST",
+          "path": "/confirmations/${card.id}/approve",
+          "line": 157
+        },
+        {
+          "method": "GET",
+          "path": "/agent/conversations/$conversationId/confirmations",
+          "line": 173
+        },
+        {
+          "method": "POST",
+          "path": "/nutrition/pending-entries/${card.id}/portions",
+          "line": 243
+        },
+        {
+          "method": "GET",
+          "path": "/confirmations/${card.id}",
+          "line": 253
+        },
+        {
+          "method": "POST",
+          "path": "/confirmations/${card.id}/reject",
+          "line": 280
+        },
+        {
+          "method": "GET",
+          "path": "/memories",
+          "line": 306
+        },
+        {
+          "method": "POST",
+          "path": "/memories",
+          "line": 322
+        },
+        {
+          "method": "PATCH",
+          "path": "/memories/${memory.id}",
+          "line": 337
+        }
+      ]
+    },
+    {
+      "source": "frontend/lib/features/agent/data/proactive_repository.dart",
+      "sha256": "55d8159d3abf42b0d8a34b5f7a2f5a026c571543123adc6e6a2b3ad89b4e6c85",
+      "public_methods": [
+        "getSettings",
+        "listUnread",
+        "markRead",
+        "review",
+        "setEnabled",
+        "setFrequency",
+        "setTiming",
+        "snooze",
+        "submitFeedback"
+      ],
+      "api_calls": [
+        {
+          "method": "GET",
+          "path": "/notification-settings",
+          "line": 11
+        },
+        {
+          "method": "PATCH",
+          "path": "/notification-settings",
+          "line": 21
+        },
+        {
+          "method": "PATCH",
+          "path": "/notification-settings",
+          "line": 39
+        },
+        {
+          "method": "PATCH",
+          "path": "/notification-settings",
+          "line": 52
+        },
+        {
+          "method": "POST",
+          "path": "/agent/proactive/notices/$id/snooze",
+          "line": 61
+        },
+        {
+          "method": "POST",
+          "path": "/agent/proactive/review",
+          "line": 68
+        },
+        {
+          "method": "GET",
+          "path": "/notifications",
+          "line": 73
+        },
+        {
+          "method": "POST",
+          "path": "/notifications/$id/read",
+          "line": 94
+        },
+        {
+          "method": "PUT",
+          "path": "/agent/proactive/notices/$id/feedback",
+          "line": 100
+        }
+      ]
+    },
+    {
+      "source": "frontend/lib/features/auth/data/auth_repository.dart",
+      "sha256": "38a827ebb5b3f5b65762540caa7cbd1f3a6b5271acecfff3636c38c7816fae59",
+      "public_methods": [
+        "Function",
+        "changePassword",
+        "clearLocalSession",
+        "getCurrentAccount",
+        "listSessions",
+        "login",
+        "logout",
+        "refreshSession",
+        "revokeOtherSessions",
+        "revokeSession",
+        "setupPassword"
+      ],
+      "api_calls": [
+        {
+          "method": "POST",
+          "path": "/auth/login",
+          "line": 47
+        },
+        {
+          "method": "POST",
+          "path": "/auth/password/setup",
+          "line": 61
+        },
+        {
+          "method": "POST",
+          "path": "/auth/refresh",
+          "line": 85
+        },
+        {
+          "method": "GET",
+          "path": "/me",
+          "line": 115
+        },
+        {
+          "method": "POST",
+          "path": "/auth/logout",
+          "line": 123
+        },
+        {
+          "method": "POST",
+          "path": "/auth/password/change",
+          "line": 146
+        },
+        {
+          "method": "GET",
+          "path": "/auth/sessions",
+          "line": 191
+        },
+        {
+          "method": "DELETE",
+          "path": "/auth/sessions/${Uri.encodeComponent(id)}",
+          "line": 214
+        },
+        {
+          "method": "POST",
+          "path": "/auth/sessions/revoke-others",
+          "line": 218
+        }
+      ]
+    },
+    {
+      "source": "frontend/lib/features/exercises/data/exercise_repository.dart",
+      "sha256": "6d1ad654c063aba2fa94b33abcf3885accba882f6d48f35d2839bf605da422d5",
+      "public_methods": [
+        "create",
+        "delete",
+        "getDetail",
+        "getHistory",
+        "list",
+        "update"
+      ],
+      "api_calls": [
+        {
+          "method": "GET",
+          "path": "/exercises",
+          "line": 27
+        },
+        {
+          "method": "GET",
+          "path": "/exercises/$id",
+          "line": 35
+        },
+        {
+          "method": "GET",
+          "path": "/exercises/$id/history",
+          "line": 43
+        },
+        {
+          "method": "POST",
+          "path": "/exercises",
+          "line": 60
+        },
+        {
+          "method": "PATCH",
+          "path": "/exercises/${exercise.id}",
+          "line": 75
+        }
+      ]
+    },
+    {
+      "source": "frontend/lib/features/nutrition/data/nutrition_repository.dart",
+      "sha256": "d357634442d394dd712c058f8ecdf2ea71efecaff01f33954a71a7c5ea7c66dd",
+      "public_methods": [
+        "addWater",
+        "copyEntry",
+        "createCustomFood",
+        "createFlexibleMeal",
+        "createFoodEntry",
+        "createManualEntry",
+        "createPhotoEntry",
+        "createRecipe",
+        "deleteEntry",
+        "deleteWater",
+        "estimatePhoto",
+        "getAdvice",
+        "getDailySummary",
+        "getFoodByBarcode",
+        "getWeeklySummary",
+        "listEntries",
+        "listFlexibleMeals",
+        "listFrequentFoods",
+        "listRecipes",
+        "listWater",
+        "parseTextDraft",
+        "recentEntries",
+        "searchFoods",
+        "submitTextDraft",
+        "updateEntry"
+      ],
+      "api_calls": [
+        {
+          "method": "GET",
+          "path": "/nutrition/water",
+          "line": 16
+        },
+        {
+          "method": "POST",
+          "path": "/nutrition/water",
+          "line": 38
+        },
+        {
+          "method": "DELETE",
+          "path": "/nutrition/water/$id",
+          "line": 50
+        },
+        {
+          "method": "POST",
+          "path": "/nutrition/entry-drafts:estimate-image",
+          "line": 61
+        },
+        {
+          "method": "POST",
+          "path": "/nutrition/entries",
+          "line": 82
+        },
+        {
+          "method": "GET",
+          "path": "/nutrition/daily-summary",
+          "line": 101
+        },
+        {
+          "method": "GET",
+          "path": "/nutrition/entries",
+          "line": 111
+        },
+        {
+          "method": "GET",
+          "path": "/nutrition/weekly-summary",
+          "line": 128
+        },
+        {
+          "method": "GET",
+          "path": "/foods/search",
+          "line": 139
+        },
+        {
+          "method": "GET",
+          "path": "/foods/frequent",
+          "line": 149
+        },
+        {
+          "method": "POST",
+          "path": "/foods",
+          "line": 169
+        },
+        {
+          "method": "GET",
+          "path": "/foods/barcodes/${code.trim()}",
+          "line": 181
+        },
+        {
+          "method": "POST",
+          "path": "/nutrition/advice",
+          "line": 192
+        },
+        {
+          "method": "GET",
+          "path": "/nutrition/flexible-meals",
+          "line": 206
+        },
+        {
+          "method": "POST",
+          "path": "/nutrition/flexible-meals",
+          "line": 227
+        },
+        {
+          "method": "POST",
+          "path": "/nutrition/entry-drafts:parse-text",
+          "line": 246
+        },
+        {
+          "method": "POST",
+          "path": "/nutrition/entry-drafts/${draft.id}/submit",
+          "line": 264
+        },
+        {
+          "method": "GET",
+          "path": "/confirmations/$confirmationId",
+          "line": 273
+        },
+        {
+          "method": "POST",
+          "path": "/confirmations/$confirmationId/approve",
+          "line": 277
+        },
+        {
+          "method": "GET",
+          "path": "/recipes",
+          "line": 293
+        },
+        {
+          "method": "POST",
+          "path": "/recipes",
+          "line": 318
+        },
+        {
+          "method": "GET",
+          "path": "/nutrition/entries/recent",
+          "line": 336
+        },
+        {
+          "method": "POST",
+          "path": "/nutrition/entries/${source.id}/copy",
+          "line": 359
+        },
+        {
+          "method": "POST",
+          "path": "/nutrition/entries",
+          "line": 376
+        },
+        {
+          "method": "POST",
+          "path": "/nutrition/entries",
+          "line": 411
+        },
+        {
+          "method": "PATCH",
+          "path": "/nutrition/entries/${entry.id}",
+          "line": 437
+        },
+        {
+          "method": "DELETE",
+          "path": "/nutrition/entries/${entry.id}",
+          "line": 455
+        },
+        {
+          "method": "GET",
+          "path": "/confirmations/$confirmationId",
+          "line": 463
+        },
+        {
+          "method": "POST",
+          "path": "/confirmations/$confirmationId/approve",
+          "line": 467
+        }
+      ]
+    },
+    {
+      "source": "frontend/lib/features/onboarding/data/onboarding_repository.dart",
+      "sha256": "97a195ea3aac7debe33cff9435d38bce857be12dd5b70a8e5dd7f036dc844b5f",
+      "public_methods": [
+        "complete",
+        "getProfile"
+      ],
+      "api_calls": [
+        {
+          "method": "GET",
+          "path": "/profile",
+          "line": 12
+        },
+        {
+          "method": "GET",
+          "path": "/profile/goals-and-constraints",
+          "line": 21
+        },
+        {
+          "method": "PUT",
+          "path": "/profile/goals-and-constraints",
+          "line": 60
+        },
+        {
+          "method": "PATCH",
+          "path": "/profile",
+          "line": 62
+        }
+      ]
+    },
+    {
+      "source": "frontend/lib/features/profile/data/profile_repository.dart",
+      "sha256": "f8c1100bd4119968d7fe5edad16dd0d8d0e3957672c52bba250904309b1f6d81",
+      "public_methods": [
+        "getProfile",
+        "getSettings",
+        "getTrainingPreferences",
+        "updatePersonalProfile",
+        "updateSettings",
+        "updateTrainingPreferences"
+      ],
+      "api_calls": [
+        {
+          "method": "GET",
+          "path": "/profile",
+          "line": 38
+        },
+        {
+          "method": "GET",
+          "path": "/profile/goals-and-constraints",
+          "line": 47
+        },
+        {
+          "method": "GET",
+          "path": "/settings",
+          "line": 56
+        },
+        {
+          "method": "PATCH",
+          "path": "/profile",
+          "line": 73
+        },
+        {
+          "method": "POST",
+          "path": "/profile/goal-check",
+          "line": 115
+        },
+        {
+          "method": "PUT",
+          "path": "/profile/goals-and-constraints",
+          "line": 126
+        },
+        {
+          "method": "PATCH",
+          "path": "/profile",
+          "line": 130
+        },
+        {
+          "method": "PATCH",
+          "path": "/settings",
+          "line": 151
+        }
+      ]
+    },
+    {
+      "source": "frontend/lib/features/progress/data/body_progress_repository.dart",
+      "sha256": "bd34c16dc27e9b63758bd0d27f2e6f38288bea9ea4daea0fe03af35245560350",
+      "public_methods": [
+        "analyze",
+        "compare",
+        "createPhoto",
+        "generatePhaseReport",
+        "getDownloadIntent",
+        "listPhotos",
+        "listReports"
+      ],
+      "api_calls": [
+        {
+          "method": "GET",
+          "path": "/body/progress-photos",
+          "line": 10
+        },
+        {
+          "method": "POST",
+          "path": "/body/progress-photos",
+          "line": 30
+        },
+        {
+          "method": "GET",
+          "path": "/media/images/$assetId/download-intent",
+          "line": 47
+        },
+        {
+          "method": "POST",
+          "path": "/body/progress-photos/$photoId/analysis-drafts",
+          "line": 55
+        },
+        {
+          "method": "POST",
+          "path": "/body/progress-photos/compare",
+          "line": 69
+        },
+        {
+          "method": "GET",
+          "path": "/reports",
+          "line": 84
+        },
+        {
+          "method": "POST",
+          "path": "/reports/phase",
+          "line": 98
+        }
+      ]
+    },
+    {
+      "source": "frontend/lib/features/progress/data/body_repository.dart",
+      "sha256": "1ad117605c70a7f28f50eaeeb84472c0b321eb6350e4806a7cc565e3bc5adef9",
+      "public_methods": [
+        "calculateNavyBodyFat",
+        "createMeasurement",
+        "getBodyTrend",
+        "getNavyProfileDefaults",
+        "getOverview",
+        "listBodyFatEstimates",
+        "listMeasurements",
+        "listPersonalRecords",
+        "updateMeasurement"
+      ],
+      "api_calls": [
+        {
+          "method": "GET",
+          "path": "/profile",
+          "line": 14
+        },
+        {
+          "method": "POST",
+          "path": "/body/body-fat/navy",
+          "line": 33
+        },
+        {
+          "method": "GET",
+          "path": "/body/body-fat",
+          "line": 45
+        },
+        {
+          "method": "GET",
+          "path": "/body/measurements",
+          "line": 59
+        },
+        {
+          "method": "GET",
+          "path": "/progress/overview",
+          "line": 74
+        },
+        {
+          "method": "GET",
+          "path": "/progress/body-trend",
+          "line": 89
+        },
+        {
+          "method": "GET",
+          "path": "/progress/prs",
+          "line": 107
+        },
+        {
+          "method": "POST",
+          "path": "/body/measurements",
+          "line": 120
+        },
+        {
+          "method": "PATCH",
+          "path": "/body/measurements/${current.id}",
+          "line": 136
+        }
+      ]
+    },
+    {
+      "source": "frontend/lib/features/training/data/training_repository.dart",
+      "sha256": "8c223f045322c7cf3b4a71407c25e27575d3204fd0c1616d0385e925245c3bc3",
+      "public_methods": [
+        "abandonWorkout",
+        "activateDraft",
+        "activateTemplate",
+        "addExercise",
+        "compressEvent",
+        "createCalendarEvent",
+        "createSet",
+        "deleteSet",
+        "finishWorkout",
+        "generatePlanDraft",
+        "getActivePlan",
+        "getActiveWorkout",
+        "getCalendar",
+        "getCalendarEvent",
+        "getTemplateDetail",
+        "getTemplates",
+        "getWorkout",
+        "getWorkoutHistory",
+        "parsePlanImage",
+        "parsePlanText",
+        "pauseWorkout",
+        "replaceExercise",
+        "rescheduleEvent",
+        "resumeWorkout",
+        "skipExercise",
+        "startWorkout",
+        "updateExerciseTarget",
+        "updateSet"
+      ],
+      "api_calls": [
+        {
+          "method": "GET",
+          "path": "/training/templates",
+          "line": 15
+        },
+        {
+          "method": "GET",
+          "path": "/training/templates/$id",
+          "line": 29
+        },
+        {
+          "method": "POST",
+          "path": "/training/plan-drafts/from-template",
+          "line": 38
+        },
+        {
+          "method": "POST",
+          "path": "/training/plan-drafts:generate",
+          "line": 56
+        },
+        {
+          "method": "POST",
+          "path": "/training/plan-drafts:parse-text",
+          "line": 73
+        },
+        {
+          "method": "POST",
+          "path": "/training/plan-drafts:parse-image",
+          "line": 88
+        },
+        {
+          "method": "POST",
+          "path": "/training/plan-drafts/${draft.id}/validate",
+          "line": 101
+        },
+        {
+          "method": "POST",
+          "path": "/training/plan-drafts/${draft.id}/submit",
+          "line": 118
+        },
+        {
+          "method": "GET",
+          "path": "/confirmations/${confirmation.id}",
+          "line": 128
+        },
+        {
+          "method": "POST",
+          "path": "/confirmations/${confirmation.id}/approve",
+          "line": 133
+        },
+        {
+          "method": "POST",
+          "path": "/calendar/events",
+          "line": 162
+        },
+        {
+          "method": "POST",
+          "path": "/calendar/reschedule-drafts",
+          "line": 185
+        },
+        {
+          "method": "POST",
+          "path": "/calendar/compression-drafts",
+          "line": 209
+        },
+        {
+          "method": "POST",
+          "path": "/calendar/reschedule-drafts/${draft.id}/submit",
+          "line": 230
+        },
+        {
+          "method": "GET",
+          "path": "/confirmations/$confirmationId",
+          "line": 244
+        },
+        {
+          "method": "POST",
+          "path": "/confirmations/$confirmationId/approve",
+          "line": 249
+        },
+        {
+          "method": "GET",
+          "path": "/training/plans/active",
+          "line": 267
+        },
+        {
+          "method": "GET",
+          "path": "/calendar",
+          "line": 278
+        },
+        {
+          "method": "GET",
+          "path": "/calendar/events/$id",
+          "line": 295
+        },
+        {
+          "method": "GET",
+          "path": "/workouts/active",
+          "line": 303
+        },
+        {
+          "method": "GET",
+          "path": "/workouts",
+          "line": 318
+        },
+        {
+          "method": "GET",
+          "path": "/workouts/$workoutId",
+          "line": 329
+        },
+        {
+          "method": "POST",
+          "path": "/workouts",
+          "line": 341
+        },
+        {
+          "method": "POST",
+          "path": "/workouts/${workout.id}/sets",
+          "line": 364
+        },
+        {
+          "method": "PATCH",
+          "path": "/workouts/${workout.id}/sets/${set.id}",
+          "line": 398
+        },
+        {
+          "method": "POST",
+          "path": "/workouts/${workout.id}/exercises",
+          "line": 425
+        },
+        {
+          "method": "PATCH",
+          "path": "/workouts/${workout.id}/exercises/${exercise.id}/target",
+          "line": 451
+        },
+        {
+          "method": "POST",
+          "path": "/workouts/${workout.id}/exercises/${exercise.id}/replace",
+          "line": 470
+        },
+        {
+          "method": "POST",
+          "path": "/workouts/${workout.id}/exercises/${exercise.id}/skip",
+          "line": 488
+        },
+        {
+          "method": "POST",
+          "path": "/workouts/${workout.id}/abandon",
+          "line": 503
+        },
+        {
+          "method": "POST",
+          "path": "/workouts/${workout.id}/pause",
+          "line": 519
+        },
+        {
+          "method": "POST",
+          "path": "/workouts/${workout.id}/resume",
+          "line": 534
+        },
+        {
+          "method": "POST",
+          "path": "/workouts/${workout.id}/finish",
+          "line": 553
+        }
+      ]
+    }
+  ],
+  "presentation_sources": [
+    "frontend/lib/features/agent/presentation/agent_management_page.dart",
+    "frontend/lib/features/agent/presentation/agent_page.dart",
+    "frontend/lib/features/agent/presentation/agent_reply_format.dart",
+    "frontend/lib/features/agent/presentation/conversation_history.dart",
+    "frontend/lib/features/agent/presentation/source_links.dart",
+    "frontend/lib/features/auth/presentation/account_security_page.dart",
+    "frontend/lib/features/auth/presentation/app_loading_page.dart",
+    "frontend/lib/features/auth/presentation/auth_gate.dart",
+    "frontend/lib/features/auth/presentation/login_page.dart",
+    "frontend/lib/features/auth/presentation/password_setup_page.dart",
+    "frontend/lib/features/exercises/presentation/exercise_library_page.dart",
+    "frontend/lib/features/exercises/presentation/widgets/anatomy_motion_illustration.dart",
+    "frontend/lib/features/nutrition/presentation/food_library_page.dart",
+    "frontend/lib/features/nutrition/presentation/nutrition_copy_sheet.dart",
+    "frontend/lib/features/nutrition/presentation/nutrition_page.dart",
+    "frontend/lib/features/nutrition/presentation/nutrition_photo_page.dart",
+    "frontend/lib/features/nutrition/presentation/nutrition_tools_page.dart",
+    "frontend/lib/features/nutrition/presentation/water_entry_sheet.dart",
+    "frontend/lib/features/nutrition/presentation/widgets/food_line_art.dart",
+    "frontend/lib/features/onboarding/presentation/onboarding_page.dart",
+    "frontend/lib/features/profile/presentation/local_reminders_page.dart",
+    "frontend/lib/features/profile/presentation/profile_page.dart",
+    "frontend/lib/features/progress/presentation/body_progress_page.dart",
+    "frontend/lib/features/progress/presentation/navy_body_fat_sheet.dart",
+    "frontend/lib/features/progress/presentation/progress_page.dart",
+    "frontend/lib/features/shell/presentation/home_shell.dart",
+    "frontend/lib/features/training/presentation/active_plan_detail_page.dart",
+    "frontend/lib/features/training/presentation/calendar_event_detail_page.dart",
+    "frontend/lib/features/training/presentation/custom_plan_page.dart",
+    "frontend/lib/features/training/presentation/plan_page.dart",
+    "frontend/lib/features/training/presentation/template_catalog_page.dart",
+    "frontend/lib/features/training/presentation/today_page.dart",
+    "frontend/lib/features/training/presentation/training_calendar.dart",
+    "frontend/lib/features/training/presentation/workout_history_page.dart",
+    "frontend/lib/features/training/presentation/workout_page.dart"
+  ],
+  "local_capabilities": [
+    "core/offline/local_records.dart",
+    "core/offline/form_draft.dart",
+    "core/notifications/reminder_controller.dart",
+    "core/notifications/reminder_platform.dart",
+    "core/settings/app_preferences.dart",
+    "core/media/image_upload.dart"
+  ]
+}
