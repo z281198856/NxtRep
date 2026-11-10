@@ -136,7 +136,7 @@ struct NativeHomeView: View {
     private func load() async {
         await resource.load {
             let day = NativeDates.day(session.selectedDate)
-            let events = try await session.api("calendar/events",query:["start_date":day,"end_date":day])
+            let events = try await session.api("calendar",query:["start_date":day,"end_date":day])
             let current:NativeJSON
             do { current = try await session.api("workouts/active") }
             catch NativeAPIError.response(let code,let name) where code == 404 && name == "WORKOUT_NOT_FOUND" { current = .null }

@@ -153,7 +153,7 @@ struct NativePlanDraftReview: View {
 }
 
 private struct NativePlanExerciseDraft: Identifiable,Codable {
-    let id = UUID()
+    var id = UUID()
     let exercise: NativeJSON
     var sets = 3
     var repsMin = 8
@@ -162,7 +162,7 @@ private struct NativePlanExerciseDraft: Identifiable,Codable {
     func json(order: Int) -> NativeJSON { .object(["exercise_id":exercise["id"],"order_no":.int(order),"target_sets":.int(sets),"rep_min":.int(repsMin),"rep_max":.int(repsMax),"target_load_kg":.null,"target_rir":.int(2),"rest_seconds":.int(rest)]) }
 }
 private struct NativePlanDayDraft: Identifiable,Codable {
-    let id = UUID()
+    var id = UUID()
     var name = "训练日"
     var minutes = 45
     var exercises: [NativePlanExerciseDraft] = []

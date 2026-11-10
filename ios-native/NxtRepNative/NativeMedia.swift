@@ -204,7 +204,7 @@ struct NativeNutritionPhotoView: View {
                     var body: [String:NativeJSON] = ["image_asset_id":.string(assetID),"meal_type":.string(meal),"eaten_at":.string(NativeDates.timestamp(eatenAt)),"notes":notes.isEmpty ? .null : .string(notes)]
                     if !foods.isEmpty { body["reviewed_foods"] = .array(try foods.map { try $0.reviewed() }) }
                     let result = try await session.api("nutrition/entry-drafts:estimate-image",method:"POST",body:body)
-                    draft = result; foods = result["calculation"]["items"].values.map(NativePhotoFood.init); checked = false
+                    draft = result; foods = result["calculation"]["items"].values.map { NativePhotoFood($0) }; checked = false
                 }
                 if !draft.isNull {
                     Text("照片估算需核对，不能作为精确测量。").font(.subheadline).foregroundStyle(.orange)
