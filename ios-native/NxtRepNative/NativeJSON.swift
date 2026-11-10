@@ -96,3 +96,14 @@ struct NativeSSEParser {
         return (value["event"].text.isEmpty ? name : value["event"].text,value)
     }
 }
+
+enum NativeQueries {
+    static func exercises(keyword:String,equipment:String = "",muscle:String = "") -> [String:String] {
+        var query: [String:String] = [:]
+        for (name,value) in [("keyword",keyword),("equipment",equipment),("muscle",muscle)] {
+            let cleaned = value.trimmingCharacters(in:.whitespacesAndNewlines)
+            if !cleaned.isEmpty { query[name] = cleaned }
+        }
+        return query
+    }
+}

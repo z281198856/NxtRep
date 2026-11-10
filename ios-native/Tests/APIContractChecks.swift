@@ -16,6 +16,11 @@ private final class StubServer: @unchecked Sendable {
         let path = request.url!.path
         if path.hasSuffix("/me") { return (200,Data("{\"profile_initialized\":true}".utf8)) }
         if path.hasSuffix("/settings") { return (200,Data("{\"unit_system\":\"metric\",\"privacy_mode\":\"private\",\"version\":1}".utf8)) }
+        if path.hasSuffix("/exercises") {
+            let query = URLComponents(url:request.url!,resolvingAgainstBaseURL:false)!.queryItems ?? []
+            precondition(!query.contains {$0.name == "keyword" && ($0.value ?? "").isEmpty},"Optional keyword must not be sent empty")
+            return (200,Data("{\"list\":[{\"id\":\"exercise-1\"}],\"has_more\":false}".utf8))
+        }
         if path.hasSuffix("/foods/search") {
             let query = URLComponents(url:request.url!,resolvingAgainstBaseURL:false)!.queryItems!
             precondition(query.first {$0.name == "keyword"}?.value == "鸡胸肉 & 米饭")
@@ -113,6 +118,10 @@ private enum APIContractChecks {
         precondition(foods.count == 2 && foods[1]["food_version_id"].text == "version-2")
         precondition(foods[0]["basis_amount_g"].double == 100)
         print("PASS: complete pagination, Chinese query encoding and original API field names")
+        let exercises = try await session.allPages("exercises",query:NativeQueries.exercises(keyword:" \n "))
+        precondition(exercises.count == 1)
+        precondition(NativeQueries.exercises(keyword:" 卧推 ",equipment:"barbell")["keyword"] == "卧推")
+        print("PASS: optional exercise search omits blank keywords and trims entered text")
 
         StubProtocol.server.rejectOldAccess = true
         async let first: Void = session.reload()

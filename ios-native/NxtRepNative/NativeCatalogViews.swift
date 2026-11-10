@@ -198,9 +198,7 @@ struct NativeExerciseLibrary: View {
         .task(id:"\(keyword)|\(equipment)|\(muscle)|\(revision)") {
             do { try await Task.sleep(for:.milliseconds(300)) } catch { return }
             await resource.load {
-                var q = ["keyword":keyword]
-                if !equipment.isEmpty { q["equipment"] = equipment }
-                if !muscle.isEmpty { q["muscle"] = muscle }
+                let q = NativeQueries.exercises(keyword:keyword,equipment:equipment,muscle:muscle)
                 return .array(try await session.allPages("exercises", query:q))
             }
         }
