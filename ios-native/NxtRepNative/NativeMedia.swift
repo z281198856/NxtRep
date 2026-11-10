@@ -82,7 +82,7 @@ struct NativeImageSelector: View {
             Task { do { guard let data = try await item.loadTransferable(type:Data.self) else { throw NativeAPIError.message("图片内容无法读取。") }; await upload(data) } catch { self.error = NativeSession.readable(error) } }
         }
         .sheet(isPresented:$camera) { NativeCameraPicker { data in camera = false; if let data { Task { await upload(data) } } } }
-        .task { let saved = session.local?.draft("image-source-"+purpose)["value"]["bytes"].text ?? ""; if preview == nil,!saved.isEmpty { preview = Data(base64Encoded:saved) } }
+        .task { do { if preview == nil { preview = try session.local?.imageDraft("image-source-"+purpose) } } catch { self.error = "无法恢复本机照片，原文件已保留。" } }
     }
     @MainActor private func upload(_ source: Data) async {
         guard !uploading else { return }
@@ -93,11 +93,11 @@ struct NativeImageSelector: View {
             let localLimits:NativeJSON = .object(["accepted_content_types":.strings(["image/jpeg"]),"max_dimension":.int(2048),"max_pixels":.int(4_194_304),"max_bytes":.int(5_500_000)])
             let backup = try await Task.detached { try NativeMediaTransfer.jpeg(source,capabilities:localLimits) }.value
             preview = backup
-            try session.local?.saveDraft("image-source-"+purpose,label:"待上传照片",value:.object(["bytes":.string(backup.base64EncodedString())]))
+            try session.local?.saveImageDraft("image-source-"+purpose,data:backup)
             let capabilities = try await session.api("media/images/capabilities")
             let data = try await Task.detached { try NativeMediaTransfer.jpeg(backup,capabilities:capabilities) }.value
             preview = data
-            try session.local?.saveDraft("image-source-"+purpose,label:"待上传照片",value:.object(["bytes":.string(data.base64EncodedString())]))
+            try session.local?.saveImageDraft("image-source-"+purpose,data:data)
             guard owner == session.local?.scope else { throw CancellationError() }
             let intent = try await session.api("media/images/upload-intents",method:"POST",body:["purpose":.string(purpose),"content_type":.string("image/jpeg"),"content_length":.int(data.count)])
             guard let url = URL(string:intent["upload_url"].text), url.scheme == "https", intent["method"].text == "PUT" else { throw NativeAPIError.message("上传地址不受支持，请稍后重试。") }

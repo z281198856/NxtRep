@@ -63,21 +63,41 @@ private struct NativeDraftModifier: ViewModifier {
     let label:String
     let value:NativeJSON
     let restore:(NativeJSON)->Void
+    func body(content:Content)->some View {
+        if let store = session.local { NativeDraftGate(store:store,key:key,label:label,value:value,restore:restore,content:content) }
+        else { content }
+    }
+}
+private struct NativeDraftGate<Content:View>:View {
+    @ObservedObject var store:NativeLocalStore
+    let key:String
+    let label:String
+    let value:NativeJSON
+    let restore:(NativeJSON)->Void
+    let content:Content
     @State private var initialized = false
     @State private var scope:String?
     @State private var error:String?
-    func body(content:Content)->some View {
-        content.safeAreaInset(edge:.top) { if let error { NativeErrorText(message:error).padding(8).background(NativeTheme.background) } }
+    @State private var showQueue = false
+    private var queued:Bool { store.pending.contains {$0["draft_key"].text == key} }
+    var body:some View {
+        content.disabled(queued).safeAreaInset(edge:.top) {
+            VStack {
+                if let error { NativeErrorText(message:error) }
+                if queued { Text("这份记录已保存在本机，正在等待同步。请先核对原记录。").font(.caption); Button("查看待同步记录") { showQueue = true } }
+            }.padding(8).background(NativeTheme.background)
+        }
+            .sheet(isPresented:$showQueue) { NavigationStack { NativeLocalRecordsView() } }
             .task {
                 guard !initialized else { return }
-                scope = session.local?.scope
-                let saved = session.local?.draft(key)["value"] ?? .null
+                scope = store.scope
+                let saved = store.draft(key)["value"]
                 if !saved.isNull { restore(saved) }
                 initialized = true
             }
             .onChange(of:value) { _,next in
-                guard initialized,scope == session.local?.scope else { return }
-                do { try session.local?.saveDraft(key,label:label,value:next); error = nil }
+                guard initialized,scope == store.scope,!queued else { return }
+                do { try store.saveDraft(key,label:label,value:next); error = nil }
                 catch { self.error = NativeSession.readable(error) }
             }
     }

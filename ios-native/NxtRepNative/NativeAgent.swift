@@ -75,6 +75,7 @@ final class NativeAgent: ObservableObject {
             cursor = last
         }
         messages = result
+        if result.last?["role"].text == "assistant",result.last?["content"].text == reply { reply = "" }
         let cards = try await session.api("agent/conversations/"+conversation.id+"/confirmations")
         confirmations = cards["confirmation_cards"].values + cards["completed_cards"].values
     }

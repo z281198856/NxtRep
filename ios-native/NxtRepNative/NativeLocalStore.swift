@@ -78,14 +78,42 @@ final class NativeLocalStore: ObservableObject {
             state = value; storageError = nil
         } catch { storageError = "无法安全保存本机记录，请解锁手机并检查可用空间。"; throw NativeAPIError.message(storageError!) }
     }
-    func draft(_ key:String) -> NativeJSON { state["drafts"][key] }
+    func draft(_ key:String) -> NativeJSON {
+        if pending.contains(where:{$0["draft_key"].text == key}) { return .null }
+        return state["drafts"][key]
+    }
     func saveDraft(_ key:String,label:String,value:NativeJSON) throws {
         var data = state.fields, drafts = self.drafts
+        let oldBlob = drafts[key]?["value"]["blob"].text ?? ""
         guard try JSONEncoder().encode(value).count <= 8_000_000 else { throw NativeAPIError.message("草稿内容过大，请减少照片后重试。") }
         if value.isNull { drafts.removeValue(forKey:key) }
         else { drafts[key] = .object(["label":.string(label),"value":value,"at":.string(NativeDates.timestamp())]) }
         data["drafts"] = .object(drafts); try commit(data)
+        if oldBlob != value["blob"].text { removeBlob(oldBlob) }
     }
+    func saveImageDraft(_ name:String,data:Data) throws {
+        guard data.count <= 8_000_000,let file,let scope,let key = encryptionKey else { throw NativeAPIError.message("照片过大或本机存储尚未就绪。") }
+        let filename = scope+"."+UUID().uuidString+".blob"
+        let target = file.deletingLastPathComponent().appendingPathComponent(filename)
+        let bytes = try AES.GCM.seal(data,using:key,authenticating:Data((scope+"|"+name).utf8)).combined!
+        #if os(iOS)
+        try bytes.write(to:target,options:[.atomic,.completeFileProtection])
+        #else
+        try bytes.write(to:target,options:.atomic)
+        #endif
+        do { try saveDraft(name,label:"待上传照片",value:.object(["blob":.string(filename)])) }
+        catch { try? FileManager.default.removeItem(at:target); throw error }
+    }
+    func imageDraft(_ name:String) throws -> Data? {
+        let filename = draft(name)["value"]["blob"].text
+        guard !filename.isEmpty,let target = blobURL(filename),let scope,let key = encryptionKey else { return nil }
+        return try AES.GCM.open(AES.GCM.SealedBox(combined:Data(contentsOf:target)),using:key,authenticating:Data((scope+"|"+name).utf8))
+    }
+    private func blobURL(_ filename:String) -> URL? {
+        guard let file,let scope,filename.hasPrefix(scope+"."),filename.hasSuffix(".blob"),!filename.contains("/"),!filename.contains("\\") else { return nil }
+        return file.deletingLastPathComponent().appendingPathComponent(filename)
+    }
+    private func removeBlob(_ filename:String) { if let target = blobURL(filename) { try? FileManager.default.removeItem(at:target) } }
     func cached(_ resource:String) -> NativeJSON? {
         guard !state["cache"][resource].isNull else { return nil }
         usingCache = true

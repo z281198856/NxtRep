@@ -161,6 +161,10 @@ struct NativeNavyBodyFat: View {
                 ForEach(history.value.records,id:\.id) { item in LabeledContent(NativeDates.display(item["calculated_at"].text),value:item["value_percent"].text+"%") }
             }
         }.navigationTitle("体脂估算")
+            .task {
+                do { let profile = try await session.api("profile"); if ["male","female"].contains(profile["sex"].text) { sex = profile["sex"].text }; if !profile["height_cm"].isNull { height = String(session.displayLength(profile["height_cm"].double)) } }
+                catch { history.error = NativeSession.readable(error) }
+            }
             .task(id:revision) { await history.load { .array(try await session.allPages("body/body-fat")) } }
     }
 }

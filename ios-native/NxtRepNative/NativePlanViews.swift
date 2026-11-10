@@ -233,7 +233,10 @@ struct NativePlanCreation: View {
                     }
                     draft = try await session.api(path,method:"POST",body:body,key:key)
                 }
-                if !draft.isNull { NativePlanDraftReview(initial:draft) }
+                if !draft.isNull {
+                    if !draft["recognized_text"].text.isEmpty { Button("编辑识别文字后重新生成") { text = draft["recognized_text"].text; mode = "text"; draft = .null } }
+                    NativePlanDraftReview(initial:draft)
+                }
             }.nativePage()
         }.navigationTitle("创建训练计划").navigationBarTitleDisplayMode(.inline)
             .nativeDraft("plan-create",label:"训练计划创建",value:planSnapshot) { v in

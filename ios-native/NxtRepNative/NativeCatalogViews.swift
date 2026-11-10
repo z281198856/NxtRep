@@ -113,7 +113,7 @@ struct NativeFoodDetail: View {
                         "meal_type":.string(meal), "eaten_at":.string(NativeDates.timestamp(eatenAt)),
                         "items":.array([.object(["food_version_id":food["food_version_id"],"amount_g":.number(grams)])]),
                         "is_flexible_meal":.bool(flexible), "notes": notes.isEmpty ? .null : .string(notes)
-                    ], key: key)
+                    ], key: key,draftKey:"food-"+food.id+"-"+NativeDates.day(session.selectedDate))
                     saved = true
                     await session.reload()
                 }
@@ -122,6 +122,7 @@ struct NativeFoodDetail: View {
         }
         .navigationTitle("食品详情").navigationBarTitleDisplayMode(.inline)
         .onAppear { eatenAt = session.selectedDate }
+        .nativeDraft("food-"+food.id+"-"+NativeDates.day(session.selectedDate),label:"食品份量 · "+food["name"].text,value:.object(["amount":.string(amount),"meal":.string(meal),"time":.string(NativeDates.timestamp(eatenAt)),"flexible":.bool(flexible),"notes":.string(notes)])) { v in amount = v["amount"].text; meal = v["meal"].text; eatenAt = NativeDates.parse(v["time"].text) ?? .now; flexible = v["flexible"].flag; notes = v["notes"].text }
     }
 }
 

@@ -16,6 +16,14 @@ struct NativeNutritionView: View {
                         Text("当日营养").font(.headline)
                         NativeNutrientValues(value:.object(["kcal":.number(summary.consumed.kcal.value),"carbs_g":.number(summary.consumed.carbsG.value),"protein_g":.number(summary.consumed.proteinG.value),"fat_g":.number(summary.consumed.fatG.value)]))
                         Text("饮水 \(summary.waterMl) 毫升").foregroundStyle(NutrientKind.water.labelColor)
+                        if let target = summary.target {
+                            Text("个人每日目标范围").font(.subheadline.bold())
+                            ForEach(["kcal","protein","carbs","fat"],id:\.self) { metric in
+                                let minKey = metric == "kcal" ? "kcal_min" : metric+"_min_g"
+                                let maxKey = metric == "kcal" ? "kcal_max" : metric+"_max_g"
+                                if let low = target[minKey]?.value,let high = target[maxKey]?.value { LabeledContent(["kcal":"热量","protein":"蛋白质","carbs":"碳水","fat":"脂肪"][metric]!,value:"\(Int(low.rounded()))–\(Int(high.rounded())) "+(metric == "kcal" ? "千卡" : "克")) }
+                            }
+                        }
                     }
                 }
                 LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:10) {
@@ -145,7 +153,7 @@ struct NativeMealEditor: View {
                 var body: [String:NativeJSON] = ["meal_type":.string(meal),"items":.array(try lines.map { try $0.payload() }),"is_flexible_meal":.bool(flexible),"notes":notes.isEmpty ? .null : .string(notes)]
                 if existing.isNull { body["eaten_at"] = .string(NativeDates.timestamp(eatenAt)) }
                 else { body["expected_version"] = .int(existing.version); body["reason"] = .string("用户在 iPhone 编辑饮食记录") }
-                _ = try await session.api(existing.isNull ? "nutrition/entries" : "nutrition/entries/" + existing.id,method:existing.isNull ? "POST" : "PATCH",body:body,key:key,draftKey:existing.isNull ? "nutrition-manual" : nil)
+                _ = try await session.api(existing.isNull ? "nutrition/entries" : "nutrition/entries/" + existing.id,method:existing.isNull ? "POST" : "PATCH",body:body,key:key,draftKey:existing.isNull ? "nutrition-manual-"+NativeDates.day(session.selectedDate) : nil)
                 await session.reload(); onSave(); dismiss()
             }
             if !existing.isNull { Button("删除这条饮食记录",role:.destructive) { deleteDialog = true } }
@@ -157,7 +165,7 @@ struct NativeMealEditor: View {
             eatenAt = session.selectedDate
             if !existing.isNull { lines = existing["items"].values.map(NativeMealLine.init); meal = existing["meal_type"].text; flexible = existing["is_flexible_meal"].flag; notes = existing["notes"].text }
         }
-        .nativeDraft("nutrition-manual"+(existing.isNull ? "" : "-"+existing.id),label:"手动饮食记录",value:.object(["lines":.array(lines.map(\.draft)),"meal":.string(meal),"time":.string(NativeDates.timestamp(eatenAt)),"flexible":.bool(flexible),"notes":.string(notes)])) { value in
+        .nativeDraft("nutrition-manual-"+(existing.isNull ? NativeDates.day(session.selectedDate) : existing.id),label:"手动饮食记录",value:.object(["lines":.array(lines.map(\.draft)),"meal":.string(meal),"time":.string(NativeDates.timestamp(eatenAt)),"flexible":.bool(flexible),"notes":.string(notes)])) { value in
             if existing.isNull { lines = value["lines"].values.map(NativeMealLine.init); meal = value["meal"].text; eatenAt = NativeDates.parse(value["time"].text) ?? .now; flexible = value["flexible"].flag; notes = value["notes"].text }
         }
         .confirmationDialog("删除这条饮食记录？",isPresented:$deleteDialog,titleVisibility:.visible) {
@@ -187,7 +195,7 @@ struct NativeWaterView: View {
                 HStack { ForEach([150,250,350,500],id:\.self) { ml in Button("\(ml)") { amount = String(ml) }.buttonStyle(.bordered) } }
                 NativeActionButton(title:"保存饮水记录") { key in
                     guard let ml = Int(amount), (1...5000).contains(ml) else { throw NativeAPIError.message("饮水量应为 1–5000 毫升的整数。") }
-                    _ = try await session.api("nutrition/water",method:"POST",body:["amount_ml":.int(ml),"consumed_at":.string(NativeDates.timestamp(consumedAt))],key:key,draftKey:"water")
+                    _ = try await session.api("nutrition/water",method:"POST",body:["amount_ml":.int(ml),"consumed_at":.string(NativeDates.timestamp(consumedAt))],key:key,draftKey:"water-"+NativeDates.day(session.selectedDate))
                     revision += 1; await session.reload()
                 }
             }
@@ -204,7 +212,7 @@ struct NativeWaterView: View {
             }
         }.navigationTitle("饮水记录")
         .onAppear { consumedAt = session.selectedDate }
-        .nativeDraft("water",label:"饮水记录",value:.object(["amount":.string(amount),"time":.string(NativeDates.timestamp(consumedAt))])) { value in amount = value["amount"].text; consumedAt = NativeDates.parse(value["time"].text) ?? .now }
+        .nativeDraft("water-"+NativeDates.day(session.selectedDate),label:"饮水记录",value:.object(["amount":.string(amount),"time":.string(NativeDates.timestamp(consumedAt))])) { value in amount = value["amount"].text; consumedAt = NativeDates.parse(value["time"].text) ?? .now }
         .task(id:revision) { await resource.load { try await session.api("nutrition/water",query:["date":NativeDates.day(session.selectedDate)]) } }
         .confirmationDialog("删除这条饮水记录？",isPresented:Binding(get:{!deleting.isNull},set:{if !$0 { deleting = .null }}),titleVisibility:.visible) {
             Button("删除",role:.destructive) { let id = deleting.id; Task { do { _ = try await session.api("nutrition/water/"+id,method:"DELETE"); revision += 1; await session.reload() } catch { resource.error = NativeSession.readable(error) } }; deleting = .null }
@@ -266,6 +274,7 @@ struct NativeNutritionTools: View {
                     draft = try await session.api("nutrition/entry-drafts:parse-text",method:"POST",body:["text":.string(text),"meal_type":.string(meal),"eaten_at":.string(NativeDates.timestamp(session.selectedDate)),"is_flexible_meal":.bool(false),"notes":.null],key:key)
                 }
                 if !draft.isNull {
+                    NativeBusinessSummary(value:.array(draft["items"].values))
                     NativeNutrientValues(value:draft["totals"])
                     ForEach(draft["questions"].strings,id:\.self) { Text($0).foregroundStyle(.orange) }
                     ForEach(draft["missing_items"].strings,id:\.self) { Text("待补充："+$0).foregroundStyle(.orange) }
@@ -298,6 +307,7 @@ struct NativeNutritionTools: View {
                 }
             }
         }.navigationTitle("饮食工具")
+            .nativeDraft("nutrition-tools",label:"文字饮食与工具",value:.object(["text":.string(text),"meal":.string(meal),"draft":draft,"advice":.string(adviceName),"flexible":.string(flexibleLabel)])) { v in text = v["text"].text; meal = v["meal"].text; draft = v["draft"]; adviceName = v["advice"].text; flexibleLabel = v["flexible"].text }
             .task(id:revision) {
                 await flexible.load { try await session.api("nutrition/flexible-meals") }
                 await recipes.load { try await session.api("recipes",query:["page":"1","page_size":"50"]) }

@@ -246,6 +246,16 @@ final class NativeSession: ObservableObject {
             throw NativeAPIError.message("已保存在本机，待联网同步；可在“离线记录与草稿”查看。请勿另建同一条记录。")
         }
         if local?.localOnly == true,method != "GET" { throw NativeAPIError.message("当前选择了仅保存在本机。这个操作需要联网，请先在离线记录页关闭该选项。") }
+        if method != "GET",path.hasPrefix("workouts/"),let local {
+            let pieces = path.split(separator:"/")
+            if pieces.count >= 3 {
+                let setsPath = "workouts/"+pieces[1]+"/sets"
+                if local.pending.contains(where:{$0["path"].text == setsPath}) {
+                    _ = await syncLocal()
+                    guard !local.pending.contains(where:{$0["path"].text == setsPath}) else { throw NativeAPIError.message("这次训练仍有待同步的组记录，请先同步并核对后再修改或结束训练。") }
+                }
+            }
+        }
         let owner = generation
         do {
             if local?.localOnly == true,method == "GET" { throw URLError(.notConnectedToInternet) }

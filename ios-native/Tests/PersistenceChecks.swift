@@ -45,7 +45,7 @@ enum PersistenceChecks {
         let restored = NativeLocalStore(directory:root,keyData:bytes)
         try restored.bind(server:"https://example.test/api/v1",userID:"account-a")
         precondition(restored.pending.count == 1 && restored.pending[0]["body"] == .object(body))
-        precondition(restored.draft("water")["value"]["amount"].text == "250")
+        precondition(restored.state["drafts"]["water"]["value"]["amount"].text == "250" && restored.draft("water").isNull)
         print("PASS: encrypted journal and drafts survive recreation")
         try restored.bind(server:"https://example.test/api/v1",userID:"account-b")
         precondition(restored.pending.isEmpty && restored.drafts.isEmpty)
@@ -53,6 +53,17 @@ enum PersistenceChecks {
         precondition(restored.pending.isEmpty)
         try restored.bind(server:"https://example.test/api/v1",userID:"account-a")
         print("PASS: account and server isolation preserve original queues")
+        let photo = Data(repeating:0x5b,count:2048)
+        try restored.saveImageDraft("photo",data:photo)
+        let recoveredPhoto = try restored.imageDraft("photo")
+        precondition(recoveredPhoto == photo && restored.state["drafts"]["photo"]["value"]["bytes"].isNull)
+        try restored.bind(server:"https://example.test/api/v1",userID:"account-b")
+        let otherPhoto = try restored.imageDraft("photo"); precondition(otherPhoto == nil)
+        try restored.bind(server:"https://example.test/api/v1",userID:"account-a")
+        let blobName = restored.state["drafts"]["photo"]["value"]["blob"].text
+        try restored.saveDraft("photo",label:"",value:.null)
+        precondition(!FileManager.default.fileExists(atPath:root.appendingPathComponent(blobName).path))
+        print("PASS: encrypted photo drafts stay isolated and are removed when discarded")
         var attempts: [(String,[String:NativeJSON],String)] = []
         _ = await restored.sync { path,payload,key in attempts.append((path,payload,key)); throw URLError(.networkConnectionLost) }
         precondition(restored.pending.count == 1 && !restored.pending[0]["first_attempt_at"].isNull)
