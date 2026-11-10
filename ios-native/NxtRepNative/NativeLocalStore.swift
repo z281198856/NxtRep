@@ -25,7 +25,7 @@ final class NativeLocalStore: ObservableObject {
         method == "POST" && (["nutrition/water","nutrition/entries","body/measurements"].contains(path) || path.range(of:#"^workouts/[0-9a-fA-F-]+/sets$"#,options:.regularExpression) != nil)
     }
     static func canCache(_ path:String) -> Bool {
-        ["me","profile","settings","workouts/active","calendar/events","training/plans/active","training/templates"].contains(path) || ["nutrition/","body/","progress/","foods/","workouts/"].contains(where:path.hasPrefix)
+        ["me","profile","settings","workouts/active","calendar/events","training/plans/active","training/templates","media/images/capabilities"].contains(path) || ["nutrition/","body/","progress/","foods/","workouts/"].contains(where:path.hasPrefix)
     }
     static func transient(_ error:Error) -> Bool {
         if let e = error as? URLError { return e.code != .cancelled }

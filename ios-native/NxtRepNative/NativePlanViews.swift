@@ -152,7 +152,7 @@ struct NativePlanDraftReview: View {
     }
 }
 
-private struct NativePlanExerciseDraft: Identifiable {
+private struct NativePlanExerciseDraft: Identifiable,Codable {
     let id = UUID()
     let exercise: NativeJSON
     var sets = 3
@@ -161,7 +161,7 @@ private struct NativePlanExerciseDraft: Identifiable {
     var rest = 90
     func json(order: Int) -> NativeJSON { .object(["exercise_id":exercise["id"],"order_no":.int(order),"target_sets":.int(sets),"rep_min":.int(repsMin),"rep_max":.int(repsMax),"target_load_kg":.null,"target_rir":.int(2),"rest_seconds":.int(rest)]) }
 }
-private struct NativePlanDayDraft: Identifiable {
+private struct NativePlanDayDraft: Identifiable,Codable {
     let id = UUID()
     var name = "训练日"
     var minutes = 45
@@ -236,10 +236,18 @@ struct NativePlanCreation: View {
                 if !draft.isNull { NativePlanDraftReview(initial:draft) }
             }.nativePage()
         }.navigationTitle("创建训练计划").navigationBarTitleDisplayMode(.inline)
+            .nativeDraft("plan-create",label:"训练计划创建",value:planSnapshot) { v in
+                mode = v["mode"].text; name = v["name"].text; text = v["text"].text; goal = v["goal"].text; frequency = v["frequency"].integer; equipment = v["equipment"].text; imageID = v["image"].text; draft = v["draft"]
+                if let restored = try? JSONDecoder().decode([NativePlanDayDraft].self,from:JSONEncoder().encode(v["days"])) { days = restored }
+            }
             .sheet(isPresented:$pickExercise) { NavigationStack { NativeExerciseLibrary(onSelect:{ exercise in
                 if let index = days.firstIndex(where:{$0.id == selectingDay}) { days[index].exercises.append(NativePlanExerciseDraft(exercise:exercise)) }
                 pickExercise = false
             }).toolbar { ToolbarItem(placement:.cancellationAction) { Button("完成") { pickExercise = false } } } }.environmentObject(session) }
+    }
+    private var planSnapshot:NativeJSON {
+        let storedDays = (try? JSONDecoder().decode(NativeJSON.self,from:JSONEncoder().encode(days))) ?? .null
+        return .object(["mode":.string(mode),"name":.string(name),"text":.string(text),"days":storedDays,"goal":.string(goal),"frequency":.int(frequency),"equipment":.string(equipment),"image":.string(imageID),"draft":draft])
     }
 }
 

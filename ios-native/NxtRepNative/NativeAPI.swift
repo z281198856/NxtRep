@@ -245,6 +245,7 @@ final class NativeSession: ObservableObject {
             if let result = results[requestKey] { return result }
             throw NativeAPIError.message("已保存在本机，待联网同步；可在“离线记录与草稿”查看。请勿另建同一条记录。")
         }
+        if local?.localOnly == true,method != "GET" { throw NativeAPIError.message("当前选择了仅保存在本机。这个操作需要联网，请先在离线记录页关闭该选项。") }
         let owner = generation
         do {
             if local?.localOnly == true,method == "GET" { throw URLError(.notConnectedToInternet) }
@@ -266,6 +267,7 @@ final class NativeSession: ObservableObject {
     }
 
     func streamConversation(_ id:String,body:[String:NativeJSON],onEvent:(String,NativeJSON) async throws -> Void) async throws {
+        guard local?.localOnly != true else { throw NativeAPIError.message("AI 处理需要联网，请先关闭仅保存在本机。") }
         if accessToken == nil { _ = try await refresh() }
         let owner = generation
         for attempt in 0...1 {

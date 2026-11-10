@@ -36,7 +36,7 @@ struct NativeWorkoutHistory: View {
                     NavigationLink { NativeWorkoutScreen(workoutID:item.id) } label: {
                         NativeCard {
                             Text(item["date"].text+" · "+NativeLabels.status(item["status"].text)).font(.headline)
-                            Text("\(item["completed_sets"].text) 组 · 总训练量 \(item["total_volume_kg"].text) kg · \(item["pr_count"].text) 个个人纪录").font(.caption).foregroundStyle(NativeTheme.muted)
+                            Text("\(item["completed_sets"].text) 组 · 总训练量 \(session.weightText(item["total_volume_kg"].double)) · \(item["pr_count"].text) 个个人纪录").font(.caption).foregroundStyle(NativeTheme.muted)
                         }
                     }.buttonStyle(.plain)
                 }
@@ -164,7 +164,7 @@ private struct NativeWorkoutExerciseCard: View {
             ForEach(exercise["sets"].values.filter {$0["voided_at"].isNull},id:\.id) { set in
                 HStack {
                     VStack(alignment:.leading,spacing:4) {
-                        Text("第 \(set["set_index"].text) 组 · \(set["weight_kg"].text) kg × \(set["reps"].text) 次").monospacedDigit()
+                        Text("第 \(set["set_index"].text) 组 · \(session.weightText(set["weight_kg"].double)) × \(set["reps"].text) 次").monospacedDigit()
                         if !set["rir"].isNull || !set["rpe"].isNull { Text("RIR \(set["rir"].text) · RPE \(set["rpe"].text)").font(.caption).foregroundStyle(NativeTheme.muted) }
                     }
                     Spacer()

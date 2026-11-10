@@ -58,6 +58,7 @@ struct NativeImageSelector: View {
     @State private var uploading = false
     @State private var error: String?
     @State private var camera = false
+    @State private var uploaded = false
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
             HStack {
@@ -74,21 +75,30 @@ struct NativeImageSelector: View {
             if uploading { ProgressView("正在处理并上传图片…") }
             NativeErrorText(message:error)
             if let preview, let image = UIImage(data:preview) { Image(uiImage:image).resizable().scaledToFit().frame(maxHeight:240).clipShape(RoundedRectangle(cornerRadius:14)) }
+            if let preview,!uploading,!uploaded { Button("重试上传保留的照片") { Task { await upload(preview) } }.buttonStyle(.bordered) }
         }
         .onChange(of:selection) { _, item in
             guard let item else { return }
             Task { do { guard let data = try await item.loadTransferable(type:Data.self) else { throw NativeAPIError.message("图片内容无法读取。") }; await upload(data) } catch { self.error = NativeSession.readable(error) } }
         }
         .sheet(isPresented:$camera) { NativeCameraPicker { data in camera = false; if let data { Task { await upload(data) } } } }
+        .task { let saved = session.local?.draft("image-source-"+purpose)["value"]["bytes"].text ?? ""; if preview == nil,!saved.isEmpty { preview = Data(base64Encoded:saved) } }
     }
     @MainActor private func upload(_ source: Data) async {
         guard !uploading else { return }
-        uploading = true; error = nil; onUploaded("")
+        uploading = true; error = nil; uploaded = false; preview = source; onUploaded("")
+        let owner = session.local?.scope
         defer { uploading = false }
         do {
+            let localLimits:NativeJSON = .object(["accepted_content_types":.strings(["image/jpeg"]),"max_dimension":.int(2048),"max_pixels":.int(4_194_304),"max_bytes":.int(5_500_000)])
+            let backup = try await Task.detached { try NativeMediaTransfer.jpeg(source,capabilities:localLimits) }.value
+            preview = backup
+            try session.local?.saveDraft("image-source-"+purpose,label:"待上传照片",value:.object(["bytes":.string(backup.base64EncodedString())]))
             let capabilities = try await session.api("media/images/capabilities")
-            let data = try await Task.detached { try NativeMediaTransfer.jpeg(source,capabilities:capabilities) }.value
+            let data = try await Task.detached { try NativeMediaTransfer.jpeg(backup,capabilities:capabilities) }.value
             preview = data
+            try session.local?.saveDraft("image-source-"+purpose,label:"待上传照片",value:.object(["bytes":.string(data.base64EncodedString())]))
+            guard owner == session.local?.scope else { throw CancellationError() }
             let intent = try await session.api("media/images/upload-intents",method:"POST",body:["purpose":.string(purpose),"content_type":.string("image/jpeg"),"content_length":.int(data.count)])
             guard let url = URL(string:intent["upload_url"].text), url.scheme == "https", intent["method"].text == "PUT" else { throw NativeAPIError.message("上传地址不受支持，请稍后重试。") }
             var request = URLRequest(url:url); request.httpMethod = "PUT"
@@ -97,6 +107,8 @@ struct NativeImageSelector: View {
             _ = try await NativeMediaTransfer.perform(request,upload:data)
             let completed = try await session.api("media/images/"+intent["asset_id"].text+"/complete",method:"POST",body:["expected_content_type":.string("image/jpeg"),"expected_content_length":.int(data.count)])
             guard completed["status"].text == "ready" else { throw NativeAPIError.message("图片还未就绪，请重新上传。") }
+            guard owner == session.local?.scope else { throw CancellationError() }
+            try session.local?.saveDraft("image-source-"+purpose,label:"",value:.null); uploaded = true
             onUploaded(intent["asset_id"].text)
         } catch { self.error = NativeSession.readable(error) }
     }
@@ -158,6 +170,8 @@ private struct NativePhotoFood: Identifiable {
         kcal = nutrition["kcal"].text; protein = nutrition["protein_g"].text; carbs = nutrition["carbs_g"].text; fat = nutrition["fat_g"].text
         assumptions = item["assumptions"].strings + item["follow_up_questions"].strings
     }
+    init(saved:NativeJSON) { name = saved["name"].text; amount = saved["amount"].text; kcal = saved["kcal"].text; protein = saved["protein"].text; carbs = saved["carbs"].text; fat = saved["fat"].text; assumptions = saved["assumptions"].strings }
+    var snapshot:NativeJSON { .object(["name":.string(name),"amount":.string(amount),"kcal":.string(kcal),"protein":.string(protein),"carbs":.string(carbs),"fat":.string(fat),"assumptions":.strings(assumptions)]) }
     func record() throws -> NativeJSON {
         guard !name.isEmpty, let grams = Double(amount), grams > 0, let k = Double(kcal), let p = Double(protein), let c = Double(carbs), let f = Double(fat), [k,p,c,f].allSatisfy({$0 >= 0}) else { throw NativeAPIError.message("请核对每项食物的名称、份量和营养数值。") }
         return .object(["food_version_id":.null,"name":.string(name),"amount_g":.number(grams),"basis_amount_g":.number(grams),"kcal":.number(k),"protein_g":.number(p),"carbs_g":.number(c),"fat_g":.number(f),"source":.string("model_estimated"),"confidence":.string("low")])
@@ -201,16 +215,18 @@ struct NativeNutritionPhotoView: View {
                     Toggle("我已核对食物、份量和对应营养数值",isOn:$checked)
                     NativeActionButton(title:"确认保存饮食记录") { key in
                         guard checked, !foods.isEmpty else { throw NativeAPIError.message("请先逐项核对估算结果。") }
-                        _ = try await session.api("nutrition/entries",method:"POST",body:["meal_type":.string(meal),"eaten_at":.string(NativeDates.timestamp(eatenAt)),"items":.array(try foods.map { try $0.record() }),"is_flexible_meal":.bool(false),"notes":.string("AI 照片估算，经用户核对；图片 ID："+assetID)],key:key)
+                        _ = try await session.api("nutrition/entries",method:"POST",body:["meal_type":.string(meal),"eaten_at":.string(NativeDates.timestamp(eatenAt)),"items":.array(try foods.map { try $0.record() }),"is_flexible_meal":.bool(false),"notes":.string("AI 照片估算，经用户核对；图片 ID："+assetID)],key:key,draftKey:"nutrition-photo")
                         saved = true; await session.reload()
                     }.disabled(!checked || saved)
                     if saved { Label("这餐已保存",systemImage:"checkmark.circle.fill").foregroundStyle(.green) }
                 }
             }.nativePage()
         }.navigationTitle("拍照记一餐").onAppear { eatenAt = session.selectedDate }
+            .nativeDraft("nutrition-photo",label:"拍照饮食核对",value:photoSnapshot) { v in assetID = v["image"].text; meal = v["meal"].text; eatenAt = NativeDates.parse(v["time"].text) ?? .now; notes = v["notes"].text; draft = v["draft"]; foods = v["foods"].values.map { NativePhotoFood(saved:$0) }; checked = false; saved = false }
             .onChange(of:foodFingerprint) { _,_ in checked = false; saved = false }
     }
     private var recognitionNotes: [String] { draft["recognition"]["assumptions"].strings + draft["recognition"]["follow_up_questions"].strings }
+    private var photoSnapshot:NativeJSON { .object(["image":.string(assetID),"meal":.string(meal),"time":.string(NativeDates.timestamp(eatenAt)),"notes":.string(notes),"draft":draft,"foods":.array(foods.map(\.snapshot))]) }
     private var foodFingerprint: String { foods.map { [$0.name,$0.amount,$0.kcal,$0.protein,$0.carbs,$0.fat].joined(separator:"|") }.joined(separator:";") }
 }
 

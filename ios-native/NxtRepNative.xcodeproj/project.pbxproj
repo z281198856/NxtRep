@@ -33,6 +33,7 @@
 		0BD0A263909E3CFCC56F1A28 /* NativeProfileViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78DB4017DF889CF09C199A2F /* NativeProfileViews.swift */; };
 		D9738C84706A9796E8772D8D /* NativeProgressViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D295A0ED2BB7A8C4CFE0F12 /* NativeProgressViews.swift */; };
 		6EDED2F29ECAB2EF3CD01F35 /* NativeReminders.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBBE536BA3821621D278D392 /* NativeReminders.swift */; };
+		66F1DA1987D3D476D61DEC4C /* NativeReminderModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DCD1783DC24AF40374EBEA9 /* NativeReminderModels.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -65,6 +66,7 @@
 		78DB4017DF889CF09C199A2F /* NativeProfileViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeProfileViews.swift; sourceTree = "<group>"; };
 		7D295A0ED2BB7A8C4CFE0F12 /* NativeProgressViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeProgressViews.swift; sourceTree = "<group>"; };
 		FBBE536BA3821621D278D392 /* NativeReminders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeReminders.swift; sourceTree = "<group>"; };
+		2DCD1783DC24AF40374EBEA9 /* NativeReminderModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeReminderModels.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -95,6 +97,7 @@
 				F4E461FD2BFB000200000005 /* FeatureViews.swift */,
 				F4E461FD2BFB000200000006 /* WorkoutView.swift */,
 				F4E461FD2BFB000200000008 /* Assets.xcassets */,
+				2DCD1783DC24AF40374EBEA9 /* NativeReminderModels.swift */,
 				FBBE536BA3821621D278D392 /* NativeReminders.swift */,
 				7D295A0ED2BB7A8C4CFE0F12 /* NativeProgressViews.swift */,
 				78DB4017DF889CF09C199A2F /* NativeProfileViews.swift */,
@@ -195,6 +198,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F4E461FD2BFB000100000001 /* NxtRepNativeApp.swift in Sources */,
+				66F1DA1987D3D476D61DEC4C /* NativeReminderModels.swift in Sources */,
 				6EDED2F29ECAB2EF3CD01F35 /* NativeReminders.swift in Sources */,
 				D9738C84706A9796E8772D8D /* NativeProgressViews.swift in Sources */,
 				0BD0A263909E3CFCC56F1A28 /* NativeProfileViews.swift in Sources */,

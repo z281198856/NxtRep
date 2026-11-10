@@ -94,8 +94,8 @@ struct NativeDayPicker: View {
 }
 
 enum NativeLabels {
-    static let muscles = ["chest":"胸部", "upper_back":"上背", "lats":"背阔肌", "back":"背部", "shoulders":"肩部", "front_delts":"三角肌前束", "side_delts":"三角肌中束", "rear_delts":"三角肌后束", "biceps":"肱二头肌", "triceps":"肱三头肌", "forearms":"前臂", "quads":"股四头肌", "quadriceps":"股四头肌", "hamstrings":"腘绳肌", "glutes":"臀肌", "calves":"小腿", "abs":"腹肌", "core":"核心", "obliques":"腹斜肌", "lower_back":"下背", "adductors":"内收肌", "abductors":"外展肌"]
-    static let equipment = ["barbell":"杠铃", "dumbbell":"哑铃", "cable":"绳索", "machine":"器械", "smith_machine":"史密斯机", "bodyweight":"自重", "kettlebell":"壶铃", "resistance_band":"弹力带", "other":"其他"]
+    static let muscles = ["chest":"胸部", "upper_back":"上背", "lats":"背阔肌", "back":"背部", "shoulders":"肩部", "front_delts":"三角肌前束", "side_delts":"三角肌中束", "rear_delts":"三角肌后束", "biceps":"肱二头肌", "triceps":"肱三头肌", "forearms":"前臂", "quads":"股四头肌", "quadriceps":"股四头肌", "hamstrings":"腘绳肌", "glutes":"臀肌", "gluteus":"臀肌", "trapezius":"斜方肌", "hip_flexors":"髋屈肌", "calves":"小腿", "abs":"腹肌", "core":"核心", "obliques":"腹斜肌", "lower_back":"下背", "adductors":"内收肌", "abductors":"外展肌"]
+    static let equipment = ["barbell":"杠铃", "dumbbell":"哑铃", "cable":"绳索", "machine":"器械", "smith_machine":"史密斯机", "bodyweight":"自重", "kettlebell":"壶铃", "resistance_band":"弹力带", "band":"弹力带", "other":"其他"]
     static let meals = ["breakfast":"早餐", "lunch":"午餐", "dinner":"晚餐", "snack":"加餐", "other":"其他"]
     static let statuses = ["active":"进行中", "paused":"已暂停", "completed":"已完成", "abandoned":"已放弃", "planned":"待训练", "pending":"待确认", "approved":"已确认", "rejected":"已拒绝", "succeeded":"已执行", "failed":"未完成", "expired":"已过期", "archived":"已归档", "draft":"草稿"]
     static func muscle(_ value: String) -> String { muscles[value] ?? value }

@@ -77,8 +77,10 @@ workflows:
           swiftc -parse-as-library -swift-version 5 -target "$(uname -m)-apple-macosx14.0" \
             "$CM_BUILD_DIR/ios-native/NxtRepNative/NativeJSON.swift" \
             "$CM_BUILD_DIR/ios-native/NxtRepNative/NativeLocalStore.swift" \
+            "$CM_BUILD_DIR/ios-native/NxtRepNative/NativeReminderModels.swift" \
             "$CM_BUILD_DIR/ios-native/NxtRepNative/NativeAPI.swift" \
             "$CM_BUILD_DIR/ios-native/Tests/APIContractChecks.swift" \
+            "$CM_BUILD_DIR/ios-native/Tests/PersistenceChecks.swift" \
             -o "$output_dir/api-contract-checks"
           "$output_dir/api-contract-checks" | tee "$output_dir/api-contract-checks.log"
       - name: Validate app icon source

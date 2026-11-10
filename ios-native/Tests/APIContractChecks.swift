@@ -131,5 +131,6 @@ private enum APIContractChecks {
         precondition(writes.count == 2 && !writes[0].0.isEmpty)
         precondition(writes[0].0 == writes[1].0 && writes[0].1 == writes[1].1)
         print("PASS: uncertain water response retries with identical key and timestamp")
+        try await PersistenceChecks.run()
     }
 }

@@ -9,6 +9,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import argparse
+import itertools
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "frontend/lib/features/exercises/presentation/widgets/anatomy_motion_illustration.dart"
@@ -16,6 +18,9 @@ DESTINATION = ROOT / "ios-native/NxtRepNative/FlutterMotionData.json"
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--check",action="store_true")
+    args = parser.parse_args()
     text = SOURCE.read_text(encoding="utf-8")
     enum = text[text.index("enum ExerciseMotionKind"):text.index("ExerciseMotionKind exerciseMotionKind")]
     equations = text[text.index("class _Pose {"):]
@@ -48,7 +53,12 @@ Map<String,dynamic> encodePose(_Pose p) => {
   'leftKnee':point(p.leftKnee),'rightKnee':point(p.rightKnee),
   'leftAnkle':point(p.leftAnkle),'rightAnkle':point(p.rightAnkle),
 };
-void main() {
+void main(List<String> args) {
+  if (args.isNotEmpty) {
+    final names = jsonDecode(args[0]) as List;
+    print(jsonEncode([for (final name in names) exerciseMotionKind(name as String, null).name]));
+    return;
+  }
   final result = <String,dynamic>{};
   for (final kind in ExerciseMotionKind.values) {
     result[kind.name] = {
@@ -73,17 +83,37 @@ void main() {
             dart = str(binary)
     with tempfile.TemporaryDirectory(prefix="nxtrep-motion-") as directory:
         program = Path(directory) / "export.dart"
-        program.write_text(stub + enum + equations + exporter, encoding="utf-8")
+        program.write_text(stub + enum + classifier + equations + exporter, encoding="utf-8")
         result = subprocess.run([dart, str(program)], capture_output=True, text=True, encoding="utf-8")
         if result.returncode:
             raise SystemExit(result.stderr)
         motions = json.loads(result.stdout)
+        # Exercise ordered AND/OR matches against the actual Dart classifier, not a second guessed implementation.
+        names = ["unknown exercise"]
+        for rule in rules:
+            for group in rule["groups"]:
+                names.extend(" ".join(parts) for parts in itertools.product(*group))
+        names += ["反向飞鸟 hinge", "坐姿提踵 calf_raise", "单臂绳索侧平举", "上斜哑铃卧推", "坐姿髋外展"]
+        cases = list(dict.fromkeys(names))
+        # File transport avoids Windows command-line length limits for the generated corpus.
+        answers = []
+        for offset in range(0,len(cases),80):
+            checked = subprocess.run([dart,str(program),json.dumps(cases[offset:offset+80],ensure_ascii=False)],capture_output=True,text=True,encoding="utf-8",check=True)
+            answers.extend(json.loads(checked.stdout))
+        for name,expected in zip(cases,answers,strict=True):
+            value = (name+" ").lower()
+            actual = next((r["kind"] for r in rules if any(all(any(term in value for term in terms) for terms in group) for group in r["groups"])),"generic")
+            assert actual == expected,(name,actual,expected)
     for motion in motions.values():
         for frames in motion["poses"].values():
             assert len(frames) == 31
             assert all(len(frame) == 14 for frame in frames)
     data = {"source_sha256": hashlib.sha256(text.encode()).hexdigest(), "rules": rules, "motions": motions}
-    DESTINATION.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+    if args.check:
+        assert json.loads(DESTINATION.read_text(encoding="utf-8")) == data,"Motion asset is stale; regenerate with the Flutter source"
+    else:
+        DESTINATION.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+    print(f"PASS: {len(cases)} classifier cases match Dart; all 41 motion frame sets match original equations")
     print(f"Exported {len(motions)} original motion kinds, {len(rules)} ordered classification rules, {DESTINATION.stat().st_size} bytes")
 
 

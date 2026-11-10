@@ -61,7 +61,7 @@ private struct NativeChatAttachment: View {
     @Environment(\.dismiss) private var dismiss
     let select:(String)->Void
     init(onSelect:@escaping (String)->Void) { select = onSelect }
-    var body: some View { VStack { NativeImageSelector(purpose:"chat_attachment") { select($0); dismiss() }; Spacer() }.padding().navigationTitle("添加照片") }
+    var body: some View { VStack { NativeImageSelector(purpose:"chat_attachment") { if !$0.isEmpty { select($0); dismiss() } }; Spacer() }.padding().navigationTitle("添加照片") }
 }
 
 private struct NativeChatMessage: View {

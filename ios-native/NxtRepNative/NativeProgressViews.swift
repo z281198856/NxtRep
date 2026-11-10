@@ -229,9 +229,11 @@ private struct NativeBodyPhotoCreate: View {
             NativeActionButton(title:"保存进展照片") { key in
                 guard !assetID.isEmpty else { throw NativeAPIError.message("请先选择并上传照片。") }
                 _ = try await session.api("body/progress-photos",method:"POST",body:["image_asset_id":.string(assetID),"captured_at":.string(NativeDates.timestamp(date)),"view":.string(view),"notes":notes.isEmpty ? .null : .string(notes),"assessment":.null],key:key)
+                try session.local?.saveDraft("body-photo",label:"",value:.null)
                 onSave(); dismiss()
             }
         }.nativePage() }.navigationTitle("添加进展照片")
+            .nativeDraft("body-photo",label:"身体进展照片",value:.object(["asset":.string(assetID),"time":.string(NativeDates.timestamp(date)),"view":.string(view),"notes":.string(notes)])) { v in assetID = v["asset"].text; date = NativeDates.parse(v["time"].text) ?? .now; view = v["view"].text; notes = v["notes"].text }
     }
 }
 
@@ -278,6 +280,8 @@ struct NativeReportDetail: View {
                 if !report["facts"]["body"]["smoothed_change_kg"].isNull { LabeledContent("体重平滑变化",value:report["facts"]["body"]["smoothed_change_kg"].text+" kg") }
             }
             NativeCard { Text("建议").font(.headline); ForEach(report["recommendations"].strings,id:\.self) { Text("• "+$0) } }
+            if !report["facts"]["nutrition"].isNull { NativeCard { Text("饮食事实").font(.headline); NativeBusinessSummary(value:report["facts"]["nutrition"]) } }
+            if !report["evidence"].isNull { NativeCard { Text("报告依据").font(.headline); NativeBusinessSummary(value:report["evidence"]) } }
             if !report["missing_data"].values.isEmpty { NativeCard { Text("数据局限").font(.headline); ForEach(report["missing_data"].strings,id:\.self) { Text($0).foregroundStyle(NativeTheme.muted) } } }
         }.nativePage() }.navigationTitle("阶段报告")
     }

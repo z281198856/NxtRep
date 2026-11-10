@@ -265,7 +265,7 @@ struct NativeExerciseDetail: View {
                         ForEach(Array(history.enumerated()), id: \.offset) { _, entry in
                             Text(NativeDates.display(entry["started_at"].text)).font(.subheadline.weight(.semibold))
                             ForEach(Array(entry["sets"].values.enumerated()), id:\.offset) { _, set in
-                                Text("第 \(set["set_index"].integer) 组 · \(set["weight_kg"].text) kg × \(set["reps"].text) 次").font(.caption)
+                                Text("第 \(set["set_index"].integer) 组 · \(session.weightText(set["weight_kg"].double)) × \(set["reps"].text) 次").font(.caption)
                             }
                         }
                     }
