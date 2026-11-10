@@ -194,18 +194,9 @@ struct NativeNutritionPhotoView: View {
                 }
                 if !draft.isNull {
                     Text("照片估算需核对，不能作为精确测量。").font(.subheadline).foregroundStyle(.orange)
-                    ForEach(draft["recognition"]["assumptions"].strings + draft["recognition"]["follow_up_questions"].strings,id:\.self) { Text($0).font(.caption).foregroundStyle(NativeTheme.muted) }
+                    ForEach(recognitionNotes,id:\.self) { Text($0).font(.caption).foregroundStyle(NativeTheme.muted) }
                     ForEach($foods) { $food in
-                        NativeCard {
-                            NativeField(title:"食品名称",text:$food.name)
-                            NativeField(title:"份量（克）",text:$food.amount,keyboard:.decimalPad)
-                            NativeField(title:"该份量热量（千卡）",text:$food.kcal,keyboard:.decimalPad)
-                            NativeField(title:"蛋白质（克）",text:$food.protein,keyboard:.decimalPad)
-                            NativeField(title:"碳水（克）",text:$food.carbs,keyboard:.decimalPad)
-                            NativeField(title:"脂肪（克）",text:$food.fat,keyboard:.decimalPad)
-                            ForEach(food.assumptions,id:\.self) { Text($0).font(.caption).foregroundStyle(NativeTheme.muted) }
-                            Button("移除此项",role:.destructive) { foods.removeAll {$0.id == food.id}; checked = false }
-                        }
+                        NativePhotoFoodEditor(food:$food) { foods.removeAll {$0.id == food.id}; checked = false }
                     }
                     Toggle("我已核对食物、份量和对应营养数值",isOn:$checked)
                     NativeActionButton(title:"确认保存饮食记录") { key in
@@ -217,6 +208,25 @@ struct NativeNutritionPhotoView: View {
                 }
             }.nativePage()
         }.navigationTitle("拍照记一餐").onAppear { eatenAt = session.selectedDate }
-            .onChange(of:foods.map { $0.name+"|"+$0.amount+"|"+$0.kcal+"|"+$0.protein+"|"+$0.carbs+"|"+$0.fat }.joined(separator:";")) { _,_ in checked = false; saved = false }
+            .onChange(of:foodFingerprint) { _,_ in checked = false; saved = false }
+    }
+    private var recognitionNotes: [String] { draft["recognition"]["assumptions"].strings + draft["recognition"]["follow_up_questions"].strings }
+    private var foodFingerprint: String { foods.map { [$0.name,$0.amount,$0.kcal,$0.protein,$0.carbs,$0.fat].joined(separator:"|") }.joined(separator:";") }
+}
+
+private struct NativePhotoFoodEditor: View {
+    @Binding var food: NativePhotoFood
+    let remove: () -> Void
+    var body: some View {
+        NativeCard {
+            NativeField(title:"食品名称",text:$food.name)
+            NativeField(title:"份量（克）",text:$food.amount,keyboard:.decimalPad)
+            NativeField(title:"该份量热量（千卡）",text:$food.kcal,keyboard:.decimalPad)
+            NativeField(title:"蛋白质（克）",text:$food.protein,keyboard:.decimalPad)
+            NativeField(title:"碳水（克）",text:$food.carbs,keyboard:.decimalPad)
+            NativeField(title:"脂肪（克）",text:$food.fat,keyboard:.decimalPad)
+            ForEach(food.assumptions,id:\.self) { Text($0).font(.caption).foregroundStyle(NativeTheme.muted) }
+            Button("移除此项",role:.destructive,action:remove)
+        }
     }
 }

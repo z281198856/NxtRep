@@ -141,6 +141,9 @@ final class NativeSession: ObservableObject {
     @Published private(set) var savingWater = false
     @Published var error: String?
     @Published var selectedDate = Date()
+    @Published private(set) var settings: NativeJSON = .null
+    @Published private(set) var accountLoaded = false
+    @Published private(set) var profileInitialized = false
     @Published var waterMessage: String?
     @Published private(set) var restoring = true
     @Published var serverText = UserDefaults.standard.string(forKey: "native-api-server") ?? "http://172.20.10.10:8000/api/v1"
@@ -149,6 +152,7 @@ final class NativeSession: ObservableObject {
     private var accessToken: String?
     private var refreshToken: String?
     private var refreshTask: Task<NativeTokens, Error>?
+    private var passwordTask: Task<NativeTokens, Error>?
     private var generation = UUID()
     private var latestRead = UUID()
     // An uncertain write keeps its exact payload and key, so a manual retry cannot duplicate it.
@@ -158,11 +162,14 @@ final class NativeSession: ObservableObject {
     private let saveSession: (SavedNativeSession) throws -> Void
     private let loadSession: () -> SavedNativeSession?
     private let clearSessionStore: () -> Void
+    let local: NativeLocalStore?
 
     init(transport: URLSession? = nil,
          saveSession: @escaping (SavedNativeSession) throws -> Void = SessionKeychain.save,
          loadSession: @escaping () -> SavedNativeSession? = SessionKeychain.load,
-         clearSessionStore: @escaping () -> Void = SessionKeychain.clear) {
+         clearSessionStore: @escaping () -> Void = SessionKeychain.clear,
+         local: NativeLocalStore? = nil) {
+        self.local = local
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 300
@@ -175,14 +182,104 @@ final class NativeSession: ObservableObject {
 
     var signedIn: Bool { user != nil }
     var hasPendingWater: Bool { pendingWater != nil }
+    var imperial: Bool { settings["unit_system"].text == "imperial" }
+    var weightUnit: String { imperial ? "lb" : "kg" }
+    var lengthUnit: String { imperial ? "in" : "cm" }
+    func displayWeight(_ kg:Double) -> Double { imperial ? kg*2.2046226218 : kg }
+    func displayLength(_ cm:Double) -> Double { imperial ? cm/2.54 : cm }
+    func toKG(_ value:Double) -> Double { ((imperial ? value/2.2046226218 : value)*1000).rounded()/1000 }
+    func toCM(_ value:Double) -> Double { ((imperial ? value*2.54 : value)*100).rounded()/100 }
+    func weightText(_ kg:Double) -> String { displayWeight(kg).formatted(.number.precision(.fractionLength(0...2)))+" "+weightUnit }
+    func lengthText(_ cm:Double) -> String { displayLength(cm).formatted(.number.precision(.fractionLength(0...2)))+" "+lengthUnit }
+    func loadSettings() async throws { settings = try await api("settings") }
+    func applySettings(_ value:NativeJSON) { settings = value }
+    func loadAccountAndSettings() async throws {
+        let account = try await api("me")
+        try await loadSettings()
+        profileInitialized = account["profile_initialized"].flag
+        accountLoaded = true
+    }
+    func setupPassword(username:String,setupToken:String,password:String) async throws {
+        baseURL = try Self.validatedURL(serverText)
+        let body = try JSONSerialization.data(withJSONObject:["username":username,"setup_token":setupToken,"new_password":password])
+        let pair: NativeTokens = try await send("auth/password/setup",method:"POST",body:body)
+        try accept(pair)
+        UserDefaults.standard.set(serverText,forKey:"native-api-server")
+        try await loadAccountAndSettings(); await reload()
+    }
+    func changePassword(current:String,new:String) async throws {
+        guard passwordTask == nil else { throw NativeAPIError.message("密码修改正在处理，请稍候。") }
+        _ = try await refresh()
+        let task = Task { () throws -> NativeTokens in
+            let body = try JSONSerialization.data(withJSONObject:["current_password":current,"new_password":new,"device_name":"NxtRep iPhone"])
+            let pair: NativeTokens = try await send("auth/password/change",method:"POST",body:body,token:accessToken)
+            try accept(pair)
+            return pair
+        }
+        passwordTask = task
+        defer { passwordTask = nil }
+        do { _ = try await task.value }
+        catch {
+            if error is URLError { clearSession(); throw NativeAPIError.message("密码修改结果尚未确认，请使用新密码重新登录核对，避免重复修改。") }
+            throw error
+        }
+    }
 
-    func api(_ path: String, method: String = "GET", query: [String: String] = [:], body: [String: NativeJSON]? = nil, key: String? = nil) async throws -> NativeJSON {
+    func api(_ path: String, method: String = "GET", query: [String: String] = [:], body: [String: NativeJSON]? = nil, key: String? = nil, draftKey:String? = nil) async throws -> NativeJSON {
         var components = URLComponents()
         components.path = path.hasPrefix("/") ? path : "/" + path
         if !query.isEmpty { components.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) } }
         let resource = String((components.string ?? path).drop(while: { $0 == "/" }))
         let data = try body.map { try JSONEncoder().encode($0) }
-        return try await authorized(resource, method: method, body: data, key: key ?? (method == "POST" ? UUID().uuidString : nil))
+        let requestKey = key ?? (method == "POST" ? UUID().uuidString : nil)
+        if let local, NativeLocalStore.canRecord(path,method:method),let body,let requestKey {
+            if let receipt = try local.enqueue(path:path,body:body,key:requestKey,draftKey:draftKey) { return receipt }
+            let results = await syncLocal()
+            if let result = results[requestKey] { return result }
+            throw NativeAPIError.message("已保存在本机，待联网同步；可在“离线记录与草稿”查看。请勿另建同一条记录。")
+        }
+        let owner = generation
+        do {
+            if local?.localOnly == true,method == "GET" { throw URLError(.notConnectedToInternet) }
+            let result: NativeJSON = try await authorized(resource, method: method, body: data, key:requestKey)
+            guard owner == generation else { throw CancellationError() }
+            if method == "GET",NativeLocalStore.canCache(path) { local?.cache(resource,value:result) }
+            return local?.project(path,result) ?? result
+        } catch {
+            if method == "GET",owner == generation,NativeLocalStore.transient(error),let cached = local?.cached(resource) { return cached }
+            throw error
+        }
+    }
+
+    @discardableResult func syncLocal() async -> [String:NativeJSON] {
+        guard let local,signedIn else { return [:] }
+        return await local.sync { path,body,key in
+            try await self.authorized(path,method:"POST",body:JSONEncoder().encode(body),key:key)
+        }
+    }
+
+    func streamConversation(_ id:String,body:[String:NativeJSON],onEvent:(String,NativeJSON) async throws -> Void) async throws {
+        if accessToken == nil { _ = try await refresh() }
+        let owner = generation
+        for attempt in 0...1 {
+            guard let baseURL,let url = URL(string:baseURL.absoluteString.trimmingCharacters(in:CharacterSet(charactersIn:"/"))+"/agent/conversations/"+id+"/messages?granularity=chunk") else { throw NativeAPIError.message("请先连接服务器。") }
+            let sentToken = accessToken
+            var request = URLRequest(url:url); request.httpMethod = "POST"; request.httpBody = try JSONEncoder().encode(body)
+            request.timeoutInterval = 90; request.setValue("application/json",forHTTPHeaderField:"Content-Type"); request.setValue("text/event-stream",forHTTPHeaderField:"Accept")
+            request.setValue("Bearer "+(sentToken ?? ""),forHTTPHeaderField:"Authorization")
+            let (bytes,response) = try await transport.bytes(for:request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            if http.statusCode == 401,attempt == 0 { if accessToken == sentToken { _ = try await refresh() }; continue }
+            guard (200..<300).contains(http.statusCode),http.value(forHTTPHeaderField:"Content-Type")?.contains("text/event-stream") == true else { throw NativeAPIError.response(http.statusCode,"AI_STREAM_UNAVAILABLE") }
+            var parser = NativeSSEParser()
+            for try await line in bytes.lines {
+                try Task.checkCancellation()
+                guard owner == generation else { throw CancellationError() }
+                if let event = try parser.push(line) { try await onEvent(event.0,event.1) }
+            }
+            if let event = try parser.finish() { try await onEvent(event.0,event.1) }
+            return
+        }
     }
 
     func allPages(_ path: String, query: [String: String] = [:], limit: Int = 100) async throws -> [NativeJSON] {
@@ -233,9 +330,11 @@ final class NativeSession: ObservableObject {
             baseURL = try Self.validatedURL(saved.server)
             serverText = saved.server
             refreshToken = saved.refreshToken
+            try local?.bind(server:saved.server,userID:saved.user.id)
             user = saved.user
             _ = try await refresh()
             await reload()
+            try await loadAccountAndSettings()
         } catch {
             self.error = Self.readable(error)
             // Keep the saved refresh credential on transport failure, allowing a later retry.
@@ -260,7 +359,7 @@ final class NativeSession: ObservableObject {
             try accept(tokens)
             UserDefaults.standard.set(serverText, forKey: "native-api-server")
         } catch { self.error = Self.readable(error) }
-        if signedIn { await reload() }
+        if signedIn { await reload(); do { try await loadAccountAndSettings() } catch { self.error = Self.readable(error) } }
     }
 
     func reload() async {
@@ -270,8 +369,11 @@ final class NativeSession: ObservableObject {
         latestRead = readID
         do {
             let day = NativeDates.day(selectedDate)
-            let nextSummary: DailySummary = try await authorized("nutrition/daily-summary?date=\(day)")
-            let nextWater: [WaterRecord] = try await authorized("nutrition/water?date=\(day)")
+            let summaryValue = try await api("nutrition/daily-summary",query:["date":day])
+            let waterValue = try await api("nutrition/water",query:["date":day])
+            let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let nextSummary = try decoder.decode(DailySummary.self,from:JSONEncoder().encode(summaryValue))
+            let nextWater = try decoder.decode([WaterRecord].self,from:JSONEncoder().encode(waterValue))
             guard current == generation, readID == latestRead else { return }
             summary = nextSummary
             water = nextWater
@@ -321,7 +423,7 @@ final class NativeSession: ObservableObject {
     }
 
     func logout() async {
-        guard !savingWater else { return }
+        guard !savingWater, passwordTask == nil else { return }
         if let token = refreshToken,
            let body = try? JSONSerialization.data(withJSONObject: ["refresh_token": token]) {
             let _: EmptyResponse? = try? await send("auth/logout", method: "POST", body: body)
@@ -338,13 +440,18 @@ final class NativeSession: ObservableObject {
         user = nil
         summary = nil
         water = []
+        settings = .null
+        accountLoaded = false
+        profileInitialized = false
         pendingWater = nil
         waterMessage = nil
         clearSessionStore()
+        local?.unbind()
     }
 
     private func accept(_ tokens: NativeTokens) throws {
         try saveSession(SavedNativeSession(server: serverText, refreshToken: tokens.refreshToken, user: tokens.user))
+        try local?.bind(server:serverText,userID:tokens.user.id)
         accessToken = tokens.accessToken
         refreshToken = tokens.refreshToken
         user = tokens.user
@@ -376,6 +483,7 @@ final class NativeSession: ObservableObject {
     }
 
     private func authorized<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil, key: String? = nil) async throws -> T {
+        if let passwordTask { _ = try await passwordTask.value }
         if accessToken == nil { _ = try await refresh() }
         let sentToken = accessToken
         do { return try await send(path, method: method, body: body, token: sentToken, key: key) }

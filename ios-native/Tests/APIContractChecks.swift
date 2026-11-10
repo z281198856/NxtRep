@@ -14,6 +14,8 @@ private final class StubServer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let path = request.url!.path
+        if path.hasSuffix("/me") { return (200,Data("{\"profile_initialized\":true}".utf8)) }
+        if path.hasSuffix("/settings") { return (200,Data("{\"unit_system\":\"metric\",\"privacy_mode\":\"private\",\"version\":1}".utf8)) }
         if path.hasSuffix("/foods/search") {
             let query = URLComponents(url:request.url!,resolvingAgainstBaseURL:false)!.queryItems!
             precondition(query.first {$0.name == "keyword"}?.value == "鸡胸肉 & 米饭")

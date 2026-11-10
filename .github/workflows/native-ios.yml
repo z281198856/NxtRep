@@ -24,6 +24,7 @@ jobs:
           mkdir -p .local/native-ci
           swiftc -parse-as-library -swift-version 5 -target "$(uname -m)-apple-macosx14.0" \
             ios-native/NxtRepNative/NativeJSON.swift \
+            ios-native/NxtRepNative/NativeLocalStore.swift \
             ios-native/NxtRepNative/NativeAPI.swift \
             ios-native/Tests/APIContractChecks.swift \
             -o .local/native-ci/api-checks

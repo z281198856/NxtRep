@@ -57,7 +57,6 @@
 | PROFILE-01 | 个人资料编辑、单位换算 | profile_page / profile_repository | 缺失 |
 | PROFILE-02 | 训练目标、器械、频率、时长、目标检查 | profile_page / profile_repository | 缺失 |
 | PROFILE-03 | 单位、隐私、匿名分析偏好及实际应用 | profile_page / app_preferences | 缺失 |
-| PROFILE-04 | 数据导出、账号注销草稿与确认流程 | profile_page | 缺失 |
 | REM-01 | 本机通知权限、总/分类开关、训练/三餐/饮水/测量 | local_reminders_page | 缺失 |
 | REM-02 | 时间/星期/多次饮水、勿扰、隐藏内容、测试提醒 | local_reminders_page / reminder_controller | 缺失 |
 | REM-03 | 重开恢复、账号隔离、退出清理、通知点击导航 | reminder_platform / home_shell | 缺失 |
@@ -66,7 +65,7 @@
 | OFF-03 | 待同步/失败状态、手动重试/丢弃、重连同步 | local_records_page / home_shell | 缺失 |
 | OFF-04 | 表单/AI/照片输入草稿、按账号隔离、退出处理 | form_draft / local_records | 缺失 |
 | MEDIA-01 | HEIC/JPEG 规范化、尺寸限制、上传意图/直传/完成 | core/media/image_upload | 缺失 |
-| MEDIA-02 | 图片下载意图、过期重新获取、来源链接与分享 | body_progress_repository / source_links | 缺失 |
+| MEDIA-02 | 图片下载意图、过期重新获取、来源链接 | body_progress_repository / source_links | 缺失 |
 
 ## 实施与验证顺序
 
@@ -78,3 +77,5 @@
 6. 对照上述每行验证，并在 iPhone 验收；缺少证据的项保持未验收。
 
 不改变原 Flutter 的业务基准，不使用演示行、通用说明页或隐藏入口代替迁移。SwiftUI 可以调整信息层级与交互，但须保留原操作、数据及恢复语义。
+
+核对修正：数据导出与账号注销存在后端路由，但当前 Flutter 没有提供对应用户入口，因此不计入本次前端对齐基线。

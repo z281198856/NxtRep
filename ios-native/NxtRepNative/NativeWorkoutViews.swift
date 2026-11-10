@@ -168,7 +168,8 @@ private struct NativeWorkoutExerciseCard: View {
                         if !set["rir"].isNull || !set["rpe"].isNull { Text("RIR \(set["rir"].text) · RPE \(set["rpe"].text)").font(.caption).foregroundStyle(NativeTheme.muted) }
                     }
                     Spacer()
-                    if writable {
+                    if set["pending_local"].flag { Text("待同步").font(.caption).foregroundStyle(.orange) }
+                    if writable && !set["pending_local"].flag {
                         Button { selectedSet = set; editingSet = true } label:{Image(systemName:"pencil")}.buttonStyle(.borderless).frame(width:44,height:44)
                         Button(role:.destructive) { deleting = set } label:{Image(systemName:"trash")}.buttonStyle(.borderless).frame(width:44,height:44)
                     }
@@ -212,7 +213,7 @@ private struct NativeWorkoutSetForm: View {
     var body: some View {
         Form {
             Text(exercise["name_snapshot"].text).font(.headline)
-            NativeField(title:"重量（kg）",text:$weight,keyboard:.decimalPad)
+            NativeField(title:"重量（\(session.weightUnit)）",text:$weight,keyboard:.decimalPad)
             NativeField(title:"次数",text:$reps,keyboard:.numberPad)
             NativeField(title:"RIR：还可完成几次（可选，0–10）",text:$rir,keyboard:.numberPad)
             NativeField(title:"RPE：主观强度（可选，1–10）",text:$rpe,keyboard:.decimalPad)
@@ -220,7 +221,7 @@ private struct NativeWorkoutSetForm: View {
             NativeField(title:"备注",text:$notes)
             NativeActionButton(title:"保存这一组") { key in
                 guard let kg = Double(weight), kg >= 0, let count = Int(reps), (0...1000).contains(count) else { throw NativeAPIError.message("请输入有效重量和次数。") }
-                var body: [String:NativeJSON] = ["weight_kg":.number(kg),"reps":.int(count),"rir":rir.isEmpty ? .null : .int(Int(rir) ?? -1),"rpe":rpe.isEmpty ? .null : .number(Double(rpe) ?? -1),"tags":.strings([warmup ? "warmup" : "working"]),"notes":notes.isEmpty ? .null : .string(notes)]
+                var body: [String:NativeJSON] = ["weight_kg":.number(session.toKG(kg)),"reps":.int(count),"rir":rir.isEmpty ? .null : .int(Int(rir) ?? -1),"rpe":rpe.isEmpty ? .null : .number(Double(rpe) ?? -1),"tags":.strings([warmup ? "warmup" : "working"]),"notes":notes.isEmpty ? .null : .string(notes)]
                 if !existing.isNull { body["tags"] = .strings(existing["tags"].strings.filter { !["warmup","working"].contains($0) } + [warmup ? "warmup" : "working"]) }
                 if existing.isNull {
                     body["client_generated_id"] = .string(key); body["workout_exercise_id"] = exercise["id"]

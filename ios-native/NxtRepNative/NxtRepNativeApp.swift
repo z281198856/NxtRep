@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct NxtRepNativeApp: App {
+    init() { _ = NativeReminders.shared }
     var body: some Scene {
         WindowGroup {
             NativeRootView()
@@ -174,7 +175,7 @@ struct PreviewShell: View {
     }
 }
 
-private struct TabDock: View {
+struct TabDock: View {
     @Namespace private var indicator
     let selection: AppTab
     let onSelect: (AppTab) -> Void

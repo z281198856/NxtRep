@@ -14,9 +14,9 @@ struct NativePlanHub: View {
     private var ranked: [NativeJSON] {
         let all = templates.value.records.filter { keyword.isEmpty || $0["name"].text.localizedCaseInsensitiveContains(keyword) }
         guard usePreferences, !preferences.isNull else { return all }
-        let gear = Set(preferences["equipment"].strings)
+        let gear = Set(preferences["constraints"]["equipment"].strings)
         let compatible = all.filter { item in gear.isEmpty || item["equipment"].strings.allSatisfy { $0 == "bodyweight" || gear.contains($0) } }
-        let goal = compatible.filter { $0["goal_types"].strings.contains(preferences["goal_type"].text) }
+        let goal = compatible.filter { $0["goal_types"].strings.contains(preferences["goal"]["goal_type"].text) }
         let selected = goal.isEmpty ? compatible : goal
         let days = profile["weekly_training_days"].integer == 0 ? 3 : profile["weekly_training_days"].integer
         let duration = profile["session_duration_minutes"].integer

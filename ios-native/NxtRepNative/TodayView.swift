@@ -276,7 +276,7 @@ private struct TrailingIconLabelStyle: LabelStyle {
     }
 }
 
-private struct NutrientRing: View {
+struct NutrientRing: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var fill: CGFloat = 0
 

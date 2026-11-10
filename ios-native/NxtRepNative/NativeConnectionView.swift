@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct NativeRootView: View {
-    @StateObject private var session = NativeSession()
+    @StateObject private var session = NativeSession(local:NativeLocalStore())
     @State private var didRestore = false
 
     var body: some View {
@@ -9,13 +9,26 @@ struct NativeRootView: View {
             if session.restoring {
                 ProgressView("正在恢复连接…")
             } else if session.signedIn {
-                PreviewShell(session: session, isPreview: false)
+                if !session.accountLoaded {
+                    VStack(spacing:16) {
+                        if let error = session.error {
+                            NativeErrorText(message:error)
+                            Button("重新读取账户") { Task { do { try await session.loadAccountAndSettings() } catch { session.error = NativeSession.readable(error) } } }
+                        } else { ProgressView("正在读取账户…") }
+                        Button("退出登录") { Task { await session.logout() } }
+                    }.padding(24)
+                } else if !session.profileInitialized {
+                    NativeOnboardingView()
+                } else {
+                    NativeAppShell()
+                }
             } else {
                 NativeConnectionView(session: session)
             }
         }
         .tint(NativeTheme.accent)
         .environmentObject(session)
+        .onChange(of:session.signedIn) { _,signedIn in if !signedIn { NativeReminders.shared.deactivate() } }
         .task {
             guard !didRestore else { return }
             didRestore = true
@@ -39,7 +52,7 @@ struct NativeConnectionView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 18))
                     VStack(alignment: .leading, spacing: 8) {
                         Text("连接你的 NxtRep").font(.largeTitle.bold())
-                        Text("登录后查看真实营养数据，并把饮水记录保存到你的账号。")
+                        Text("连接你的训练、饮食、身体数据和 AI 私人教练。")
                             .font(.subheadline).foregroundStyle(NativeTheme.muted)
                     }
                     VStack(alignment: .leading, spacing: 14) {
@@ -75,6 +88,7 @@ struct NativeConnectionView: View {
                         .font(.footnote).foregroundStyle(NativeTheme.muted)
                     Button("先体验界面预览") { showingPreview = true }
                         .font(.subheadline).frame(minHeight: 44)
+                    NavigationLink("首次设置 NxtRep 密码") { NativePasswordSetupView() }
                 }
                 .padding(24).padding(.top, 24)
             }

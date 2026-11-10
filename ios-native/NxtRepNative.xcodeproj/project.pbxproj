@@ -24,6 +24,15 @@
 		B3A399ABF347FF6AFC4790F8 /* NativeNutritionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5EA7731D8CD6BE5D54257C0 /* NativeNutritionViews.swift */; };
 		42E16F1AC362D52D78F9ACB9 /* NativePlanViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F8373408DD035EC0B0089AC /* NativePlanViews.swift */; };
 		DD37CF5BEF636293AE6D242A /* NativeWorkoutViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40E3447CBDB7056199734241 /* NativeWorkoutViews.swift */; };
+		9A52D53FD21A2312DA14A58A /* NativeAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C79815894329453543848530 /* NativeAgent.swift */; };
+		1523CD971CDDAA31B7E60CE6 /* NativeAgentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B20020DFC8E760CD3825A6D /* NativeAgentViews.swift */; };
+		C55D7D85037E56E96F73C6F7 /* NativeAppShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6891044FD8186BCE85FF8721 /* NativeAppShell.swift */; };
+		B1D235D05DFB09FFE22CCDF6 /* NativeCoachViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFB9CDFAD84C04B48F9F1E30 /* NativeCoachViews.swift */; };
+		1DFA4EB9E608FE7B66A9F308 /* NativeLocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79C91B3760F086CA208C4B19 /* NativeLocalStore.swift */; };
+		ED73B2202D2C28A57FFEE13F /* NativeLocalViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = F28183D2A85EE1429C7A8816 /* NativeLocalViews.swift */; };
+		0BD0A263909E3CFCC56F1A28 /* NativeProfileViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78DB4017DF889CF09C199A2F /* NativeProfileViews.swift */; };
+		D9738C84706A9796E8772D8D /* NativeProgressViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D295A0ED2BB7A8C4CFE0F12 /* NativeProgressViews.swift */; };
+		6EDED2F29ECAB2EF3CD01F35 /* NativeReminders.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBBE536BA3821621D278D392 /* NativeReminders.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -47,6 +56,15 @@
 		D5EA7731D8CD6BE5D54257C0 /* NativeNutritionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeNutritionViews.swift; sourceTree = "<group>"; };
 		3F8373408DD035EC0B0089AC /* NativePlanViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlanViews.swift; sourceTree = "<group>"; };
 		40E3447CBDB7056199734241 /* NativeWorkoutViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeWorkoutViews.swift; sourceTree = "<group>"; };
+		C79815894329453543848530 /* NativeAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAgent.swift; sourceTree = "<group>"; };
+		9B20020DFC8E760CD3825A6D /* NativeAgentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAgentViews.swift; sourceTree = "<group>"; };
+		6891044FD8186BCE85FF8721 /* NativeAppShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAppShell.swift; sourceTree = "<group>"; };
+		BFB9CDFAD84C04B48F9F1E30 /* NativeCoachViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCoachViews.swift; sourceTree = "<group>"; };
+		79C91B3760F086CA208C4B19 /* NativeLocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeLocalStore.swift; sourceTree = "<group>"; };
+		F28183D2A85EE1429C7A8816 /* NativeLocalViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeLocalViews.swift; sourceTree = "<group>"; };
+		78DB4017DF889CF09C199A2F /* NativeProfileViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeProfileViews.swift; sourceTree = "<group>"; };
+		7D295A0ED2BB7A8C4CFE0F12 /* NativeProgressViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeProgressViews.swift; sourceTree = "<group>"; };
+		FBBE536BA3821621D278D392 /* NativeReminders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeReminders.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -77,6 +95,15 @@
 				F4E461FD2BFB000200000005 /* FeatureViews.swift */,
 				F4E461FD2BFB000200000006 /* WorkoutView.swift */,
 				F4E461FD2BFB000200000008 /* Assets.xcassets */,
+				FBBE536BA3821621D278D392 /* NativeReminders.swift */,
+				7D295A0ED2BB7A8C4CFE0F12 /* NativeProgressViews.swift */,
+				78DB4017DF889CF09C199A2F /* NativeProfileViews.swift */,
+				F28183D2A85EE1429C7A8816 /* NativeLocalViews.swift */,
+				79C91B3760F086CA208C4B19 /* NativeLocalStore.swift */,
+				BFB9CDFAD84C04B48F9F1E30 /* NativeCoachViews.swift */,
+				6891044FD8186BCE85FF8721 /* NativeAppShell.swift */,
+				9B20020DFC8E760CD3825A6D /* NativeAgentViews.swift */,
+				C79815894329453543848530 /* NativeAgent.swift */,
 				40E3447CBDB7056199734241 /* NativeWorkoutViews.swift */,
 				3F8373408DD035EC0B0089AC /* NativePlanViews.swift */,
 				D5EA7731D8CD6BE5D54257C0 /* NativeNutritionViews.swift */,
@@ -168,6 +195,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				F4E461FD2BFB000100000001 /* NxtRepNativeApp.swift in Sources */,
+				6EDED2F29ECAB2EF3CD01F35 /* NativeReminders.swift in Sources */,
+				D9738C84706A9796E8772D8D /* NativeProgressViews.swift in Sources */,
+				0BD0A263909E3CFCC56F1A28 /* NativeProfileViews.swift in Sources */,
+				ED73B2202D2C28A57FFEE13F /* NativeLocalViews.swift in Sources */,
+				1DFA4EB9E608FE7B66A9F308 /* NativeLocalStore.swift in Sources */,
+				B1D235D05DFB09FFE22CCDF6 /* NativeCoachViews.swift in Sources */,
+				C55D7D85037E56E96F73C6F7 /* NativeAppShell.swift in Sources */,
+				1523CD971CDDAA31B7E60CE6 /* NativeAgentViews.swift in Sources */,
+				9A52D53FD21A2312DA14A58A /* NativeAgent.swift in Sources */,
 				DD37CF5BEF636293AE6D242A /* NativeWorkoutViews.swift in Sources */,
 				42E16F1AC362D52D78F9ACB9 /* NativePlanViews.swift in Sources */,
 				B3A399ABF347FF6AFC4790F8 /* NativeNutritionViews.swift in Sources */,
