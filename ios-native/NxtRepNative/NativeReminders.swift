@@ -162,7 +162,7 @@ struct NativeReminderSettingsView: View {
                         HStack { ForEach(1...7,id:\.self) { day in
                             Button(["一","二","三","四","五","六","日"][day-1]) { if rule.weekdays.contains(day) { if rule.weekdays.count > 1 { rule.weekdays.removeAll {$0 == day} } } else { rule.weekdays.append(day) } }
                                 .buttonStyle(.bordered).tint(rule.weekdays.contains(day) ? NativeTheme.accent : .gray).frame(maxWidth:.infinity).accessibilityLabel("星期"+["一","二","三","四","五","六","日"][day-1])
-                        }
+                        } }
                     }
                 }
             }

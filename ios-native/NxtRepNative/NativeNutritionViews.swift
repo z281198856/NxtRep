@@ -102,6 +102,7 @@ private struct NativeMealLine: Identifiable {
               [k,p,c,f].allSatisfy({$0 >= 0}) else { throw NativeAPIError.message("请填写食品名称、基准份量和有效营养数值。") }
         return .object(["food_version_id":.null,"name":.string(name),"amount_g":.number(grams),"basis_amount_g":.number(b),"kcal":.number(k),"protein_g":.number(p),"carbs_g":.number(c),"fat_g":.number(f),"source":.string(source),"confidence":.string(confidence)])
     }
+    var draft:NativeJSON { .object(["food_version_id":versionID,"name":.string(name),"amount_g":.string(amount),"basis_amount_g":.string(basis),"kcal":.string(kcal),"protein_g":.string(protein),"carbs_g":.string(carbs),"fat_g":.string(fat),"source":.string(source),"confidence":.string(confidence)]) }
 }
 
 struct NativeMealEditor: View {
@@ -144,7 +145,7 @@ struct NativeMealEditor: View {
                 var body: [String:NativeJSON] = ["meal_type":.string(meal),"items":.array(try lines.map { try $0.payload() }),"is_flexible_meal":.bool(flexible),"notes":notes.isEmpty ? .null : .string(notes)]
                 if existing.isNull { body["eaten_at"] = .string(NativeDates.timestamp(eatenAt)) }
                 else { body["expected_version"] = .int(existing.version); body["reason"] = .string("用户在 iPhone 编辑饮食记录") }
-                _ = try await session.api(existing.isNull ? "nutrition/entries" : "nutrition/entries/" + existing.id,method:existing.isNull ? "POST" : "PATCH",body:body,key:key)
+                _ = try await session.api(existing.isNull ? "nutrition/entries" : "nutrition/entries/" + existing.id,method:existing.isNull ? "POST" : "PATCH",body:body,key:key,draftKey:existing.isNull ? "nutrition-manual" : nil)
                 await session.reload(); onSave(); dismiss()
             }
             if !existing.isNull { Button("删除这条饮食记录",role:.destructive) { deleteDialog = true } }
@@ -155,6 +156,9 @@ struct NativeMealEditor: View {
         .onAppear {
             eatenAt = session.selectedDate
             if !existing.isNull { lines = existing["items"].values.map(NativeMealLine.init); meal = existing["meal_type"].text; flexible = existing["is_flexible_meal"].flag; notes = existing["notes"].text }
+        }
+        .nativeDraft("nutrition-manual"+(existing.isNull ? "" : "-"+existing.id),label:"手动饮食记录",value:.object(["lines":.array(lines.map(\.draft)),"meal":.string(meal),"time":.string(NativeDates.timestamp(eatenAt)),"flexible":.bool(flexible),"notes":.string(notes)])) { value in
+            if existing.isNull { lines = value["lines"].values.map(NativeMealLine.init); meal = value["meal"].text; eatenAt = NativeDates.parse(value["time"].text) ?? .now; flexible = value["flexible"].flag; notes = value["notes"].text }
         }
         .confirmationDialog("删除这条饮食记录？",isPresented:$deleteDialog,titleVisibility:.visible) {
             Button("确认删除",role:.destructive) { Task {
@@ -183,7 +187,7 @@ struct NativeWaterView: View {
                 HStack { ForEach([150,250,350,500],id:\.self) { ml in Button("\(ml)") { amount = String(ml) }.buttonStyle(.bordered) } }
                 NativeActionButton(title:"保存饮水记录") { key in
                     guard let ml = Int(amount), (1...5000).contains(ml) else { throw NativeAPIError.message("饮水量应为 1–5000 毫升的整数。") }
-                    _ = try await session.api("nutrition/water",method:"POST",body:["amount_ml":.int(ml),"consumed_at":.string(NativeDates.timestamp(consumedAt))],key:key)
+                    _ = try await session.api("nutrition/water",method:"POST",body:["amount_ml":.int(ml),"consumed_at":.string(NativeDates.timestamp(consumedAt))],key:key,draftKey:"water")
                     revision += 1; await session.reload()
                 }
             }
@@ -200,6 +204,7 @@ struct NativeWaterView: View {
             }
         }.navigationTitle("饮水记录")
         .onAppear { consumedAt = session.selectedDate }
+        .nativeDraft("water",label:"饮水记录",value:.object(["amount":.string(amount),"time":.string(NativeDates.timestamp(consumedAt))])) { value in amount = value["amount"].text; consumedAt = NativeDates.parse(value["time"].text) ?? .now }
         .task(id:revision) { await resource.load { try await session.api("nutrition/water",query:["date":NativeDates.day(session.selectedDate)]) } }
         .confirmationDialog("删除这条饮水记录？",isPresented:Binding(get:{!deleting.isNull},set:{if !$0 { deleting = .null }}),titleVisibility:.visible) {
             Button("删除",role:.destructive) { let id = deleting.id; Task { do { _ = try await session.api("nutrition/water/"+id,method:"DELETE"); revision += 1; await session.reload() } catch { resource.error = NativeSession.readable(error) } }; deleting = .null }

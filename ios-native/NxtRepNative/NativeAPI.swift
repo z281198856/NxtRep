@@ -83,15 +83,22 @@ enum NativeAPIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .message(let message): return message
-        case .response(_, let code):
+        case .response(let status, let code):
             switch code {
             case "INVALID_CREDENTIALS": return "账号或密码不正确。请使用 NxtRep 账号。"
             case "ACCOUNT_LOCKED": return "账号暂时锁定，请稍后再试。"
             case "ACCOUNT_DISABLED": return "这个账号已停用。"
+            case "INVALID_CURRENT_PASSWORD": return "当前密码不正确。"
             case "INVALID_REFRESH_TOKEN", "INVALID_ACCESS_TOKEN": return "登录已失效，请重新登录。"
             case "IDEMPOTENCY_IN_PROGRESS": return "这条记录正在保存，请稍后核对。"
             case "IDEMPOTENCY_KEY_REUSED": return "这条记录的提交标识冲突，请先核对饮水记录。"
-            default: return "请求未能完成（\(code)），请稍后重试。"
+            default:
+                if status == 409 { return "内容已更新或存在冲突，请刷新核对最新状态后再操作。" }
+                if status == 422 || status == 400 { return "填写内容未通过校验，请检查必填项、数值范围和日期。" }
+                if status == 404 { return "这项内容已不存在，请返回刷新列表。" }
+                if status == 429 { return "请求较多，请稍后再试。" }
+                if status >= 500 { return "服务器暂时无法完成处理，请稍后重试。" }
+                return "请求未能完成（\(code)），请稍后重试。"
             }
         }
     }
@@ -340,6 +347,9 @@ final class NativeSession: ObservableObject {
             // Keep the saved refresh credential on transport failure, allowing a later retry.
             if case NativeAPIError.response(let status, _) = error, status == 401 {
                 clearSession()
+            }
+            if signedIn,NativeLocalStore.transient(error) {
+                do { try await loadAccountAndSettings(); await reload() } catch { self.error = Self.readable(error) }
             }
         }
     }

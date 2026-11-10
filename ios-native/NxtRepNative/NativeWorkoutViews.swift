@@ -228,14 +228,18 @@ private struct NativeWorkoutSetForm: View {
                     body["set_index"] = .int((exercise["sets"].values.map {$0["set_index"].integer}.max() ?? 0)+1)
                     body["completed_at"] = .string(NativeDates.timestamp(completedAt))
                 } else { body["expected_version"] = .int(existing.version); body["reason"] = .string("用户修改训练组") }
-                _ = try await session.api("workouts/"+workout.id+"/sets"+(existing.isNull ? "" : "/"+existing.id),method:existing.isNull ? "POST" : "PATCH",body:body,key:key)
+                _ = try await session.api("workouts/"+workout.id+"/sets"+(existing.isNull ? "" : "/"+existing.id),method:existing.isNull ? "POST" : "PATCH",body:body,key:key,draftKey:existing.isNull ? "set-"+workout.id+"-"+exercise.id : nil)
                 onSave(); dismiss()
             }
         }.navigationTitle(existing.isNull ? "记录一组" : "编辑训练组")
+            .nativeDraft("set-"+workout.id+"-"+exercise.id+(existing.isNull ? "" : "-"+existing.id),label:"训练组 · "+exercise["name_snapshot"].text,value:formDraft) { value in
+                guard existing.isNull else { return }; weight = value["weight"].text; reps = value["reps"].text; rir = value["rir"].text; rpe = value["rpe"].text; notes = value["notes"].text; warmup = value["warmup"].flag; completedAt = NativeDates.parse(value["time"].text) ?? .now
+            }
             .onAppear {
-                if !existing.isNull { weight = existing["weight_kg"].text; reps = existing["reps"].text; rir = existing["rir"].text; rpe = existing["rpe"].text; notes = existing["notes"].text; warmup = existing["tags"].strings.contains("warmup") }
+                if !existing.isNull { weight = String(session.displayWeight(existing["weight_kg"].double)); reps = existing["reps"].text; rir = existing["rir"].text; rpe = existing["rpe"].text; notes = existing["notes"].text; warmup = existing["tags"].strings.contains("warmup") }
             }
     }
+    private var formDraft:NativeJSON { .object(["weight":.string(weight),"reps":.string(reps),"rir":.string(rir),"rpe":.string(rpe),"notes":.string(notes),"warmup":.bool(warmup),"time":.string(NativeDates.timestamp(completedAt))]) }
 }
 
 private struct NativeWorkoutTargetForm: View {

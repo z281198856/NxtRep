@@ -109,10 +109,14 @@ struct NativeMeasurementForm: View {
                 guard entries.contains(where:{!$0.isEmpty}), entries.filter({!$0.isEmpty}).allSatisfy({ (Double($0) ?? -1) > 0 }) else { throw NativeAPIError.message("请至少填写一个有效测量值。") }
                 var body: [String:NativeJSON] = ["measured_at":.string(NativeDates.timestamp(date)),"weight_kg":weight.isEmpty ? .null : .number(session.toKG(Double(weight)!)),"waist_cm":waist.isEmpty ? .null : .number(session.toCM(Double(waist)!)),"neck_cm":neck.isEmpty ? .null : .number(session.toCM(Double(neck)!)),"hip_cm":hip.isEmpty ? .null : .number(session.toCM(Double(hip)!)),"body_fat_percent":fat.isEmpty ? .null : .number(Double(fat)!),"body_fat_method":fat.isEmpty ? .null : .string("manual"),"source":.string("manual"),"conditions":conditions.isEmpty ? .null : .string(conditions),"notes":notes.isEmpty ? .null : .string(notes)]
                 if !existing.isNull { body["expected_version"] = .int(existing.version); body["reason"] = .string("用户修改身体测量记录") }
-                _ = try await session.api(existing.isNull ? "body/measurements" : "body/measurements/"+existing.id,method:existing.isNull ? "POST" : "PATCH",body:body,key:key)
+                _ = try await session.api(existing.isNull ? "body/measurements" : "body/measurements/"+existing.id,method:existing.isNull ? "POST" : "PATCH",body:body,key:key,draftKey:existing.isNull ? "measurement" : nil)
                 onSave(); dismiss()
             }
         }.navigationTitle(existing.isNull ? "身体测量" : "编辑测量")
+            .nativeDraft("measurement"+(existing.isNull ? "" : "-"+existing.id),label:"身体测量",value:formDraft) { value in
+                guard existing.isNull else { return }
+                date = NativeDates.parse(value["time"].text) ?? .now; weight = value["weight"].text; waist = value["waist"].text; neck = value["neck"].text; hip = value["hip"].text; fat = value["fat"].text; conditions = value["conditions"].text; notes = value["notes"].text
+            }
             .onAppear { if !existing.isNull {
                 date = NativeDates.parse(existing["measured_at"].text) ?? .now
                 weight = existing["weight_kg"].isNull ? "" : session.displayWeight(existing["weight_kg"].double).formatted(.number.precision(.fractionLength(0...3)))
@@ -122,6 +126,7 @@ struct NativeMeasurementForm: View {
                 fat = existing["body_fat_percent"].text; conditions = existing["conditions"].text; notes = existing["notes"].text
             } }
     }
+    private var formDraft:NativeJSON { .object(["time":.string(NativeDates.timestamp(date)),"weight":.string(weight),"waist":.string(waist),"neck":.string(neck),"hip":.string(hip),"fat":.string(fat),"conditions":.string(conditions),"notes":.string(notes)]) }
 }
 
 struct NativeNavyBodyFat: View {

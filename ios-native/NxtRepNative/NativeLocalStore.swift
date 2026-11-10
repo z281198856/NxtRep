@@ -101,7 +101,10 @@ final class NativeLocalStore: ObservableObject {
         data["cache"] = .object(entries); try? commit(data)
     }
     func enqueue(path:String,body:[String:NativeJSON],key:String,draftKey:String? = nil) throws -> NativeJSON? {
-        if let receipt = state["receipts"].fields[key] { return receipt["value"] }
+        if let receipt = state["receipts"].fields[key] {
+            guard receipt["path"].text == path,receipt["body"] == .object(body) else { throw NativeAPIError.message("原记录已同步，请关闭并重新打开表单后再添加其他内容。") }
+            return receipt["value"]
+        }
         if let existing = pending.first(where:{$0["key"].text == key}) {
             guard existing["path"].text == path,existing["body"] == .object(body) else { throw NativeAPIError.message("这次提交已保存在本机。请先同步或丢弃原记录，再修改内容。") }
             return nil
@@ -133,7 +136,7 @@ final class NativeLocalStore: ObservableObject {
                 let result = try await sender(path,original["body"].fields,key)
                 guard owner == scope else { break }
                 var data = state.fields,receipts = state["receipts"].fields
-                receipts[key] = .object(["value":result,"at":.string(NativeDates.timestamp())])
+                receipts[key] = .object(["value":result,"at":.string(NativeDates.timestamp()),"path":.string(path),"body":original["body"]])
                 if receipts.count > 500,let oldest = receipts.keys.min(by:{receipts[$0]!["at"].text < receipts[$1]!["at"].text}) { receipts.removeValue(forKey:oldest) }
                 data["receipts"] = .object(receipts); data["pending"] = .array(pending.filter {$0["key"].text != key})
                 if !original["draft_key"].text.isEmpty { var drafts = state["drafts"].fields; drafts.removeValue(forKey:original["draft_key"].text); data["drafts"] = .object(drafts) }
