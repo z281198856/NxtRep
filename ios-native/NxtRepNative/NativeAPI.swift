@@ -291,11 +291,16 @@ final class NativeSession: ObservableObject {
             if http.statusCode == 401,attempt == 0 { if accessToken == sentToken { _ = try await refresh() }; continue }
             guard (200..<300).contains(http.statusCode),http.value(forHTTPHeaderField:"Content-Type")?.contains("text/event-stream") == true else { throw NativeAPIError.response(http.statusCode,"AI_STREAM_UNAVAILABLE") }
             var parser = NativeSSEParser()
-            for try await line in bytes.lines {
-                try Task.checkCancellation()
-                guard owner == generation else { throw CancellationError() }
-                if let event = try parser.push(line) { try await onEvent(event.0,event.1) }
+            // Blank lines delimit SSE events. Feed the raw stream so no line iterator drops them.
+            for try await byte in bytes {
+                if let event = try parser.push(byte) {
+                    try Task.checkCancellation()
+                    guard owner == generation else { throw CancellationError() }
+                    try await onEvent(event.0,event.1)
+                }
             }
+            try Task.checkCancellation()
+            guard owner == generation else { throw CancellationError() }
             if let event = try parser.finish() { try await onEvent(event.0,event.1) }
             return
         }

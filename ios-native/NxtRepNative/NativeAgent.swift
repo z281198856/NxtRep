@@ -20,45 +20,74 @@ final class NativeAgent: ObservableObject {
     @Published private(set) var reply = ""
     @Published private(set) var activity: String?
     @Published private(set) var busy = false
+    @Published private(set) var loadingConversation = false
     @Published private(set) var pending: NativeJSON = .null
     @Published var error: String?
     private weak var session: NativeSession?
-    private var task: Task<Void,Never>?
     private var bound = false
     var needsVerification: Bool { !pending.isNull }
+    var canCompose: Bool { session != nil && !busy && !loadingConversation && !needsVerification }
+    var canSend: Bool {
+        canCompose && (!input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty)
+    }
 
     func attach(_ session:NativeSession,conversationID:String? = nil) async {
-        guard !bound else { return }; bound = true; self.session = session
+        guard !bound else { return }
+        bound = true
+        self.session = session
         pending = session.local?.draft("ai-pending")["value"] ?? .null
-        let selected = conversationID ?? session.local?.draft("ai-current")["value"].text ?? ""
+        restoreInput()
+        let pendingID = pending["conversation_id"].text
+        let selected = pendingID.isEmpty
+            ? (conversationID ?? session.local?.draft("ai-current")["value"].text ?? "")
+            : pendingID
         do {
             if !selected.isEmpty { try await open(selected) }
-            else if !pending["conversation_id"].text.isEmpty { try await open(pending["conversation_id"].text) }
-            else { restoreInput() }
             if !pending.isNull { error = "上次回复尚未核实，请先核实结果，避免重复发送。" }
         } catch { self.error = NativeSession.readable(error) }
     }
     func open(_ id:String) async throws {
-        guard !busy else { throw NativeAPIError.message("请等待当前回复结束。") }
+        guard !busy,!loadingConversation else { throw NativeAPIError.message("请等待当前对话加载完成。") }
         if !pending.isNull,pending["conversation_id"].text != id { throw NativeAPIError.message("请先核实上次回复，再切换对话。") }
         guard let session else { return }
-        saveInput()
+        loadingConversation = true
+        defer { loadingConversation = false }
+        try persistInput()
         let next = try await session.api("agent/conversations/"+id)
         guard next["status"].text == "active" else { throw NativeAPIError.message("这段对话已归档，请先在历史中恢复。") }
-        conversation = next; messages = []; reply = ""; confirmations = []
-        try session.local?.saveDraft("ai-current",label:"当前 AI 会话",value:.string(id))
-        restoreInput(); try await history()
+        try rememberConversation(id)
+        showConversation(next)
+        try await history()
     }
-    func newConversation() async throws {
-        guard let session,!busy,pending.isNull else { throw NativeAPIError.message("请先完成或核实当前回复。") }
-        saveInput(); conversation = try await session.api("agent/conversations",method:"POST",body:["title":.null])
-        messages = []; confirmations = []; input = ""; images = []; reply = ""; error = nil
-        try session.local?.saveDraft("ai-current",label:"当前 AI 会话",value:.string(conversation.id))
+    func startNewConversation() throws {
+        guard canCompose else { throw NativeAPIError.message("请先完成或核实当前回复。") }
+        try persistInput()
+        try rememberConversation(nil)
+        showConversation(.null)
+    }
+
+    private func rememberConversation(_ id: String?) throws {
+        try session?.local?.saveDraft("ai-current",label:"当前 AI 会话",value:id.map(NativeJSON.string) ?? .null)
+    }
+
+    private func showConversation(_ next: NativeJSON) {
+        conversation = next
+        messages = []
+        confirmations = []
+        reply = ""
+        error = nil
+        restoreInput()
     }
     private var inputKey:String { "ai-input-"+(conversation.id.isEmpty ? "new" : conversation.id) }
     func saveInput() {
-        do { try session?.local?.saveDraft(inputKey,label:"AI 提问",value:input.isEmpty && images.isEmpty ? .null : .object(["text":.string(input),"images":.strings(images)])) }
+        do { try persistInput() }
         catch { self.error = NativeSession.readable(error) }
+    }
+    private func persistInput() throws {
+        let draft: NativeJSON = input.isEmpty && images.isEmpty
+            ? .null
+            : .object(["text":.string(input),"images":.strings(images)])
+        try session?.local?.saveDraft(inputKey,label:"AI 提问",value:draft)
     }
     private func restoreInput() { let v = session?.local?.draft(inputKey)["value"] ?? .null; input = v["text"].text; images = v["images"].strings }
     func history() async throws {
@@ -79,33 +108,56 @@ final class NativeAgent: ObservableObject {
         let cards = try await session.api("agent/conversations/"+conversation.id+"/confirmations")
         confirmations = cards["confirmation_cards"].values + cards["completed_cards"].values
     }
-    func send() {
-        guard !busy,pending.isNull,(!input.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || !images.isEmpty) else { return }
-        busy = true; error = nil
-        task = Task {
-            do {
-                guard let session else { return }
-                if conversation.id.isEmpty {
-                    conversation = try await session.api("agent/conversations",method:"POST",body:["title":.null])
-                    try session.local?.saveDraft("ai-current",label:"当前 AI 会话",value:.string(conversation.id))
+    func send() async {
+        guard let session,canSend else { return }
+        if session.local?.localOnly == true {
+            error = "AI 对话需要联网。请在「我的 → 离线记录与草稿」关闭仅保存在本机后重试。"
+            return
+        }
+        let text = input.trimmingCharacters(in:.whitespacesAndNewlines)
+        let sourceDraftKey = inputKey
+        busy = true
+        error = nil
+        activity = "正在发送"
+        defer { busy = false; activity = nil }
+        do {
+            if conversation.id.isEmpty {
+                let created = try await session.api("agent/conversations",method:"POST",body:["title":.null])
+                guard UUID(uuidString:created.id) != nil else {
+                    throw NativeAPIError.message("创建对话后没有收到有效编号，请打开历史检查。")
                 }
-                let text = input.trimmingCharacters(in:.whitespacesAndNewlines)
-                pending = .object(["conversation_id":.string(conversation.id),"body":.object(["message":.string(text.isEmpty ? "请分析这些图片" : text),"image_asset_ids":.strings(images),"client_turn_id":.string(UUID().uuidString),"context_hints":.object(["occurred_at":.string(NativeDates.timestamp())])])])
-                try persistPending()
-                input = ""; images = []; saveInput()
-                try await consume()
-            } catch { self.error = NativeSession.readable(error)+" 请先核实上次结果。" }
-            busy = false; activity = nil
+                conversation = created
+                try rememberConversation(created.id)
+            }
+            let request: [String:NativeJSON] = [
+                "message":.string(text.isEmpty ? "请分析这些图片" : text),
+                "image_asset_ids":.strings(images),
+                "client_turn_id":.string(UUID().uuidString),
+                "context_hints":.object(["occurred_at":.string(NativeDates.timestamp())])
+            ]
+            try updatePending(.object(["conversation_id":.string(conversation.id),"body":.object(request)]))
+            input = ""
+            images = []
+            try? session.local?.saveDraft(sourceDraftKey,label:"AI 提问",value:.null)
+            try await consume()
+        } catch {
+            let message = NativeSession.readable(error)
+            self.error = needsVerification ? message + " 请点「核实上次回复」。" : message
         }
     }
-    private func persistPending() throws { try session?.local?.saveDraft("ai-pending",label:"待核实的 AI 请求",value:pending) }
+    private func updatePending(_ next: NativeJSON) throws {
+        try session?.local?.saveDraft("ai-pending",label:"待核实的 AI 请求",value:next)
+        pending = next
+    }
     private func consume() async throws {
         guard let session else { return }
         reply = ""; activity = "正在读取相关资料"; var terminal = false
         try await session.streamConversation(pending["conversation_id"].text,body:pending["body"].fields) { event,payload in
             switch event {
             case "run_started":
-                var value = self.pending.fields; value["run_id"] = payload["run_id"]; self.pending = .object(value); try self.persistPending()
+                var value = self.pending.fields
+                value["run_id"] = payload["run_id"]
+                try self.updatePending(.object(value))
             case "node_completed":
                 self.activity = ["plan_request":"正在制定回答思路","execute_branches":"正在读取相关数据","validate_safety":"正在检查建议","synthesize_response":"正在组织回复"][payload["node"].text] ?? "正在处理"
             case "message_delta": self.reply += payload["delta"].text; self.activity = "正在回复"
@@ -131,11 +183,12 @@ final class NativeAgent: ObservableObject {
             if input.isEmpty { input = pending["body"]["message"].text }
             if images.isEmpty { images = pending["body"]["image_asset_ids"].strings }; saveInput()
         }
-        pending = .null; try persistPending(); activity = nil
+        try updatePending(.null)
+        activity = nil
     }
     func verify() {
         guard !busy,!pending.isNull else { return }; busy = true; error = nil
-        task = Task {
+        Task {
             defer { busy = false; activity = nil }
             do {
                 guard let session else { return }

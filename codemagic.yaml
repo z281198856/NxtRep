@@ -79,6 +79,7 @@ workflows:
             "$CM_BUILD_DIR/ios-native/NxtRepNative/NativeLocalStore.swift" \
             "$CM_BUILD_DIR/ios-native/NxtRepNative/NativeReminderModels.swift" \
             "$CM_BUILD_DIR/ios-native/NxtRepNative/NativeAPI.swift" \
+            "$CM_BUILD_DIR/ios-native/NxtRepNative/NativeAgent.swift" \
             "$CM_BUILD_DIR/ios-native/Tests/APIContractChecks.swift" \
             "$CM_BUILD_DIR/ios-native/Tests/PersistenceChecks.swift" \
             -o "$output_dir/api-contract-checks"

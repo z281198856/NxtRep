@@ -27,6 +27,7 @@ jobs:
             ios-native/NxtRepNative/NativeLocalStore.swift \
             ios-native/NxtRepNative/NativeReminderModels.swift \
             ios-native/NxtRepNative/NativeAPI.swift \
+            ios-native/NxtRepNative/NativeAgent.swift \
             ios-native/Tests/APIContractChecks.swift \
             ios-native/Tests/PersistenceChecks.swift \
             -o .local/native-ci/api-checks

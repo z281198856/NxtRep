@@ -5,55 +5,228 @@ struct NativeCoachView: View {
     @StateObject private var agent = NativeAgent()
     var conversationID: String? = nil
     @State private var showHistory = false
+    @State private var showAttachment = false
+    @FocusState private var composerFocused: Bool
+
+    private var title: String {
+        if agent.conversation.id.isEmpty { return "新对话" }
+        let savedTitle = agent.conversation["title"].text
+        return savedTitle.isEmpty ? "AI 私人教练" : savedTitle
+    }
+
     var body: some View {
+        VStack(spacing: 0) {
+            transcript
+            Divider()
+            composer
+        }
+        .background(NativeTheme.background)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    composerFocused = false
+                    showHistory = true
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                }
+                .accessibilityLabel("对话历史")
+                .disabled(!agent.canCompose)
+
+                Button {
+                    do {
+                        try agent.startNewConversation()
+                        composerFocused = true
+                    } catch {
+                        agent.error = NativeSession.readable(error)
+                    }
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .accessibilityLabel("新对话")
+                .disabled(!agent.canCompose)
+            }
+        }
+        .sheet(isPresented: $showHistory) {
+            NavigationStack {
+                NativeConversationHistory { id in
+                    Task {
+                        showHistory = false
+                        do { try await agent.open(id) }
+                        catch { agent.error = NativeSession.readable(error) }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showAttachment) {
+            NavigationStack {
+                NativeChatAttachment { id in
+                    if !agent.images.contains(id) { agent.images.append(id) }
+                }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("取消") { showAttachment = false }
+                    }
+                }
+            }
+        }
+        .task { await agent.attach(session, conversationID: conversationID) }
+        .onChange(of: agent.input) { _, _ in agent.saveInput() }
+        .onChange(of: agent.images) { _, _ in agent.saveInput() }
+        .onDisappear { agent.saveInput() }
+    }
+
+    private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment:.leading,spacing:16) {
-                    HStack {
-                        Text(agent.conversation["title"].text.isEmpty ? "聊聊今天的训练" : agent.conversation["title"].text).font(.title2.bold())
-                        Spacer()
-                        Button("历史") { showHistory = true }.disabled(agent.busy || agent.needsVerification)
-                        NativeActionButton(title:"新对话") { _ in try await agent.newConversation() }.disabled(agent.busy || agent.needsVerification)
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    if agent.loadingConversation {
+                        ProgressView("正在读取对话").frame(maxWidth: .infinity).padding(24)
+                    } else if agent.messages.isEmpty && !agent.needsVerification && agent.activity == nil {
+                        emptyConversation
                     }
-                    NavigationLink("主动教练建议") { NativeCoachNoticesView() }
-                    if agent.messages.isEmpty && agent.reply.isEmpty {
-                        NativeCard { Text("按你的实际情况提问").font(.headline); Text("可以询问训练安排、饮食或身体进展，也可以上传照片。需要改动记录或计划时，会先展示确认单。").foregroundStyle(NativeTheme.muted) }
+
+                    ForEach(agent.messages, id: \.id) { NativeChatMessage(message: $0) }
+                    if let outgoingMessage { NativeChatMessage(message: outgoingMessage) }
+                    if !agent.reply.isEmpty {
+                        NativeChatMessage(message: .object(["role": .string("assistant"), "content": .string(agent.reply)]))
                     }
-                    ForEach(agent.messages,id:\.id) { message in NativeChatMessage(message:message) }
-                    if !agent.reply.isEmpty { NativeCard { NativeReplyText(content:agent.reply) } }
-                    if let activity = agent.activity { HStack { ProgressView(); Text(activity).font(.subheadline).foregroundStyle(NativeTheme.muted) } }
-                    ForEach(agent.confirmations,id:\.id) { card in
-                        NativeConfirmationView(card:card) { try await agent.history() }.disabled(agent.busy)
+                    if let activity = agent.activity {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text(activity).font(.subheadline).foregroundStyle(NativeTheme.muted)
+                        }
                     }
-                    NativeErrorText(message:agent.error)
-                    if agent.needsVerification {
-                        Button("核实上次回复") { agent.verify() }.buttonStyle(.borderedProminent).disabled(agent.busy)
-                        NativeActionButton(title:"取消本次处理") { _ in try await agent.cancel() }
+                    ForEach(agent.confirmations, id: \.id) { card in
+                        NativeConfirmationView(card: card) { try await agent.history() }.disabled(agent.busy)
                     }
-                    Color.clear.frame(height:1).id("end")
-                }.nativePage()
-            }.onChange(of:agent.messages.count) { _,_ in proxy.scrollTo("end",anchor:.bottom) }
-        }
-        .safeAreaInset(edge:.bottom) { composer }
-        .navigationTitle("AI 私人教练").navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented:$showHistory) { NavigationStack { NativeConversationHistory { id in Task { do { try await agent.open(id); showHistory = false } catch { agent.error = NativeSession.readable(error) } } } } }
-        .task { await agent.attach(session,conversationID:conversationID) }
-        .onChange(of:agent.input) { _,_ in agent.saveInput() }
-        .onChange(of:agent.images) { _,_ in agent.saveInput() }
-        .onDisappear { agent.saveInput() }
-        .refreshable { do { try await agent.history() } catch { agent.error = NativeSession.readable(error) } }
-    }
-    private var composer: some View {
-        VStack(spacing:8) {
-            if !agent.images.isEmpty {
-                ScrollView(.horizontal) { HStack { ForEach(agent.images,id:\.self) { id in VStack { NativeRemoteImage(assetID:id).frame(width:75,height:75).clipped(); Button("移除") { agent.images.removeAll {$0 == id} } } } } }
+                    NativeErrorText(message: agent.error)
+                    if agent.needsVerification && !agent.busy {
+                        Button("核实上次回复") { agent.verify() }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    if agent.needsVerification && !agent.pending["run_id"].text.isEmpty {
+                        NativeActionButton(title: "取消本次处理") { _ in try await agent.cancel() }
+                    }
+                    Color.clear.frame(height: 1).id("end").accessibilityHidden(true)
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity)
             }
-            HStack(alignment:.bottom) {
-                Menu { NavigationLink("选择照片或拍照") { NativeChatAttachment { id in agent.images.append(id) } } } label: { Image(systemName:"plus.circle").font(.title2).frame(width:44,height:44) }.disabled(agent.images.count >= 3 || agent.busy || agent.needsVerification)
-                TextField("向私人教练提问",text:$agent.input,axis:.vertical).lineLimit(1...5).padding(12).background(NativeTheme.surface,in:RoundedRectangle(cornerRadius:16))
-                Button(action:agent.send) { Image(systemName:"arrow.up.circle.fill").font(.largeTitle).frame(width:44,height:44) }.disabled(agent.busy || agent.needsVerification || (agent.input.isEmpty && agent.images.isEmpty))
-            }.disabled(agent.busy || agent.needsVerification)
-        }.padding(12).background(NativeTheme.background)
+            .scrollDismissesKeyboard(.interactively)
+            .refreshable {
+                guard agent.canCompose else { return }
+                do { try await agent.history() }
+                catch { agent.error = NativeSession.readable(error) }
+            }
+            .onChange(of: agent.messages.count) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
+            .onChange(of: agent.reply) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
+            .onChange(of: agent.activity) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
+            .onChange(of: agent.error) { _, error in if error != nil { proxy.scrollTo("end", anchor: .bottom) } }
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private var emptyConversation: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "sparkles")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(NativeTheme.accent)
+                .frame(width: 52, height: 52)
+                .background(NativeTheme.softAccent, in: RoundedRectangle(cornerRadius: 18))
+                .accessibilityHidden(true)
+            Text("今天想聊什么？").font(.title2.bold()).foregroundStyle(NativeTheme.ink)
+            Text("训练安排、饮食记录和身体进展，都可以直接问我。")
+                .font(.subheadline)
+                .foregroundStyle(NativeTheme.muted)
+                .multilineTextAlignment(.center)
+            NavigationLink("查看主动教练建议") { NativeCoachNoticesView() }
+                .font(.footnote.weight(.medium))
+                .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 52)
+        .padding(.bottom, 18)
+    }
+
+    private var outgoingMessage: NativeJSON? {
+        guard agent.needsVerification else { return nil }
+        let body = agent.pending["body"]
+        let lastUser = agent.messages.last { $0["role"].text == "user" }
+        if lastUser?["content"] == body["message"] && lastUser?["image_asset_ids"] == body["image_asset_ids"] {
+            return nil
+        }
+        return .object(["role": .string("user"), "content": body["message"], "image_asset_ids": body["image_asset_ids"]])
+    }
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !agent.images.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 10) {
+                        ForEach(agent.images, id: \.self) { id in
+                            VStack(spacing: 4) {
+                                NativeRemoteImage(assetID: id)
+                                    .frame(width: 64, height: 64)
+                                    .clipped()
+                                Button("移除") { agent.images.removeAll { $0 == id } }
+                                    .font(.caption)
+                                    .disabled(!agent.canCompose)
+                            }
+                        }
+                    }
+                }
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                Button {
+                    composerFocused = false
+                    showAttachment = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("添加图片")
+                .disabled(!agent.canCompose || agent.images.count >= 4)
+
+                TextField("给私人教练发消息", text: $agent.input, axis: .vertical)
+                    .focused($composerFocused)
+                    .lineLimit(1...5)
+                    .padding(.vertical, 10)
+                    .frame(minHeight: 44)
+                    .disabled(!agent.canCompose)
+                    .accessibilityIdentifier("coach-message-input")
+
+                Button {
+                    composerFocused = false
+                    Task { await agent.send() }
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                        .foregroundStyle(.white)
+                        .background(agent.canSend ? NativeTheme.accent : NativeTheme.muted.opacity(0.45), in: Circle())
+                }
+                .accessibilityLabel("发送消息")
+                .disabled(!agent.canSend)
+            }
+            .buttonStyle(.plain)
+            .padding(5)
+            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 25))
+            .overlay {
+                RoundedRectangle(cornerRadius: 25)
+                    .strokeBorder(composerFocused ? NativeTheme.accent : NativeTheme.line)
+                    .allowsHitTesting(false)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 680)
+        .frame(maxWidth: .infinity)
+        .background(NativeTheme.background)
     }
 }
 
@@ -65,13 +238,30 @@ private struct NativeChatAttachment: View {
 }
 
 private struct NativeChatMessage: View {
-    let message:NativeJSON
+    let message: NativeJSON
+    private var fromUser: Bool { message["role"].text == "user" }
+
     var body: some View {
-        NativeCard {
-            Text(message["role"].text == "user" ? "你" : "私人教练").font(.caption.bold()).foregroundStyle(NativeTheme.muted)
-            ForEach(message["image_asset_ids"].strings,id:\.self) { NativeRemoteImage(assetID:$0).frame(maxHeight:240) }
-            NativeReplyText(content:message["content"].text)
+        HStack(alignment: .top, spacing: 0) {
+            if fromUser { Spacer(minLength: 36) }
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(message["image_asset_ids"].strings, id: \.self) {
+                    NativeRemoteImage(assetID: $0).frame(maxHeight: 240)
+                }
+                if fromUser {
+                    Text(message["content"].text).textSelection(.enabled)
+                } else {
+                    NativeReplyText(content: message["content"].text)
+                }
+            }
+            .padding(.horizontal, fromUser ? 14 : 0)
+            .padding(.vertical, fromUser ? 10 : 0)
+            .foregroundStyle(NativeTheme.ink)
+            .background(fromUser ? NativeTheme.softAccent : .clear, in: RoundedRectangle(cornerRadius: 18))
+            if !fromUser { Spacer(minLength: 0) }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(fromUser ? "你" : "私人教练")
     }
 }
 

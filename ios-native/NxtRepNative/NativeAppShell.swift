@@ -9,18 +9,21 @@ struct NativeAppShell: View {
     @State private var notificationSheet:String?
     @State private var showLocal = false
     var body: some View {
-        TabView(selection:$selection) {
-            ForEach(AppTab.allCases) { tab in
-                NavigationStack { page(tab) }.tag(tab).toolbar(.hidden,for:.tabBar)
+        VStack(spacing: 0) {
+            TabView(selection:$selection) {
+                ForEach(AppTab.allCases) { tab in
+                    NavigationStack { page(tab) }.tag(tab).toolbar(.hidden,for:.tabBar)
+                }
             }
-        }
-        .toolbar(.hidden,for:.tabBar)
-        .safeAreaInset(edge:.bottom,spacing:0) {
+            .toolbar(.hidden,for:.tabBar)
+            .frame(maxHeight: .infinity)
+
             VStack(spacing:0) {
                 if let local = session.local { NativeSyncBanner(store:local,onOpen:{showLocal = true}) }
                 TabDock(selection:selection) { tab in withAnimation(reduceMotion ? nil : .smooth(duration:0.25)) { selection = tab } }.padding(.horizontal,10).padding(.vertical,5)
-            }.background(NativeTheme.background)
+            }
         }
+        .background(NativeTheme.background)
         .sheet(isPresented:Binding(get:{notificationSheet != nil},set:{if !$0 { notificationSheet = nil }})) {
             NavigationStack { if notificationSheet == "water" { NativeWaterView() } else { NativeMeasurementForm(onSave:{notificationSheet = nil}) } }
         }

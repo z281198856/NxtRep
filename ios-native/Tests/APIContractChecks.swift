@@ -9,6 +9,9 @@ private final class StubServer: @unchecked Sendable {
     var rejectOldAccess = false
     var loseFirstWaterResponse = false
     var waterWrites: [(String, Data)] = []
+    let conversationID = "b413b9cf-43f7-45fc-9a76-09174e1d32a0"
+    var conversationsCreated = 0
+    var messagesSent = 0
 
     func handle(_ request: URLRequest) throws -> (Int, Data) {
         lock.lock()
@@ -38,22 +41,33 @@ private final class StubServer: @unchecked Sendable {
         if rejectOldAccess && request.value(forHTTPHeaderField: "Authorization") == "Bearer old-access" {
             return (401, Data("{\"error\":{\"code\":\"INVALID_ACCESS_TOKEN\"}}".utf8))
         }
+        let conversation = Data("{\"id\":\"\(conversationID)\",\"title\":null,\"status\":\"active\"}".utf8)
+        if path.hasSuffix("/agent/conversations") && request.httpMethod == "POST" {
+            conversationsCreated += 1
+            return (201, conversation)
+        }
+        if path.hasSuffix("/agent/conversations/" + conversationID) { return (200, conversation) }
+        if path.hasSuffix("/agent/conversations/" + conversationID + "/messages") {
+            if request.httpMethod == "POST" {
+                let body = try JSONDecoder().decode(NativeJSON.self, from: Self.requestBody(request))
+                precondition(body["message"].text == "这是一条联调消息")
+                precondition(UUID(uuidString: body["client_turn_id"].text) != nil)
+                messagesSent += 1
+                return (200, Data((
+                    "event: run_started\r\ndata: {\"run_id\":\"c98415df-1c9a-4fea-9b9b-b3605607bf4a\"}\r\n\r\n" +
+                    "event: message_delta\ndata: {\"delta\":\"你好\"}\n\n" +
+                    "event: completed\ndata: {\"response\":{\"message\":\"你好\",\"status\":\"completed\",\"confirmation_cards\":[]}}\n\n"
+                ).utf8))
+            }
+            return (200, Data("""
+                {"list":[{"id":"message-1","sequence":1,"role":"user","content":"这是一条联调消息","image_asset_ids":[]},{"id":"message-2","sequence":2,"role":"assistant","content":"你好","image_asset_ids":[]}],"has_more":false}
+                """.utf8))
+        }
+        if path.hasSuffix("/confirmations") {
+            return (200, Data("{\"confirmation_cards\":[],\"completed_cards\":[]}".utf8))
+        }
         if path.hasSuffix("/nutrition/water") && request.httpMethod == "POST" {
-            let body: Data
-            if let data = request.httpBody {
-                body = data
-            } else if let stream = request.httpBodyStream {
-                stream.open()
-                defer { stream.close() }
-                var collected = Data()
-                var buffer = [UInt8](repeating: 0, count: 4096)
-                while stream.hasBytesAvailable {
-                    let count = stream.read(&buffer, maxLength: buffer.count)
-                    if count <= 0 { break }
-                    collected.append(buffer, count: count)
-                }
-                body = collected
-            } else { throw URLError(.badServerResponse) }
+            let body = try Self.requestBody(request)
             waterWrites.append((request.value(forHTTPHeaderField: "Idempotency-Key") ?? "", body))
             if loseFirstWaterResponse && waterWrites.count == 1 { throw URLError(.networkConnectionLost) }
             return (201, Data("{\"id\":\"water-1\",\"amount_ml\":250,\"consumed_at\":\"2026-11-09T01:00:00Z\"}".utf8))
@@ -62,6 +76,21 @@ private final class StubServer: @unchecked Sendable {
         return (200, Data("""
             {"date":"2026-11-09","water_ml":250,"consumed":{"kcal":"12.5","carbs_g":"3.25","protein_g":0,"fat_g":"0"},"target":{"carbs_max_g":"240"}}
             """.utf8))
+    }
+
+    private static func requestBody(_ request: URLRequest) throws -> Data {
+        if let data = request.httpBody { return data }
+        guard let stream = request.httpBodyStream else { throw URLError(.badServerResponse) }
+        stream.open()
+        defer { stream.close() }
+        var collected = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            collected.append(buffer, count: count)
+        }
+        return collected
     }
 }
 
@@ -72,7 +101,9 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         do {
             let (status, data) = try Self.server.handle(request)
-            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            let contentType = request.value(forHTTPHeaderField: "Accept") == "text/event-stream"
+                ? "text/event-stream; charset=utf-8" : "application/json"
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": contentType])!
             if request.url!.path.hasSuffix("/auth/refresh") {
                 Thread.sleep(forTimeInterval: 0.1)
             }
@@ -140,6 +171,45 @@ private enum APIContractChecks {
         precondition(writes.count == 2 && !writes[0].0.isEmpty)
         precondition(writes[0].0 == writes[1].0 && writes[0].1 == writes[1].1)
         print("PASS: uncertain water response retries with identical key and timestamp")
+        try await checkCoach(transport: transport)
         try await PersistenceChecks.run()
+    }
+
+    @MainActor
+    private static func checkCoach(transport: URLSession) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let local = NativeLocalStore(directory: root, keyData: Data(repeating: 0x38, count: 32))
+        let session = NativeSession(transport: transport, saveSession: { _ in }, loadSession: { nil }, clearSessionStore: {}, local: local)
+        session.serverText = "http://127.0.0.1:8000/api/v1"
+        await session.login(username: "test", password: "synthetic")
+        let agent = NativeAgent()
+        await agent.attach(session)
+        try agent.startNewConversation()
+        precondition(agent.canCompose && StubProtocol.server.conversationsCreated == 0)
+        agent.input = "  这是一条联调消息  "
+        agent.saveInput()
+        local.localOnly = true
+        await agent.send()
+        precondition(agent.error != nil && agent.canSend && !agent.needsVerification)
+        precondition(StubProtocol.server.conversationsCreated == 0)
+        local.localOnly = false
+
+        await agent.send()
+        precondition(agent.error == nil, agent.error ?? "")
+        precondition(!agent.needsVerification && agent.canCompose)
+        precondition(StubProtocol.server.conversationsCreated == 1 && StubProtocol.server.messagesSent == 1)
+        precondition(agent.messages.count == 2 && agent.messages.last?["content"].text == "你好")
+        precondition(local.draft("ai-input-new").isNull)
+        agent.input = "继续训练计划"
+        try agent.startNewConversation()
+        precondition(agent.conversation.id.isEmpty && agent.messages.isEmpty && agent.input.isEmpty)
+        precondition(StubProtocol.server.conversationsCreated == 1)
+        let reopened = NativeAgent()
+        await reopened.attach(session)
+        precondition(reopened.conversation.id.isEmpty && reopened.canCompose)
+        try await reopened.open(StubProtocol.server.conversationID)
+        precondition(reopened.input == "继续训练计划" && reopened.messages.count == 2)
+        print("PASS: coach opens a writable new chat, creates on send, receives SSE, and keeps per-chat drafts")
     }
 }

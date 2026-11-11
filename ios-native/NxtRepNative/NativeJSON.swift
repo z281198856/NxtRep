@@ -78,8 +78,27 @@ enum NativeDates {
 struct NativeSSEParser {
     private var name = "message"
     private var data: [String] = []
+    private var lineBytes = Data()
+
+    mutating func push(_ byte: UInt8) throws -> (String, NativeJSON)? {
+        if byte == 10 {
+            let line = takeLine()
+            return try push(line)
+        }
+        guard lineBytes.count < 8_000_000 else { throw URLError(.dataLengthExceedsMaximum) }
+        lineBytes.append(byte)
+        return nil
+    }
+
+    private mutating func takeLine() -> String {
+        if lineBytes.last == 13 { lineBytes.removeLast() }
+        let line = String(decoding: lineBytes, as: UTF8.self)
+        lineBytes.removeAll(keepingCapacity: true)
+        return line
+    }
+
     mutating func push(_ line:String) throws -> (String,NativeJSON)? {
-        if line.isEmpty { return try finish() }
+        if line.isEmpty { return try finishEvent() }
         if line.hasPrefix(":") { return nil }
         let pair = line.split(separator:":",maxSplits:1,omittingEmptySubsequences:false)
         var value = pair.count > 1 ? String(pair[1]) : ""
@@ -90,6 +109,13 @@ struct NativeSSEParser {
         return nil
     }
     mutating func finish() throws -> (String,NativeJSON)? {
+        if !lineBytes.isEmpty {
+            let line = takeLine()
+            if let event = try push(line) { return event }
+        }
+        return try finishEvent()
+    }
+    private mutating func finishEvent() throws -> (String,NativeJSON)? {
         defer { name = "message"; data = [] }
         guard !data.isEmpty else { return nil }
         let value = try JSONDecoder().decode(NativeJSON.self,from:Data(data.joined(separator:"\n").utf8))
