@@ -95,19 +95,22 @@ struct NativeCoachView: View {
                     if let activity = agent.activity {
                         HStack(spacing: 8) {
                             ProgressView()
-                            Text(activity).font(.subheadline).foregroundStyle(NativeTheme.muted)
+                            Text(agent.stopping ? "正在停止" : activity).font(.subheadline).foregroundStyle(NativeTheme.muted)
                         }
                     }
                     ForEach(agent.confirmations, id: \.id) { card in
-                        NativeConfirmationView(card: card) { try await agent.history() }.disabled(agent.busy)
+                        NativeChangePreviewCard(card: card) { try await agent.history() }.disabled(agent.busy)
                     }
                     NativeErrorText(message: agent.error)
+                    if let notice = agent.notice {
+                        Text(notice).font(.footnote).foregroundStyle(NativeTheme.muted)
+                    }
                     if agent.needsVerification && !agent.busy {
                         Button("核实上次回复") { agent.verify() }
                             .buttonStyle(.borderedProminent)
                     }
-                    if agent.needsVerification && !agent.pending["run_id"].text.isEmpty {
-                        NativeActionButton(title: "取消本次处理") { _ in try await agent.cancel() }
+                    if agent.needsVerification && !agent.busy && !agent.pending["run_id"].text.isEmpty {
+                        Button("停止上次处理") { agent.requestStop() }.disabled(agent.stopping)
                     }
                     Color.clear.frame(height: 1).id("end").accessibilityHidden(true)
                 }
@@ -126,6 +129,7 @@ struct NativeCoachView: View {
             .onChange(of: agent.reply) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
             .onChange(of: agent.activity) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
             .onChange(of: agent.error) { _, error in if error != nil { proxy.scrollTo("end", anchor: .bottom) } }
+            .onChange(of: agent.notice) { _, notice in if notice != nil { proxy.scrollTo("end", anchor: .bottom) } }
         }
         .frame(maxHeight: .infinity)
     }
@@ -200,18 +204,7 @@ struct NativeCoachView: View {
                     .disabled(!agent.canCompose)
                     .accessibilityIdentifier("coach-message-input")
 
-                Button {
-                    composerFocused = false
-                    Task { await agent.send() }
-                } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 17, weight: .semibold))
-                        .frame(width: 44, height: 44)
-                        .foregroundStyle(.white)
-                        .background(agent.canSend ? NativeTheme.accent : NativeTheme.muted.opacity(0.45), in: Circle())
-                }
-                .accessibilityLabel("发送消息")
-                .disabled(!agent.canSend)
+                composerAction
             }
             .buttonStyle(.plain)
             .padding(5)
@@ -227,6 +220,31 @@ struct NativeCoachView: View {
         .frame(maxWidth: 680)
         .frame(maxWidth: .infinity)
         .background(NativeTheme.background)
+    }
+
+    private var composerAction: some View {
+        Button {
+            if agent.receivingReply {
+                agent.requestStop()
+            } else {
+                composerFocused = false
+                Task { await agent.send() }
+            }
+        } label: {
+            Group {
+                if agent.receivingReply {
+                    RoundedRectangle(cornerRadius: 2).frame(width: 13, height: 13)
+                } else {
+                    Image(systemName: "arrow.up").font(.system(size: 17, weight: .semibold))
+                }
+            }
+            .frame(width: 44, height: 44)
+            .foregroundStyle(.white)
+            .background((agent.receivingReply && !agent.stopping) || agent.canSend
+                        ? NativeTheme.accent : NativeTheme.muted.opacity(0.45), in: Circle())
+        }
+        .accessibilityLabel(agent.receivingReply ? "停止回复" : "发送消息")
+        .disabled(agent.receivingReply ? agent.stopping : !agent.canSend)
     }
 }
 
@@ -319,54 +337,259 @@ struct NativeConversationHistory: View {
     }
 }
 
-struct NativeConfirmationView: View {
-    @EnvironmentObject private var session:NativeSession
-    let card:NativeJSON
-    let onChange:() async throws -> Void
-    @State private var decision:String?
-    @State private var portions = false
-    @State private var newPortions = ""
-    private var id:String { card["confirmation_id"].text.isEmpty ? card.id : card["confirmation_id"].text }
-    private var pending:Bool { card["status"].text == "pending" }
+struct NativeChangePreviewCard: View {
+    @EnvironmentObject private var session: NativeSession
+    let card: NativeJSON
+    let onChange: () async throws -> Void
+    @State private var showingPreview = false
+    @State private var submitting = false
+    @State private var error: String?
+    @State private var receiptStatus: String?
+    @State private var revisedCard: NativeJSON?
+    @State private var portionEdits: [Int: String] = [:]
+
+    private var current: NativeJSON {
+        guard let revisedCard, revisedCard.version > card.version else { return card }
+        return revisedCard
+    }
+
+    private var preview: NativeChangePreview {
+        NativeChangePreview(card: current, imperial: session.imperial)
+    }
+
+    private var status: String { receiptStatus ?? current["status"].text }
+    private var pending: Bool { status == "pending" }
+    private var tint: Color { preview.destructive ? .red : NativeTheme.accent }
+
+    private var statusText: String {
+        switch status {
+        case "pending": "待确认"
+        case "succeeded": "已应用"
+        case "rejected": "未采纳"
+        case "cancelled": "已取消"
+        case "expired": "已过期"
+        default: "查看结果"
+        }
+    }
+
     var body: some View {
         NativeCard {
-            Label(NativeLabels.status(card["status"].text),systemImage:"checklist").font(.headline)
-            Text(card["impact"].text.isEmpty ? "请核对以下内容后决定是否执行。" : card["impact"].text)
-            if !card["before"].isNull { DisclosureGroup("变更前") { NativeBusinessSummary(value:card["before"]) } }
-            if !card["after"].isNull { DisclosureGroup("变更后") { NativeBusinessSummary(value:card["after"]) } }
-            if !card["draft"].isNull { DisclosureGroup("查看草稿") { NativeBusinessSummary(value:card["draft"]) } }
-            if pending {
-                if card["operation_type"].text.contains("nutrition") {
-                    DisclosureGroup("调整食品份量",isExpanded:$portions) {
-                        Text("按食品顺序输入克数，用逗号分隔；仅修改需要调整的项。").font(.caption)
-                        TextField("例如 150, 80",text:$newPortions).keyboardType(.numbersAndPunctuation)
-                        NativeActionButton(title:"更新份量草稿") { _ in
-                            let values = NativeLabels.split(newPortions).compactMap(Double.init)
-                            guard !values.isEmpty,values.allSatisfy({$0 > 0}) else { throw NativeAPIError.message("请输入有效份量。") }
-                            let changes = values.enumerated().map { NativeJSON.object(["item_index":.int($0.offset),"amount_g":.number($0.element)]) }
-                            _ = try await session.api("nutrition/pending-entries/"+id+"/portions",method:"POST",body:["expected_version":.int(card.version),"changes":.array(changes)])
-                            try await onChange()
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: preview.icon)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 38, height: 38)
+                    .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(preview.title).font(.headline).foregroundStyle(NativeTheme.ink)
+                    Text(statusText)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(pending ? tint : NativeTheme.muted)
+                }
+                Spacer(minLength: 0)
+            }
+
+            let highlights = Array(preview.sections.flatMap(\.rows).prefix(3))
+            if highlights.isEmpty {
+                Text(preview.impact ?? "详细内容暂时不可用。").font(.subheadline).foregroundStyle(NativeTheme.muted)
+            } else {
+                ForEach(Array(highlights.enumerated()), id: \.offset) { _, row in
+                    previewRow(row)
+                }
+            }
+
+            Button {
+                error = nil
+                portionEdits = [:]
+                showingPreview = true
+            } label: {
+                HStack {
+                    Text(pending ? "查看改动" : "查看详情").fontWeight(.semibold)
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(tint)
+        }
+        .sheet(isPresented: $showingPreview) {
+            NavigationStack {
+                VStack(spacing: 0) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text(preview.title).font(.title2.bold())
+                            if !pending {
+                                Text(statusText).font(.subheadline).foregroundStyle(NativeTheme.muted)
+                                NativeErrorText(message: error)
+                            }
+                            if let impact = preview.impact {
+                                Text(impact).font(.subheadline).foregroundStyle(NativeTheme.muted)
+                            }
+                            ForEach(Array(preview.sections.enumerated()), id: \.offset) { _, section in
+                                NativeCard {
+                                    Text(section.title).font(.subheadline.weight(.semibold)).foregroundStyle(NativeTheme.muted)
+                                    ForEach(Array(section.rows.enumerated()), id: \.offset) { index, row in
+                                        if index > 0 { Divider() }
+                                        previewRow(row)
+                                    }
+                                }
+                            }
+                            if pending && !preview.portions.isEmpty { portionEditor }
                         }
+                        .padding(18)
+                    }
+                    .scrollDismissesKeyboard(.interactively)
+                    if pending { decisionButtons }
+                }
+                .background(NativeTheme.background)
+                .navigationTitle("改动预览")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("关闭") { showingPreview = false }.disabled(submitting)
                     }
                 }
-                HStack { Button("批准并执行") { decision = "approve" }.buttonStyle(.borderedProminent); Button("拒绝",role:.destructive) { decision = "reject" }.buttonStyle(.bordered) }
             }
-        }.sheet(isPresented:Binding(get:{decision != nil},set:{if !$0 { decision = nil }})) {
-            NavigationStack { VStack(spacing:20) {
-                Text(decision == "approve" ? "确认执行上述改动？" : "拒绝这份确认单？").font(.title3.bold())
-                Text(card["impact"].text)
-                NativeActionButton(title:decision == "approve" ? "确认执行" : "确认拒绝") { _ in
-                    let action = decision ?? "reject"
-                    let detail = try await session.api("confirmations/"+id)
-                    guard detail["status"].text == "pending",detail.version == card.version else { try await onChange(); throw NativeAPIError.message("确认单状态已更新，请返回重新核对。") }
-                    var body: [String:NativeJSON] = ["expected_version":.int(card.version)]
-                    if action == "reject" { body["reason"] = .string("用户在 iPhone 拒绝") }
-                    let result = try await session.api("confirmations/"+id+"/"+action,method:"POST",body:body,key:NativeIDs.stable("confirmation:"+action+":"+id+":"+String(card.version)))
-                    guard result.id == id,result.version > card.version,result["status"].text == (action == "approve" ? "succeeded" : "rejected") else { throw NativeAPIError.message("执行结果尚未确认，请重新读取确认单状态。") }
-                    try await onChange(); await session.reload(); decision = nil
+            .presentationDetents([.large])
+            .interactiveDismissDisabled(submitting)
+        }
+    }
+
+    private func previewRow(_ row: NativeChangePreview.Row) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(row.label).foregroundStyle(NativeTheme.muted)
+            Spacer(minLength: 0)
+            VStack(alignment: .trailing, spacing: 2) {
+                if let previous = row.previous {
+                    Text("原 \(previous)").font(.caption).foregroundStyle(NativeTheme.muted)
                 }
-                Button("返回") { decision = nil }
-            }.padding(24).navigationTitle("核对确认单") }.presentationDetents([.medium,.large])
+                Text(row.value).fontWeight(.semibold).foregroundStyle(NativeTheme.ink)
+            }
+            .multilineTextAlignment(.trailing)
+        }
+        .font(.subheadline)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var portionEditor: some View {
+        NativeCard {
+            DisclosureGroup("调整份量") {
+                ForEach(preview.portions) { portion in
+                    HStack {
+                        Text(portion.name)
+                        Spacer()
+                        TextField(portion.grams, text: Binding(
+                            get: { portionEdits[portion.id] ?? "" },
+                            set: { portionEdits[portion.id] = $0 }
+                        ))
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .accessibilityLabel(portion.name + "份量")
+                        Text("克").foregroundStyle(NativeTheme.muted)
+                    }
+                    .frame(minHeight: 44)
+                }
+                Button("更新份量预览") { Task { await revisePortions() } }
+                    .buttonStyle(.bordered)
+                    .disabled(!hasPortionEdits || submitting)
+            }
+        }
+    }
+
+    private var hasPortionEdits: Bool {
+        portionEdits.values.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    }
+
+    private var decisionButtons: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            NativeErrorText(message: error)
+            if hasPortionEdits {
+                Text("先更新份量预览，再保存。").font(.footnote).foregroundStyle(NativeTheme.muted)
+            }
+            HStack(spacing: 12) {
+                Button("不采纳", role: .cancel) { Task { await decide(approve: false) } }
+                    .buttonStyle(.bordered)
+                    .disabled(submitting)
+                Button(role: preview.destructive ? .destructive : nil) {
+                    Task { await decide(approve: true) }
+                } label: {
+                    HStack {
+                        if submitting { ProgressView() }
+                        Text(submitting ? "正在处理" : preview.approveLabel)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 30)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(tint)
+                .disabled(submitting || hasPortionEdits)
+            }
+            .controlSize(.large)
+        }
+        .padding(16)
+        .background(NativeTheme.surface)
+    }
+
+    @MainActor private func revisePortions() async {
+        guard !submitting else { return }
+        submitting = true
+        defer { submitting = false }
+        error = nil
+        do {
+            var changes: [NativeJSON] = []
+            for item in preview.portions {
+                let text = (portionEdits[item.id] ?? "").trimmingCharacters(in: .whitespaces)
+                guard !text.isEmpty else { continue }
+                guard let grams = Double(text.replacingOccurrences(of: ",", with: ".")), grams.isFinite, grams > 0 else {
+                    throw NativeAPIError.message("请输入 \(item.name) 的有效克数。")
+                }
+                changes.append(.object(["item_index": .int(item.id), "amount_g": .number(grams)]))
+            }
+            guard !changes.isEmpty else { return }
+            let updated = try await session.api("nutrition/pending-entries/" + current.id + "/portions", method: "POST", body: [
+                "expected_version": .int(current.version), "changes": .array(changes)
+            ])
+            guard updated.id == current.id, updated.version > current.version else {
+                throw NativeAPIError.message("份量预览未能核实，请重新打开这段对话。")
+            }
+            revisedCard = updated
+            portionEdits = [:]
+            try await onChange()
+        } catch {
+            self.error = NativeSession.readable(error)
+        }
+    }
+
+    @MainActor private func decide(approve: Bool) async {
+        guard !submitting, pending, !(approve && hasPortionEdits) else { return }
+        submitting = true
+        defer { submitting = false }
+        error = nil
+        let id = current.id
+        let version = current.version
+        let action = approve ? "approve" : "reject"
+        do {
+            let detail = try await session.api("confirmations/" + id)
+            guard detail["status"].text == "pending", detail.version == version else {
+                try await onChange()
+                throw NativeAPIError.message("这项改动已更新，请重新打开预览。")
+            }
+            var body: [String: NativeJSON] = ["expected_version": .int(version)]
+            if !approve { body["reason"] = .string("用户在 iPhone 选择不采纳") }
+            let result = try await session.api("confirmations/" + id + "/" + action, method: "POST", body: body,
+                key: NativeIDs.stable("confirmation:" + action + ":" + id + ":" + String(version)))
+            let expectedStatus = approve ? "succeeded" : "rejected"
+            guard result.id == id, result.version > version, result["status"].text == expectedStatus else {
+                throw NativeAPIError.message("改动结果尚未核实，请重新打开预览。")
+            }
+            receiptStatus = expectedStatus
+            showingPreview = false
+            await session.reload()
+            try? await onChange()
+        } catch {
+            self.error = NativeSession.readable(error)
         }
     }
 }
@@ -403,7 +626,7 @@ struct NativeBusinessSummary: View {
 struct NativeAgentManagementView: View {
     var body: some View {
         List {
-            NavigationLink("会话、草稿和确认记录") { NativeAgentDraftsView() }
+            NavigationLink("会话、草稿和改动记录") { NativeAgentDraftsView() }
             NavigationLink("长期记忆") { NativeMemoriesView() }
         }.navigationTitle("AI 管理")
     }
@@ -416,7 +639,7 @@ private struct NativeAgentDraftsView: View {
         List {
             NativeErrorText(message:resource.error)
             ForEach(resource.value.records,id:\.id) { conversation in NavigationLink(conversation["title"].text.isEmpty ? "新对话" : conversation["title"].text) { NativeConversationConfirmations(id:conversation.id) } }
-        }.navigationTitle("草稿与确认").task { await resource.load { .array(try await session.allPages("agent/conversations",query:["status":"active"])) } }
+        }.navigationTitle("草稿与改动").task { await resource.load { .array(try await session.allPages("agent/conversations",query:["status":"active"])) } }
     }
 }
 
@@ -428,11 +651,11 @@ private struct NativeConversationConfirmations: View {
     var body: some View {
         ScrollView { VStack(alignment:.leading,spacing:14) {
             NativeErrorText(message:resource.error)
-            ForEach(resource.value["confirmation_cards"].values + resource.value["completed_cards"].values,id:\.id) { card in NativeConfirmationView(card:card) { revision += 1 } }
+            ForEach(resource.value["confirmation_cards"].values + resource.value["completed_cards"].values,id:\.id) { card in NativeChangePreviewCard(card:card) { revision += 1 } }
             if resource.value["confirmation_cards"].values.isEmpty { Text("没有待确认的改动").foregroundStyle(NativeTheme.muted) }
             ForEach(resource.value["resolved_counts"].fields.keys.sorted(),id:\.self) { key in Text(NativeLabels.status(key)+"："+resource.value["resolved_counts"][key].text).font(.caption) }
             NavigationLink("打开这段对话") { NativeCoachView(conversationID:id) }
-        }.nativePage() }.navigationTitle("确认记录").task(id:revision) { await resource.load { try await session.api("agent/conversations/"+id+"/confirmations") } }
+        }.nativePage() }.navigationTitle("改动记录").task(id:revision) { await resource.load { try await session.api("agent/conversations/"+id+"/confirmations") } }
     }
 }
 

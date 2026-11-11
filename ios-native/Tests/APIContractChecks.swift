@@ -10,8 +10,16 @@ private final class StubServer: @unchecked Sendable {
     var loseFirstWaterResponse = false
     var waterWrites: [(String, Data)] = []
     let conversationID = "b413b9cf-43f7-45fc-9a76-09174e1d32a0"
+    let runID = "c98415df-1c9a-4fea-9b9b-b3605607bf4a"
     var conversationsCreated = 0
     var messagesSent = 0
+    var stopTest = false
+    private var stopStreamReleased = false
+    private(set) var stopRequests = 0
+
+    func releaseStopStream() { lock.withLock { stopStreamReleased = true } }
+    var canStartStopStream: Bool { lock.withLock { stopStreamReleased } }
+    var stopAccepted: Bool { lock.withLock { stopRequests == 2 } }
 
     func handle(_ request: URLRequest) throws -> (Int, Data) {
         lock.lock()
@@ -42,6 +50,18 @@ private final class StubServer: @unchecked Sendable {
             return (401, Data("{\"error\":{\"code\":\"INVALID_ACCESS_TOKEN\"}}".utf8))
         }
         let conversation = Data("{\"id\":\"\(conversationID)\",\"title\":null,\"status\":\"active\"}".utf8)
+        if path.hasSuffix("/agent/runs/" + runID) {
+            return (200, run(status: "running", version: 2 + stopRequests))
+        }
+        if path.hasSuffix("/agent/runs/" + runID + ":cancel") {
+            let body = try JSONDecoder().decode(NativeJSON.self, from: Self.requestBody(request))
+            precondition(body["expected_version"].integer == 2 + stopRequests)
+            stopRequests += 1
+            if stopRequests == 1 {
+                return (409, Data("{\"error\":{\"code\":\"AGENT_RUN_CONFLICT\"}}".utf8))
+            }
+            return (200, run(status: "cancel_requested", version: 4))
+        }
         if path.hasSuffix("/agent/conversations") && request.httpMethod == "POST" {
             conversationsCreated += 1
             return (201, conversation)
@@ -53,6 +73,7 @@ private final class StubServer: @unchecked Sendable {
                 precondition(body["message"].text == "这是一条联调消息")
                 precondition(UUID(uuidString: body["client_turn_id"].text) != nil)
                 messagesSent += 1
+                if stopTest { return (200, Data()) }
                 return (200, Data((
                     "event: run_started\r\ndata: {\"run_id\":\"c98415df-1c9a-4fea-9b9b-b3605607bf4a\"}\r\n\r\n" +
                     "event: message_delta\ndata: {\"delta\":\"你好\"}\n\n" +
@@ -76,6 +97,10 @@ private final class StubServer: @unchecked Sendable {
         return (200, Data("""
             {"date":"2026-11-09","water_ml":250,"consumed":{"kcal":"12.5","carbs_g":"3.25","protein_g":0,"fat_g":"0"},"target":{"carbs_max_g":"240"}}
             """.utf8))
+    }
+
+    private func run(status: String, version: Int) -> Data {
+        Data("{\"id\":\"\(runID)\",\"conversation_id\":\"\(conversationID)\",\"status\":\"\(status)\",\"version\":\(version)}".utf8)
     }
 
     private static func requestBody(_ request: URLRequest) throws -> Data {
@@ -108,9 +133,34 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
                 Thread.sleep(forTimeInterval: 0.1)
             }
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            if Self.server.stopTest && contentType.hasPrefix("text/event-stream") {
+                deliverStopStream(started: false, remaining: 400)
+                return
+            }
             client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)
         } catch { client?.urlProtocol(self, didFailWithError: error) }
+    }
+    private func deliverStopStream(started: Bool, remaining: Int) {
+        if remaining == 0 {
+            client?.urlProtocol(self, didFailWithError: URLError(.timedOut))
+            return
+        }
+        var hasStarted = started
+        if !hasStarted && Self.server.canStartStopStream {
+            let event = "event: run_started\ndata: {\"run_id\":\"\(Self.server.runID)\"}\n\n"
+            client?.urlProtocol(self, didLoad: Data(event.utf8))
+            hasStarted = true
+        }
+        if hasStarted && Self.server.stopAccepted {
+            client?.urlProtocol(self, didLoad: Data("event: cancelled\ndata: {\"event\":\"cancelled\"}\n\n".utf8))
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+        let next = hasStarted
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(10)) { [weak self] in
+            self?.deliverStopStream(started: next, remaining: remaining - 1)
+        }
     }
     override func stopLoading() {}
 }
@@ -172,6 +222,7 @@ private enum APIContractChecks {
         precondition(writes[0].0 == writes[1].0 && writes[0].1 == writes[1].1)
         print("PASS: uncertain water response retries with identical key and timestamp")
         try await checkCoach(transport: transport)
+        try checkChangePreview()
         try await PersistenceChecks.run()
     }
 
@@ -211,5 +262,42 @@ private enum APIContractChecks {
         try await reopened.open(StubProtocol.server.conversationID)
         precondition(reopened.input == "继续训练计划" && reopened.messages.count == 2)
         print("PASS: coach opens a writable new chat, creates on send, receives SSE, and keeps per-chat drafts")
+
+        StubProtocol.server.stopTest = true
+        reopened.input = "这是一条联调消息"
+        let sending = Task { await reopened.send() }
+        for _ in 0..<100 where !reopened.needsVerification {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        precondition(reopened.receivingReply && reopened.needsVerification && reopened.pending["run_id"].isNull)
+        reopened.requestStop()
+        reopened.requestStop()
+        precondition(reopened.stopping)
+        StubProtocol.server.releaseStopStream()
+        await sending.value
+        precondition(reopened.error == nil, reopened.error ?? "")
+        precondition(reopened.notice == "已停止回复。" && reopened.canCompose && !reopened.stopping)
+        precondition(reopened.input == "这是一条联调消息" && StubProtocol.server.stopRequests == 2)
+        print("PASS: early stop waits for run ID, retries a version conflict, and restores the cancelled draft")
+    }
+
+    private static func checkChangePreview() throws {
+        let body = try JSONDecoder().decode(NativeJSON.self, from: Data("""
+            {"operation_type":"body_measurement_create","impact":"{\\"internal\\":true}","after":{"measurement":{"weight_kg":"71.5","waist_cm":"79","measured_at":"2026-11-11T02:00:00Z","source":"manual","conditions":null,"notes":"[1,2]","expected_version":12}}}
+            """.utf8))
+        let preview = NativeChangePreview(card: body, imperial: false)
+        let rows = preview.sections.flatMap(\.rows)
+        precondition(preview.title == "保存身体记录" && preview.impact == nil)
+        precondition(rows.map(\.label) == ["体重", "腰围", "测量时间"])
+        precondition(rows[0].value.hasSuffix(" kg") && rows[1].value == "79 cm")
+        precondition(rows[2].value == "2026-11-11 10:00")
+
+        let meal = try JSONDecoder().decode(NativeJSON.self, from: Data("""
+            {"operation_type":"nutrition_entry_create","status":"pending","after":{"entry":{"meal_type":"lunch"},"preview":{"items":[{"name":"米饭","amount_g":"150"},{"amount_g":"80"},{"name":"鸡胸肉","amount_g":"100"}],"totals":{"kcal":"330","protein_g":"28"}}}}
+            """.utf8))
+        let mealPreview = NativeChangePreview(card: meal, imperial: false)
+        precondition(mealPreview.portions.map(\.id) == [0, 2])
+        precondition(mealPreview.sections.flatMap(\.rows).contains { $0.label == "热量" && $0.value == "330 千卡" })
+        print("PASS: change previews show named measurements and meal values, omit JSON, and retain item indices")
     }
 }

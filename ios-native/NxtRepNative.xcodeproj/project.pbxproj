@@ -25,6 +25,7 @@
 		42E16F1AC362D52D78F9ACB9 /* NativePlanViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F8373408DD035EC0B0089AC /* NativePlanViews.swift */; };
 		DD37CF5BEF636293AE6D242A /* NativeWorkoutViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40E3447CBDB7056199734241 /* NativeWorkoutViews.swift */; };
 		9A52D53FD21A2312DA14A58A /* NativeAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C79815894329453543848530 /* NativeAgent.swift */; };
+		FC03D35DA27129B57D6B0197 /* NativeChangePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA1B097E56342A8D8F67EA4 /* NativeChangePreview.swift */; };
 		1523CD971CDDAA31B7E60CE6 /* NativeAgentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B20020DFC8E760CD3825A6D /* NativeAgentViews.swift */; };
 		C55D7D85037E56E96F73C6F7 /* NativeAppShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6891044FD8186BCE85FF8721 /* NativeAppShell.swift */; };
 		B1D235D05DFB09FFE22CCDF6 /* NativeCoachViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFB9CDFAD84C04B48F9F1E30 /* NativeCoachViews.swift */; };
@@ -58,6 +59,7 @@
 		3F8373408DD035EC0B0089AC /* NativePlanViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlanViews.swift; sourceTree = "<group>"; };
 		40E3447CBDB7056199734241 /* NativeWorkoutViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeWorkoutViews.swift; sourceTree = "<group>"; };
 		C79815894329453543848530 /* NativeAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAgent.swift; sourceTree = "<group>"; };
+		BCA1B097E56342A8D8F67EA4 /* NativeChangePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeChangePreview.swift; sourceTree = "<group>"; };
 		9B20020DFC8E760CD3825A6D /* NativeAgentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAgentViews.swift; sourceTree = "<group>"; };
 		6891044FD8186BCE85FF8721 /* NativeAppShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAppShell.swift; sourceTree = "<group>"; };
 		BFB9CDFAD84C04B48F9F1E30 /* NativeCoachViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCoachViews.swift; sourceTree = "<group>"; };
@@ -107,6 +109,7 @@
 				6891044FD8186BCE85FF8721 /* NativeAppShell.swift */,
 				9B20020DFC8E760CD3825A6D /* NativeAgentViews.swift */,
 				C79815894329453543848530 /* NativeAgent.swift */,
+				BCA1B097E56342A8D8F67EA4 /* NativeChangePreview.swift */,
 				40E3447CBDB7056199734241 /* NativeWorkoutViews.swift */,
 				3F8373408DD035EC0B0089AC /* NativePlanViews.swift */,
 				D5EA7731D8CD6BE5D54257C0 /* NativeNutritionViews.swift */,
@@ -208,6 +211,7 @@
 				C55D7D85037E56E96F73C6F7 /* NativeAppShell.swift in Sources */,
 				1523CD971CDDAA31B7E60CE6 /* NativeAgentViews.swift in Sources */,
 				9A52D53FD21A2312DA14A58A /* NativeAgent.swift in Sources */,
+				FC03D35DA27129B57D6B0197 /* NativeChangePreview.swift in Sources */,
 				DD37CF5BEF636293AE6D242A /* NativeWorkoutViews.swift in Sources */,
 				42E16F1AC362D52D78F9ACB9 /* NativePlanViews.swift in Sources */,
 				B3A399ABF347FF6AFC4790F8 /* NativeNutritionViews.swift in Sources */,
@@ -257,7 +261,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = NxtRepNative/LocalNetwork.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = NxtRep;
@@ -265,7 +269,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
-				MARKETING_VERSION = 0.3.2;
+				MARKETING_VERSION = 0.3.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zengsiqi.nxtrep.native;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -280,7 +284,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = NxtRepNative/LocalNetwork.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = NxtRep;
@@ -288,7 +292,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
-				MARKETING_VERSION = 0.3.2;
+				MARKETING_VERSION = 0.3.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zengsiqi.nxtrep.native;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

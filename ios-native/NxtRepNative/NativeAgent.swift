@@ -21,10 +21,14 @@ final class NativeAgent: ObservableObject {
     @Published private(set) var activity: String?
     @Published private(set) var busy = false
     @Published private(set) var loadingConversation = false
+    @Published private(set) var receivingReply = false
+    @Published private(set) var stopping = false
     @Published private(set) var pending: NativeJSON = .null
     @Published var error: String?
+    @Published private(set) var notice: String?
     private weak var session: NativeSession?
     private var bound = false
+    private var stoppingRunID: String?
     var needsVerification: Bool { !pending.isNull }
     var canCompose: Bool { session != nil && !busy && !loadingConversation && !needsVerification }
     var canSend: Bool {
@@ -76,6 +80,7 @@ final class NativeAgent: ObservableObject {
         confirmations = []
         reply = ""
         error = nil
+        notice = nil
         restoreInput()
     }
     private var inputKey:String { "ai-input-"+(conversation.id.isEmpty ? "new" : conversation.id) }
@@ -117,9 +122,11 @@ final class NativeAgent: ObservableObject {
         let text = input.trimmingCharacters(in:.whitespacesAndNewlines)
         let sourceDraftKey = inputKey
         busy = true
+        receivingReply = true
         error = nil
+        notice = nil
         activity = "正在发送"
-        defer { busy = false; activity = nil }
+        defer { finishActivity() }
         do {
             if conversation.id.isEmpty {
                 let created = try await session.api("agent/conversations",method:"POST",body:["title":.null])
@@ -128,6 +135,10 @@ final class NativeAgent: ObservableObject {
                 }
                 conversation = created
                 try rememberConversation(created.id)
+            }
+            if stopping {
+                notice = "已停止发送。"
+                return
             }
             let request: [String:NativeJSON] = [
                 "message":.string(text.isEmpty ? "请分析这些图片" : text),
@@ -151,35 +162,46 @@ final class NativeAgent: ObservableObject {
     }
     private func consume() async throws {
         guard let session else { return }
+        receivingReply = true
         reply = ""; activity = "正在读取相关资料"; var terminal = false
+        var cancelled = false
         try await session.streamConversation(pending["conversation_id"].text,body:pending["body"].fields) { event,payload in
             switch event {
             case "run_started":
                 var value = self.pending.fields
                 value["run_id"] = payload["run_id"]
                 try self.updatePending(.object(value))
+                self.submitStopIfReady()
             case "node_completed":
                 self.activity = ["plan_request":"正在制定回答思路","execute_branches":"正在读取相关数据","validate_safety":"正在检查建议","synthesize_response":"正在组织回复"][payload["node"].text] ?? "正在处理"
-            case "message_delta": self.reply += payload["delta"].text; self.activity = "正在回复"
+            case "message_delta":
+                if !self.stopping { self.reply += payload["delta"].text }
+                self.activity = "正在回复"
             case "completed":
                 terminal = true
+                self.receivingReply = false
                 let response = payload["response"]
                 guard !response["message"].isNull else { throw NativeAPIError.message("回复结果不完整，请核实结果。") }
                 self.reply = response["message"].text; self.confirmations = response["confirmation_cards"].values
                 if ["partial","failed"].contains(response["status"].text) { self.error = "部分处理未完成，请查看回复和草稿后再决定是否重试。" }
-            case "cancelled": terminal = true; self.error = "本次回复已取消，请核对已保存的草稿和记录。"
+            case "cancelled":
+                terminal = true
+                cancelled = true
+                self.receivingReply = false
+                self.notice = "已停止回复。"
             case "failed":
                 terminal = payload["error_code"].text != "AGENT_TURN_IN_PROGRESS"
+                self.receivingReply = false
                 self.error = ["VISION_MODEL_BUSY":"视觉服务繁忙，照片已保留。","VISION_ASSESSMENT_INVALID":"视觉评估不完整，照片已保留。"][payload["error_code"].text] ?? "AI 私人教练暂时未能完成处理，请核对结果后重试。"
             default: break
             }
         }
         guard terminal else { throw NativeAPIError.message("连接中断，收到的内容已保留。") }
-        try await resolve()
+        try await resolve(restoreDraft: cancelled)
     }
-    private func resolve() async throws {
+    private func resolve(restoreDraft: Bool = false) async throws {
         try await history()
-        if error != nil,!pending.isNull {
+        if (restoreDraft || error != nil),!pending.isNull {
             if input.isEmpty { input = pending["body"]["message"].text }
             if images.isEmpty { images = pending["body"]["image_asset_ids"].strings }; saveInput()
         }
@@ -187,9 +209,10 @@ final class NativeAgent: ObservableObject {
         activity = nil
     }
     func verify() {
-        guard !busy,!pending.isNull else { return }; busy = true; error = nil
+        guard !busy,!pending.isNull else { return }
+        busy = true; error = nil; notice = nil
         Task {
-            defer { busy = false; activity = nil }
+            defer { finishActivity() }
             do {
                 guard let session else { return }
                 let id = pending["run_id"].text
@@ -197,17 +220,68 @@ final class NativeAgent: ObservableObject {
                 let run = try await session.api("agent/runs/"+id)
                 guard run.id == id,run["conversation_id"].text == pending["conversation_id"].text else { throw NativeAPIError.message("处理状态不一致，请重新打开这段对话。") }
                 if ["running","cancel_requested"].contains(run["status"].text) { error = "请求仍在处理中，稍后再核实；可以取消本次处理。"; return }
+                let cancelled = run["status"].text == "cancelled"
                 if run["status"].text == "succeeded" { reply = run["result_payload"]["message"].text }
-                else { error = "上次处理"+(run["status"].text == "cancelled" ? "已取消" : "未完成")+"，请核对已保存的内容。" }
-                try await resolve()
+                else if cancelled { notice = "已停止回复。" }
+                else { error = "上次处理未完成，请核对已保存的内容。" }
+                try await resolve(restoreDraft: cancelled)
             } catch { self.error = NativeSession.readable(error) }
         }
     }
-    func cancel() async throws {
-        guard let session,!pending["run_id"].text.isEmpty else { throw NativeAPIError.message("尚未收到处理编号，请先核实结果。") }
+    private func finishActivity() {
+        busy = false
+        activity = nil
+        receivingReply = false
+        stopping = false
+    }
+
+    func requestStop() {
+        guard !stopping, receivingReply || (!busy && !pending["run_id"].text.isEmpty) else { return }
+        stopping = true
+        error = nil
+        submitStopIfReady()
+    }
+
+    private func submitStopIfReady() {
         let id = pending["run_id"].text
-        let run = try await session.api("agent/runs/"+id)
-        if ["running","cancel_requested"].contains(run["status"].text) { _ = try await session.api("agent/runs/"+id+":cancel",method:"POST",body:["expected_version":.int(run.version)]) }
-        error = "已请求取消，稍后核实最终结果。"
+        let conversationID = pending["conversation_id"].text
+        guard let session, stopping, UUID(uuidString: id) != nil, stoppingRunID != id else { return }
+        stoppingRunID = id
+        Task {
+            defer { if stoppingRunID == id { stoppingRunID = nil } }
+            do {
+                let result = try await stopRun(id, conversationID: conversationID, session: session)
+                guard pending["run_id"].text == id else { return }
+                if !receivingReply && !busy {
+                    if ["succeeded", "cancelled", "failed"].contains(result["status"].text) {
+                        verify()
+                    } else {
+                        notice = "停止请求已提交，请核实本次结果。"
+                        stopping = false
+                    }
+                }
+            } catch {
+                guard pending["run_id"].text == id else { return }
+                stopping = false
+                self.error = "未能停止。" + NativeSession.readable(error)
+            }
+        }
+    }
+
+    private func stopRun(_ id: String, conversationID: String, session: NativeSession) async throws -> NativeJSON {
+        let path = "agent/runs/" + id
+        for attempt in 0..<3 {
+            let run = try await session.api(path)
+            guard run.id == id, run["conversation_id"].text == conversationID, run.version > 0 else {
+                throw NativeAPIError.message("无法核实本次处理状态。")
+            }
+            guard run["status"].text == "running" else { return run }
+            do {
+                return try await session.api(path + ":cancel", method: "POST", body: ["expected_version": .int(run.version)])
+            } catch NativeAPIError.response(409, _) where attempt < 2 {
+                continue
+            }
+        }
+        throw NativeAPIError.message("处理状态正在更新，请重试。")
     }
 }
