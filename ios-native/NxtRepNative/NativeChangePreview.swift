@@ -33,7 +33,7 @@ struct NativeChangePreview {
         icon = presentation.icon
         approveLabel = presentation.button
         destructive = presentation.destructive
-        impact = Self.readable(card["impact"])
+        impact = operation == "body_measurement_create" ? nil : Self.readable(card["impact"])
 
         var builder = Builder(card: card, imperial: imperial)
         builder.build(operation)

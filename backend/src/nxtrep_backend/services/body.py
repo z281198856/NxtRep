@@ -99,9 +99,6 @@ class BodyService:
         """Create a confirmation without writing the measurement yet."""
         if self.confirmations is None:
             raise RuntimeError("Confirmation repository is required")
-        supplied = {
-            key: value for key, value in body.model_dump(mode="json").items() if value is not None
-        }
         return await self.confirmations.add_confirmation(
             Confirmation(
                 user_id=user_id,
@@ -109,7 +106,7 @@ class BodyService:
                 before=None,
                 after={"measurement": body.model_dump(mode="json")},
                 reason="用户请求记录身体测量数据",
-                impact=f"确认后新增身体测量记录：{supplied}",
+                impact="保存后，本次测量会计入身体趋势。",
                 expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         )

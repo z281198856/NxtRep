@@ -10,6 +10,31 @@ enum NativeIDs {
     }
 }
 
+enum NativeCoachTimelineItem: Identifiable {
+    case message(NativeJSON)
+    case change(NativeJSON)
+
+    var id: String {
+        switch self {
+        case .message(let message): "message-" + message.id
+        case .change(let card): "change-" + card.id
+        }
+    }
+
+    static func ordered(messages: [NativeJSON], cards: [NativeJSON]) -> [Self] {
+        let sequences = Set(messages.map { $0["sequence"].integer })
+        let fallback = messages.last?["sequence"].integer ?? 0
+        let bySequence = Dictionary(grouping: cards) { card in
+            let sequence = card["message_sequence"].integer
+            return sequences.contains(sequence) ? sequence : fallback
+        }
+        if messages.isEmpty { return cards.map(Self.change) }
+        return messages.flatMap { message in
+            [Self.message(message)] + (bySequence[message["sequence"].integer] ?? []).map(Self.change)
+        }
+    }
+}
+
 @MainActor
 final class NativeAgent: ObservableObject {
     @Published private(set) var conversation: NativeJSON = .null
@@ -18,6 +43,7 @@ final class NativeAgent: ObservableObject {
     @Published var input = ""
     @Published var images: [String] = []
     @Published private(set) var reply = ""
+    @Published private(set) var replyCards: [NativeJSON] = []
     @Published private(set) var activity: String?
     @Published private(set) var busy = false
     @Published private(set) var loadingConversation = false
@@ -29,6 +55,13 @@ final class NativeAgent: ObservableObject {
     private weak var session: NativeSession?
     private var bound = false
     private var stoppingRunID: String?
+    var timeline: [NativeCoachTimelineItem] {
+        NativeCoachTimelineItem.ordered(messages: messages, cards: confirmations)
+    }
+    var unfiledReplyCards: [NativeJSON] {
+        let savedIDs = Set(confirmations.map(\.id))
+        return replyCards.filter { !savedIDs.contains($0.id) }
+    }
     var needsVerification: Bool { !pending.isNull }
     var canCompose: Bool { session != nil && !busy && !loadingConversation && !needsVerification }
     var canSend: Bool {
@@ -79,6 +112,7 @@ final class NativeAgent: ObservableObject {
         messages = []
         confirmations = []
         reply = ""
+        replyCards = []
         error = nil
         notice = nil
         restoreInput()
@@ -97,9 +131,10 @@ final class NativeAgent: ObservableObject {
     private func restoreInput() { let v = session?.local?.draft(inputKey)["value"] ?? .null; input = v["text"].text; images = v["images"].strings }
     func history() async throws {
         guard let session,!conversation.id.isEmpty else { return }
+        let id = conversation.id
         var result: [NativeJSON] = [],cursor = 0
         while true {
-            let page = try await session.api("agent/conversations/"+conversation.id+"/messages",query:["after_sequence":String(cursor),"limit":"100"])
+            let page = try await session.api("agent/conversations/"+id+"/messages",query:["after_sequence":String(cursor),"limit":"100"])
             let items = page["list"].values
             var last = cursor
             for item in items { guard item["sequence"].integer > last else { throw NativeAPIError.message("聊天记录分页异常，请重新打开对话。") }; last = item["sequence"].integer }
@@ -108,10 +143,12 @@ final class NativeAgent: ObservableObject {
             guard !items.isEmpty,page["next_sequence"].integer == last,last > cursor else { throw NativeAPIError.message("聊天记录分页不完整，请重新加载。") }
             cursor = last
         }
+        let cards = try await session.api("agent/conversations/"+id+"/confirmations")
+        guard conversation.id == id else { return }
         messages = result
         if result.last?["role"].text == "assistant",result.last?["content"].text == reply { reply = "" }
-        let cards = try await session.api("agent/conversations/"+conversation.id+"/confirmations")
         confirmations = cards["confirmation_cards"].values + cards["completed_cards"].values
+        replyCards = []
     }
     func send() async {
         guard let session,canSend else { return }
@@ -163,7 +200,7 @@ final class NativeAgent: ObservableObject {
     private func consume() async throws {
         guard let session else { return }
         receivingReply = true
-        reply = ""; activity = "正在读取相关资料"; var terminal = false
+        reply = ""; replyCards = []; activity = "正在读取相关资料"; var terminal = false
         var cancelled = false
         try await session.streamConversation(pending["conversation_id"].text,body:pending["body"].fields) { event,payload in
             switch event {
@@ -182,7 +219,8 @@ final class NativeAgent: ObservableObject {
                 self.receivingReply = false
                 let response = payload["response"]
                 guard !response["message"].isNull else { throw NativeAPIError.message("回复结果不完整，请核实结果。") }
-                self.reply = response["message"].text; self.confirmations = response["confirmation_cards"].values
+                self.reply = response["message"].text
+                self.replyCards = response["confirmation_cards"].values
                 if ["partial","failed"].contains(response["status"].text) { self.error = "部分处理未完成，请查看回复和草稿后再决定是否重试。" }
             case "cancelled":
                 terminal = true

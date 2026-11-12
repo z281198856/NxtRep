@@ -82,6 +82,7 @@ async def test_body_measurement_proposal_does_not_write_measurement() -> None:
 
     assert confirmation.operation_type == "body_measurement_create"
     assert confirmation.after["measurement"]["weight_kg"] == "70.5"
+    assert confirmation.impact == "保存后，本次测量会计入身体趋势。"
     body_repository.add_measurement.assert_not_awaited()
     confirmations.add_confirmation.assert_awaited_once()
 

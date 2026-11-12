@@ -222,6 +222,7 @@ private enum APIContractChecks {
         precondition(writes[0].0 == writes[1].0 && writes[0].1 == writes[1].1)
         print("PASS: uncertain water response retries with identical key and timestamp")
         try await checkCoach(transport: transport)
+        try checkCoachTimeline()
         try checkChangePreview()
         try await PersistenceChecks.run()
     }
@@ -281,9 +282,30 @@ private enum APIContractChecks {
         print("PASS: early stop waits for run ID, retries a version conflict, and restores the cancelled draft")
     }
 
+    private static func checkCoachTimeline() throws {
+        let messages: [NativeJSON] = (1...5).map { sequence in
+            .object(["id": .string(String(sequence)), "sequence": .int(sequence)])
+        }
+        let cards = try JSONDecoder().decode([NativeJSON].self, from: Data("""
+            [
+                {"confirmation_id":"pending-meal","message_sequence":3,"status":"pending"},
+                {"confirmation_id":"old-measurement","message_sequence":2,"status":"succeeded"},
+                {"confirmation_id":"saved-meal","message_sequence":5,"status":"succeeded"},
+                {"confirmation_id":"legacy","message_sequence":null,"status":"pending"}
+            ]
+            """.utf8))
+        let order = NativeCoachTimelineItem.ordered(messages: messages, cards: cards).map(\.id)
+        precondition(order == [
+            "message-1", "message-2", "change-old-measurement", "message-3", "change-pending-meal",
+            "message-4", "message-5", "change-saved-meal", "change-legacy"
+        ])
+        precondition(NativeCoachTimelineItem.ordered(messages: [], cards: cards).count == cards.count)
+        print("PASS: saved and pending changes stay next to their original messages")
+    }
+
     private static func checkChangePreview() throws {
         let body = try JSONDecoder().decode(NativeJSON.self, from: Data("""
-            {"operation_type":"body_measurement_create","impact":"{\\"internal\\":true}","after":{"measurement":{"weight_kg":"71.5","waist_cm":"79","measured_at":"2026-11-11T02:00:00Z","source":"manual","conditions":null,"notes":"[1,2]","expected_version":12}}}
+            {"operation_type":"body_measurement_create","status":"succeeded","impact":"确认后新增身体测量记录：{'weight_kg': '71.5', 'source': 'user_reported'}","after":{"measurement":{"weight_kg":"71.5","waist_cm":"79","measured_at":"2026-11-11T02:00:00Z","source":"manual","conditions":null,"notes":"[1,2]","expected_version":12}}}
             """.utf8))
         let preview = NativeChangePreview(card: body, imperial: false)
         let rows = preview.sections.flatMap(\.rows)

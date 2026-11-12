@@ -87,19 +87,24 @@ struct NativeCoachView: View {
                         emptyConversation
                     }
 
-                    ForEach(agent.messages, id: \.id) { NativeChatMessage(message: $0) }
+                    ForEach(agent.timeline) { item in
+                        switch item {
+                        case .message(let message):
+                            NativeChatMessage(message: message)
+                        case .change(let card):
+                            changeCard(card)
+                        }
+                    }
                     if let outgoingMessage { NativeChatMessage(message: outgoingMessage) }
                     if !agent.reply.isEmpty {
                         NativeChatMessage(message: .object(["role": .string("assistant"), "content": .string(agent.reply)]))
                     }
+                    ForEach(agent.unfiledReplyCards, id: \.id) { changeCard($0) }
                     if let activity = agent.activity {
                         HStack(spacing: 8) {
                             ProgressView()
                             Text(agent.stopping ? "正在停止" : activity).font(.subheadline).foregroundStyle(NativeTheme.muted)
                         }
-                    }
-                    ForEach(agent.confirmations, id: \.id) { card in
-                        NativeChangePreviewCard(card: card) { try await agent.history() }.disabled(agent.busy)
                     }
                     NativeErrorText(message: agent.error)
                     if let notice = agent.notice {
@@ -132,6 +137,10 @@ struct NativeCoachView: View {
             .onChange(of: agent.notice) { _, notice in if notice != nil { proxy.scrollTo("end", anchor: .bottom) } }
         }
         .frame(maxHeight: .infinity)
+    }
+
+    private func changeCard(_ card: NativeJSON) -> some View {
+        NativeChangePreviewCard(card: card) { try await agent.history() }.disabled(agent.busy)
     }
 
     private var emptyConversation: some View {
