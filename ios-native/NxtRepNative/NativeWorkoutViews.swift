@@ -10,13 +10,35 @@ struct NativeWorkoutStart: View {
     @State private var startedAt = Date()
     var body: some View {
         Form {
-            Section("训练前状态") {
-                Text(event.isNull ? "自主训练" : event["title"].text).font(.headline)
-                Stepper("睡眠质量 \(sleep) / 5",value:$sleep,in:1...5)
-                Stepper("当前精力 \(energy) / 5",value:$energy,in:1...5)
-                Stepper("可用时间 \(minutes) 分钟",value:$minutes,in:5...300,step:5)
+            Section {
+                HStack(spacing: 12) {
+                    Image(systemName: "dumbbell.fill")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(AppTab.plan.tint)
+                        .frame(width: 46, height: 46)
+                        .background(AppTab.plan.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                        .accessibilityHidden(true)
+                    Text(event.isNull ? "自主训练" : event["title"].text)
+                        .font(.title2.bold())
+                        .foregroundStyle(NativeTheme.ink)
+                        .accessibilityAddTraits(.isHeader)
+                }
+                .padding(.vertical, 4)
             }
-            NativeActionButton(title:"开始训练并保存状态") { key in
+            Section("训练前状态") {
+                Stepper(value: $sleep, in: 1...5) {
+                    Label("睡眠 \(sleep)/5", systemImage: "moon.zzz").monospacedDigit()
+                }
+                Stepper(value: $energy, in: 1...5) {
+                    Label("精力 \(energy)/5", systemImage: "bolt").monospacedDigit()
+                }
+                Stepper(value: $minutes, in: 5...300, step: 5) {
+                    Label("可用 \(minutes) 分钟", systemImage: "clock").monospacedDigit()
+                }
+                .accessibilityLabel("可用时间")
+                .accessibilityValue("\(minutes) 分钟")
+            }
+            NativeActionButton(title:"开始训练") { key in
                 let workout = try await session.api("workouts",method:"POST",body:["calendar_event_id":event.isNull ? .null : event["id"],"plan_day_id":event["plan_day_id"],"started_at":.string(NativeDates.timestamp(startedAt)),"pre_check":.object(["sleep_quality":.int(sleep),"energy":.int(energy),"available_minutes":.int(minutes),"pain":.array([])])],key:key)
                 workoutID = workout.id
             }
@@ -32,17 +54,41 @@ struct NativeWorkoutHistory: View {
         ScrollView {
             VStack(alignment:.leading,spacing:12) {
                 NativeErrorText(message:resource.error)
+                if resource.loading && resource.value.records.isEmpty {
+                    ProgressView().frame(maxWidth: .infinity)
+                }
                 ForEach(resource.value.records,id:\.id) { item in
                     NavigationLink { NativeWorkoutScreen(workoutID:item.id) } label: {
                         NativeCard {
-                            Text(item["date"].text+" · "+NativeLabels.status(item["status"].text)).font(.headline)
-                            Text("\(item["completed_sets"].text) 组 · 总训练量 \(session.weightText(item["total_volume_kg"].double)) · \(item["pr_count"].text) 个个人纪录").font(.caption).foregroundStyle(NativeTheme.muted)
+                            HStack(spacing: 10) {
+                                Image(systemName: "dumbbell")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AppTab.plan.tint)
+                                    .frame(width: 36, height: 36)
+                                    .background(AppTab.plan.tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 11))
+                                    .accessibilityHidden(true)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(item["date"].text).font(.headline).foregroundStyle(NativeTheme.ink)
+                                    Text(NativeWorkoutLabel.status(item["status"].text))
+                                        .font(.caption).foregroundStyle(NativeTheme.muted)
+                                }
+                                Spacer(minLength: 4)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(NativeTheme.muted)
+                                    .accessibilityHidden(true)
+                            }
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), alignment: .leading)], alignment: .leading, spacing: 10) {
+                                NativeWorkoutMetric("组数", value: item["completed_sets"].text, icon: "square.stack")
+                                NativeWorkoutMetric("总训练量", value: session.weightText(item["total_volume_kg"].double), icon: "scalemass")
+                                NativeWorkoutMetric("个人纪录", value: item["pr_count"].text, icon: "trophy")
+                            }
                         }
-                    }.buttonStyle(.plain)
+                    }.buttonStyle(PreviewPressStyle())
                 }
                 if !resource.loading && resource.value.records.isEmpty { ContentUnavailableView("还没有训练历史",systemImage:"dumbbell") }
             }.nativePage()
-        }.navigationTitle("训练历史")
+        }.background(NativeTheme.background).navigationTitle("训练历史")
             .task { await resource.load { .array(try await session.allPages("workouts")) } }
             .refreshable { await resource.load { .array(try await session.allPages("workouts")) } }
     }
@@ -60,46 +106,57 @@ struct NativeWorkoutScreen: View {
     @State private var summary: NativeJSON = .null
     @State private var choosing = false
 
-    private var writable: Bool { ["active","paused","in_progress"].contains(resource.value["status"].text) }
+    private var status: String { resource.value["status"].text }
+    private var paused: Bool { status == "paused" }
+    private var running: Bool { ["active", "in_progress"].contains(status) }
+    private var writable: Bool { running || paused }
+    private var exercises: [NativeJSON] { resource.value["exercises"].values }
+    private var recordedSets: Int {
+        exercises.reduce(0) { count, exercise in count + exercise["sets"].values.filter { $0["voided_at"].isNull }.count }
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment:.leading,spacing:14) {
+            VStack(alignment: .leading, spacing: 14) {
                 NativeErrorText(message:resource.error)
                 if resource.loading && resource.value.isNull { ProgressView("正在恢复训练…") }
                 if !resource.value.isNull {
-                    NativeCard {
-                        HStack {
-                            Text(NativeLabels.status(resource.value["status"].text)).font(.headline)
-                            Spacer()
-                            TimelineView(.periodic(from:.now,by:1)) { clock in
-                                let running = ["active","in_progress"].contains(resource.value["status"].text)
-                                let seconds = resource.value["elapsed_seconds"].integer + (running ? max(0,Int(clock.date.timeIntervalSince(resource.loadedAt ?? clock.date))) : 0)
-                                Text("\(seconds/60):\(String(format:"%02d",seconds%60))").monospacedDigit()
-                            }
-                        }
-                        Text(NativeDates.display(resource.value["started_at"].text)).font(.caption).foregroundStyle(NativeTheme.muted)
-                        if !resource.value["rest_timer"].isNull { NativeRestTimer(timer:resource.value["rest_timer"],paused:resource.value["status"].text == "paused") }
-                        if writable {
-                            let paused = resource.value["status"].text == "paused"
-                            NativeActionButton(title:paused ? "继续训练" : "暂停训练") { key in
-                                _ = try await session.api("workouts/"+workoutID+(paused ? "/resume" : "/pause"),method:"POST",body:["expected_version":.int(resource.value.version),(paused ? "resumed_at" : "paused_at"):.string(NativeDates.timestamp())],key:key)
-                                revision += 1
-                            }
-                            NavigationLink("更新训练前状态") { NativeWorkoutPrecheck(workout:resource.value) { revision += 1 } }
+                    sessionOverview
+                    if !resource.value["rest_timer"].isNull {
+                        NativeRestTimer(timer: resource.value["rest_timer"], paused: paused)
+                    }
+                    if writable {
+                        NativeActionButton(title: paused ? "继续训练" : "暂停训练") { key in
+                            _ = try await session.api("workouts/" + workoutID + (paused ? "/resume" : "/pause"), method: "POST", body: [
+                                "expected_version": .int(resource.value.version),
+                                (paused ? "resumed_at" : "paused_at"): .string(NativeDates.timestamp())
+                            ], key: key)
+                            revision += 1
                         }
                     }
-                    ForEach(resource.value["exercises"].values,id:\.id) { exercise in
+                    if !exercises.isEmpty {
+                        Text("训练动作").font(.headline).foregroundStyle(NativeTheme.ink).accessibilityAddTraits(.isHeader)
+                    }
+                    ForEach(exercises,id:\.id) { exercise in
                         NativeWorkoutExerciseCard(workout:resource.value,exercise:exercise,onChanged:{revision += 1},onReplace:{replacementID = exercise.id; selectingExercise = true})
                     }
                     if writable {
-                        Button("从动作库增加动作") { replacementID = nil; selectingExercise = true }.buttonStyle(.bordered).frame(minHeight:44)
-                        Button("结束训练") { finish = true }.buttonStyle(.borderedProminent).frame(minHeight:44)
-                        Button("放弃本次训练",role:.destructive) { abandon = true }.frame(minHeight:44)
+                        workoutActions
                     }
                     if !summary.isNull { NativeWorkoutSummary(summary:summary) }
                 }
             }.nativePage()
-        }.navigationTitle("训练记录").navigationBarTitleDisplayMode(.inline)
+        }.background(NativeTheme.background).navigationTitle("训练记录").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if writable {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        NavigationLink { NativeWorkoutPrecheck(workout: resource.value) { revision += 1 } } label: {
+                            Image(systemName: "slider.horizontal.3")
+                        }
+                        .accessibilityLabel("更新训练前状态")
+                    }
+                }
+            }
             .task(id:revision) { await load() }.refreshable { await load() }
             .sheet(isPresented:$selectingExercise) { NavigationStack {
                 NativeExerciseLibrary(onSelect:{ selected in
@@ -125,7 +182,112 @@ struct NativeWorkoutScreen: View {
                 } }
             }
     }
+
+    private var sessionOverview: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Image(systemName: NativeWorkoutLabel.icon(status)).accessibilityHidden(true)
+                Text(NativeWorkoutLabel.status(status))
+            }
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(0.14), in: Capsule())
+
+            TimelineView(.periodic(from: .now, by: 1)) { clock in
+                let elapsed = resource.value["elapsed_seconds"].integer
+                let delta = running ? max(0, Int(clock.date.timeIntervalSince(resource.loadedAt ?? clock.date))) : 0
+                let seconds = elapsed + delta
+                Text("\(seconds / 60):\(String(format: "%02d", seconds % 60))")
+                    .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                    .monospacedDigit()
+                    .accessibilityLabel("训练时长")
+                    .accessibilityValue("\(seconds / 60) 分 \(seconds % 60) 秒")
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 14) { sessionMetrics }.fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: 8) { sessionMetrics }
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(Color.white.opacity(0.84))
+            Text(NativeDates.display(resource.value["started_at"].text))
+                .font(.caption)
+                .foregroundStyle(Color.white.opacity(0.75))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .foregroundStyle(.white)
+        .background(
+            LinearGradient(colors: [NativeTheme.hero, NativeTheme.accent], startPoint: .topLeading, endPoint: .bottomTrailing),
+            in: RoundedRectangle(cornerRadius: 22)
+        )
+    }
+
+    @ViewBuilder private var sessionMetrics: some View {
+        Label("\(exercises.count) 个动作", systemImage: "dumbbell")
+        Label("已记录 \(recordedSets) 组", systemImage: "checkmark.circle")
+    }
+
+    private var workoutActions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { replacementID = nil; selectingExercise = true } label: {
+                Label("添加动作", systemImage: "plus")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.bordered)
+            Button { finish = true } label: {
+                Label("结束训练", systemImage: "checkmark.circle")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            Button("放弃本次训练", role: .destructive) { abandon = true }
+                .font(.subheadline)
+                .frame(minHeight: 44)
+        }
+    }
+
     private func load() async { await resource.load { try await session.api("workouts/"+workoutID) } }
+}
+
+private enum NativeWorkoutLabel {
+    static func status(_ status: String) -> String {
+        status == "in_progress" ? "训练中" : NativeLabels.status(status)
+    }
+
+    static func icon(_ status: String) -> String {
+        switch status {
+        case "active", "in_progress": "play.fill"
+        case "paused": "pause.fill"
+        case "completed": "checkmark"
+        case "abandoned": "stop.fill"
+        default: "clock"
+        }
+    }
+
+    static func targetSetCount(_ snapshot: NativeJSON) -> Int {
+        (snapshot["sets"].isNull ? snapshot["target_sets"] : snapshot["sets"]).integer
+    }
+}
+
+private struct NativeWorkoutMetric: View {
+    let title: String
+    let value: String
+    let icon: String
+
+    init(_ title: String, value: String, icon: String) {
+        self.title = title
+        self.value = value
+        self.icon = icon
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: icon).font(.caption).foregroundStyle(NativeTheme.muted)
+            Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(NativeTheme.ink)
+        }
+        .accessibilityElement(children: .combine)
+    }
 }
 
 private struct NativeRestTimer: View {
@@ -136,7 +298,12 @@ private struct NativeRestTimer: View {
             let end = NativeDates.parse(timer["ends_at"].text) ?? clock.date
             let remaining = paused ? timer["remaining_seconds"].integer : max(0,Int(end.timeIntervalSince(clock.date).rounded(.up)))
             Label(remaining == 0 ? "休息结束，可以开始下一组" : "组间休息 \(remaining/60):\(String(format:"%02d",remaining%60))",systemImage:"timer")
-                .font(.subheadline.weight(.semibold)).foregroundStyle(remaining == 0 ? .green : NativeTheme.accent).monospacedDigit()
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(NativeTheme.accent)
+                .monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(NativeTheme.softAccent, in: RoundedRectangle(cornerRadius: 14))
         }
     }
 }
@@ -152,36 +319,32 @@ private struct NativeWorkoutExerciseCard: View {
     @State private var targets = false
     @State private var deleting: NativeJSON = .null
     @State private var error: String?
-    private var writable: Bool { ["active","in_progress"].contains(workout["status"].text) && !exercise["skipped"].flag }
+    private var skipped: Bool { exercise["skipped"].flag }
+    private var writable: Bool { ["active", "in_progress"].contains(workout["status"].text) && !skipped }
+    private var sets: [NativeJSON] { exercise["sets"].values.filter { $0["voided_at"].isNull } }
+    private var target: NativeJSON { exercise["target_snapshot"] }
+    private var targetSets: Int { NativeWorkoutLabel.targetSetCount(target) }
+    private var workingSets: Int { sets.filter { !$0["tags"].strings.contains("warmup") }.count }
+    private var repTarget: String {
+        let low = target["rep_min"].text
+        let high = target["rep_max"].text
+        return low == high ? low : "\(low)–\(high)"
+    }
+
     var body: some View {
         NativeCard {
-            HStack {
-                NavigationLink { NativeExerciseDetail(exerciseID:exercise["exercise_id"].text) } label: { Text(exercise["name_snapshot"].text).font(.headline) }
-                Spacer()
-                if exercise["skipped"].flag { Text("已跳过").font(.caption).foregroundStyle(NativeTheme.muted) }
+            exerciseHeading
+            if targetSets > 0 && !skipped {
+                workoutProgress
             }
-            Text("目标 \(exercise["target_snapshot"]["target_sets"].text) 组 × \(exercise["target_snapshot"]["rep_min"].text)–\(exercise["target_snapshot"]["rep_max"].text) 次").font(.caption).foregroundStyle(NativeTheme.muted)
-            ForEach(exercise["sets"].values.filter {$0["voided_at"].isNull},id:\.id) { set in
-                HStack {
-                    VStack(alignment:.leading,spacing:4) {
-                        Text("第 \(set["set_index"].text) 组 · \(session.weightText(set["weight_kg"].double)) × \(set["reps"].text) 次").monospacedDigit()
-                        if !set["rir"].isNull || !set["rpe"].isNull { Text("RIR \(set["rir"].text) · RPE \(set["rpe"].text)").font(.caption).foregroundStyle(NativeTheme.muted) }
-                    }
-                    Spacer()
-                    if set["pending_local"].flag { Text("待同步").font(.caption).foregroundStyle(.orange) }
-                    if writable && !set["pending_local"].flag {
-                        Button { selectedSet = set; editingSet = true } label:{Image(systemName:"pencil")}.buttonStyle(.borderless).frame(width:44,height:44)
-                        Button(role:.destructive) { deleting = set } label:{Image(systemName:"trash")}.buttonStyle(.borderless).frame(width:44,height:44)
-                    }
-                }.font(.subheadline)
-            }
+            ForEach(sets, id: \.id) { set in setRow(set) }
             if writable {
-                Button("记录一组") { selectedSet = .null; editingSet = true }.buttonStyle(.borderedProminent)
-                HStack { Button("调整组数与休息") { targets = true }; Spacer(); Button("替换动作",action:onReplace) }.font(.caption).frame(minHeight:44)
-                NativeActionButton(title:"跳过这个动作") { key in
-                    _ = try await session.api("workouts/"+workout.id+"/exercises/"+exercise.id+"/skip",method:"POST",body:["reason":.string("用户在训练中跳过动作"),"expected_workout_version":.int(workout.version)],key:key)
-                    onChanged()
+                Button { selectedSet = .null; editingSet = true } label: {
+                    Label("记录一组", systemImage: "plus")
+                        .frame(maxWidth: .infinity, minHeight: 44)
                 }
+                .buttonStyle(.borderedProminent)
+                exerciseOptions
             }
             NativeErrorText(message:error)
         }
@@ -192,6 +355,126 @@ private struct NativeWorkoutExerciseCard: View {
                 do { _ = try await session.api("workouts/"+workout.id+"/sets/"+item.id,method:"DELETE",body:["expected_version":.int(item.version),"reason":.string("用户删除训练组")]); onChanged() }
                 catch { self.error = NativeSession.readable(error) }
             }; deleting = .null }
+        }
+    }
+
+    private var exerciseHeading: some View {
+        HStack(spacing: 8) {
+            let title = Text(exercise["name_snapshot"].text)
+                .font(.headline)
+                .foregroundStyle(NativeTheme.ink)
+            if exercise["exercise_id"].text.isEmpty {
+                title
+            } else {
+                NavigationLink { NativeExerciseDetail(exerciseID: exercise["exercise_id"].text) } label: {
+                    HStack(spacing: 6) {
+                        title
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(NativeTheme.muted)
+                            .accessibilityHidden(true)
+                    }
+                    .frame(minHeight: 44, alignment: .leading)
+                }
+                .buttonStyle(PreviewPressStyle())
+            }
+            Spacer(minLength: 0)
+            if skipped {
+                Text("已跳过").font(.caption).foregroundStyle(NativeTheme.muted)
+            }
+        }
+    }
+
+    private var workoutProgress: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                HStack { progressLabels }.fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: 4) { progressLabels }
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(NativeTheme.muted)
+            .monospacedDigit()
+            ProgressView(value: Double(min(workingSets, targetSets)), total: Double(targetSets))
+                .tint(AppTab.plan.tint)
+                .accessibilityHidden(true)
+        }
+    }
+
+    @ViewBuilder private var progressLabels: some View {
+        Text("正式组 \(workingSets)/\(targetSets)")
+        if !repTarget.isEmpty { Text("每组 \(repTarget) 次") }
+    }
+
+    private func setRow(_ set: NativeJSON) -> some View {
+        let efforts = [
+            set["rir"].isNull ? nil : "RIR \(set["rir"].text)",
+            set["rpe"].isNull ? nil : "RPE \(set["rpe"].text)"
+        ].compactMap { $0 }
+
+        return HStack(spacing: 8) {
+            Text(set["set_index"].text)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AppTab.plan.tint)
+                .padding(8)
+                .background(AppTab.plan.tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityLabel("第 \(set["set_index"].text) 组")
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(session.weightText(set["weight_kg"].double)) × \(set["reps"].text) 次")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(NativeTheme.ink)
+                if !efforts.isEmpty {
+                    Text(efforts.joined(separator: " · ")).font(.caption).foregroundStyle(NativeTheme.muted)
+                }
+                if set["tags"].strings.contains("warmup") {
+                    Text("热身").font(.caption).foregroundStyle(NativeTheme.muted)
+                }
+                if set["pending_local"].flag {
+                    Label("待同步", systemImage: "icloud.and.arrow.up")
+                        .font(.caption)
+                        .foregroundStyle(AppTab.plan.tint)
+                }
+            }
+            .monospacedDigit()
+            Spacer(minLength: 0)
+            if writable && !set["pending_local"].flag {
+                Button { selectedSet = set; editingSet = true } label: {
+                    Image(systemName: "pencil").frame(width: 44, height: 44)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("编辑第 \(set["set_index"].text) 组")
+                Button(role: .destructive) { deleting = set } label: {
+                    Image(systemName: "trash").frame(width: 44, height: 44)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("删除第 \(set["set_index"].text) 组")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(NativeTheme.background, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var exerciseOptions: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 6) {
+                Button { targets = true } label: {
+                    Label("组数与休息", systemImage: "timer").frame(minHeight: 44)
+                }
+                Button(action: onReplace) {
+                    Label("替换动作", systemImage: "arrow.left.arrow.right").frame(minHeight: 44)
+                }
+                NativeActionButton(title: "跳过这个动作") { key in
+                    _ = try await session.api("workouts/" + workout.id + "/exercises/" + exercise.id + "/skip", method: "POST", body: [
+                        "reason": .string("用户在训练中跳过动作"),
+                        "expected_workout_version": .int(workout.version)
+                    ], key: key)
+                    onChanged()
+                }
+            }
+            .font(.subheadline)
+        } label: {
+            Label("动作选项", systemImage: "slider.horizontal.3").font(.subheadline).frame(minHeight: 44)
         }
     }
 }
@@ -258,7 +541,11 @@ private struct NativeWorkoutTargetForm: View {
                 _ = try await session.api("workouts/"+workout.id+"/exercises/"+exercise.id+"/target",method:"PATCH",body:["target_sets":.int(sets),"rest_seconds":.int(rest),"expected_workout_version":.int(workout.version)])
                 onSave(); dismiss()
             }
-        }.navigationTitle("本次训练目标").onAppear { sets = max(1,exercise["target_snapshot"]["target_sets"].integer); rest = exercise["target_snapshot"]["rest_seconds"].integer }
+        }.navigationTitle("本次训练目标").onAppear {
+            let snapshot = exercise["target_snapshot"]
+            sets = max(1, NativeWorkoutLabel.targetSetCount(snapshot))
+            rest = snapshot["rest_seconds"].integer
+        }
     }
 }
 
@@ -308,14 +595,21 @@ private struct NativeWorkoutFinish: View {
 }
 
 struct NativeWorkoutSummary: View {
+    @EnvironmentObject private var session: NativeSession
     let summary: NativeJSON
+
     var body: some View {
         NativeCard {
-            Text("训练完成").font(.title3.bold())
-            LabeledContent("时长",value:"\(summary["duration_seconds"].integer/60) 分钟")
-            LabeledContent("完成组数",value:summary["completed_sets"].text)
-            LabeledContent("总训练量",value:summary["total_volume_kg"].text+" kg")
-            LabeledContent("个人纪录",value:"\(summary["prs"].values.count) 项")
+            Label("训练完成", systemImage: "checkmark.circle.fill")
+                .font(.title3.bold())
+                .foregroundStyle(NativeTheme.ink)
+                .accessibilityAddTraits(.isHeader)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), alignment: .leading)], alignment: .leading, spacing: 12) {
+                NativeWorkoutMetric("时长", value: "\(summary["duration_seconds"].integer / 60) 分钟", icon: "clock")
+                NativeWorkoutMetric("组数", value: summary["completed_sets"].text, icon: "square.stack")
+                NativeWorkoutMetric("总训练量", value: session.weightText(summary["total_volume_kg"].double), icon: "scalemass")
+                NativeWorkoutMetric("个人纪录", value: String(summary["prs"].values.count), icon: "trophy")
+            }
         }
     }
 }

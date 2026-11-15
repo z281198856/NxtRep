@@ -284,54 +284,70 @@ struct NutrientRing: View {
     let amount: Int
     var usesLiveData: Bool = false
     var goal: Int? = nil
-    let onTap: () -> Void
+    let onTap: (() -> Void)?
 
+    private var limit: Int? { usesLiveData ? goal : kind.upperGoal }
     private var fraction: CGFloat {
-        let limit = usesLiveData ? goal : kind.upperGoal
         guard let limit, limit > 0 else { return 0 }
         return CGFloat(min(1, max(0, Double(amount) / Double(limit))))
     }
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(spacing: 7) {
-                ZStack {
-                    Circle().stroke(kind.color.opacity(0.17), lineWidth: 4)
-                    Circle()
-                        .trim(from: 0, to: fill)
-                        .stroke(kind.color, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                    VStack(spacing: 2) {
-                        Text(kind.ringValue(amount))
-                            .font(.system(.body, design: .rounded, weight: .semibold))
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.55)
-                            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(amount)))
-                        Text(kind.ringUnit)
-                            .font(.caption2)
-                            .foregroundStyle(NativeTheme.muted)
-                    }
-                    .padding(.horizontal, 7)
-                }
-                .aspectRatio(1, contentMode: .fit)
-                .frame(maxWidth: 59)
-                .padding(3)
-                Text(kind.title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(kind.labelColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+        Group {
+            if let onTap {
+                Button(action: onTap) { ringLabel }
+                    .buttonStyle(PreviewPressStyle())
+            } else {
+                ringLabel
+                    .accessibilityElement(children: .ignore)
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .contentShape(Rectangle())
-            .foregroundStyle(NativeTheme.ink)
         }
-        .buttonStyle(PreviewPressStyle())
         .accessibilityLabel(kind.title)
-        .accessibilityValue(usesLiveData ? "\(amount.formatted()) \(kind.unit)" : "\(amount.formatted()) \(kind.unit)，示例目标 \(kind.goalLabel)")
+        .accessibilityValue(accessibleValue)
         .onAppear { updateFill() }
         .onChange(of: fraction) { updateFill() }
+    }
+
+    private var ringLabel: some View {
+        VStack(spacing: 6) {
+            ZStack {
+                Circle().fill(kind.color.opacity(0.08))
+                Circle().strokeBorder(kind.color.opacity(0.22), lineWidth: 4)
+                Circle()
+                    .trim(from: 0, to: fill)
+                    .stroke(kind.color, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .padding(2)
+                VStack(spacing: 1) {
+                    Text(kind.ringValue(amount))
+                        .font(.system(.body, design: .rounded, weight: .semibold))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.55)
+                        .contentTransition(reduceMotion ? .identity : .numericText(value: Double(amount)))
+                    Text(kind.ringUnit)
+                        .font(.caption2)
+                        .foregroundStyle(NativeTheme.muted)
+                }
+                .padding(.horizontal, 6)
+            }
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: 62)
+            Text(kind.title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(kind.labelColor)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, minHeight: 44)
+        .contentShape(Rectangle())
+        .foregroundStyle(NativeTheme.ink)
+    }
+
+    private var accessibleValue: String {
+        let value = "\(amount.formatted()) \(kind.unit)"
+        guard usesLiveData else { return value + "，示例目标 " + kind.goalLabel }
+        guard let limit else { return value }
+        return value + "，目标上限 \(limit.formatted()) \(kind.unit)"
     }
 
     private func updateFill() {

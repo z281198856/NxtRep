@@ -10,6 +10,7 @@ struct NativePlanHub: View {
     @State private var keyword = ""
     @State private var error: String?
     @State private var revision = 0
+    @State private var calendarRefresh = 0
 
     private var ranked: [NativeJSON] {
         let all = templates.value.records.filter { keyword.isEmpty || $0["name"].text.localizedCaseInsensitiveContains(keyword) }
@@ -33,44 +34,128 @@ struct NativePlanHub: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment:.leading,spacing:14) {
-                NativeErrorText(message:error)
+            VStack(alignment: .leading, spacing: 20) {
+                NativePlanSchedule(revision: revision + calendarRefresh)
+                NativeErrorText(message: error)
                 if !active.isNull {
-                    NativeCard {
-                        Text("正在使用").font(.caption).foregroundStyle(NativeTheme.muted)
-                        Text(active["name"].text).font(.title3.bold())
-                        Text("每周 \(active["weekly_frequency"].text) 天")
-                        NavigationLink("查看当前计划") { NativePlanContents(plan:active) }
+                    currentPlan
+                }
+                HStack(spacing: 10) {
+                    NavigationLink {
+                        NativePlanCreation(onActivate: { revision += 1 })
+                    } label: {
+                        NativeIconTile(title: "自建 / 导入", icon: "folder.badge.plus", tint: AppTab.plan.tint)
+                    }
+                    NavigationLink {
+                        NativeExerciseLibrary()
+                    } label: {
+                        NativeIconTile(title: "动作库", icon: "figure.strengthtraining.traditional", tint: NativeTheme.accent)
                     }
                 }
-                HStack {
-                    NavigationLink("训练日历") { NativeCalendarView() }
-                    Spacer()
-                    NavigationLink("自建 / 导入计划") { NativePlanCreation() }
-                }.buttonStyle(.bordered)
-                NavigationLink { NativeExerciseLibrary() } label: { Label("动作库与动态解析",systemImage:"figure.strengthtraining.traditional").frame(maxWidth:.infinity,minHeight:44) }.buttonStyle(.borderedProminent)
-                Text("官方训练模板").font(.headline)
-                TextField("搜索计划",text:$keyword).textFieldStyle(.roundedBorder)
-                Toggle("按我的目标、器械和训练频率推荐",isOn:$usePreferences).font(.subheadline)
-                NativeErrorText(message:templates.error)
-                if templates.loading { ProgressView() }
-                LazyVStack(spacing:10) {
-                    ForEach(ranked,id:\.id) { item in
-                        NavigationLink { NativeTemplateDetail(templateID:item.id) { revision += 1 } } label: {
-                            NativeCard {
-                                Text(item["name"].text).font(.headline)
-                                Text("每周 \(item["days_per_week"].text) 天 · 每次约 \(item["duration_minutes"].text) 分钟").font(.caption).foregroundStyle(NativeTheme.muted)
-                                Text(item["equipment"].strings.map(NativeLabels.tool).joined(separator:"、")).font(.caption).foregroundStyle(AppTab.plan.tint)
-                            }
-                        }.buttonStyle(.plain)
-                    }
-                }
-                if !templates.loading && ranked.isEmpty { Text("当前条件没有匹配模板，可关闭条件筛选查看全部计划。").foregroundStyle(NativeTheme.muted) }
+                .buttonStyle(PreviewPressStyle())
+
+                templateList
             }.nativePage()
-        }.navigationTitle("计划")
-            .task(id:revision) { await load() }.refreshable { await load() }
+        }
+        .background(NativeTheme.background)
+        .navigationTitle("计划")
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: revision) { await load() }
+        .refreshable {
+            calendarRefresh += 1
+            await load()
+        }
     }
+
+    private var currentPlan: some View {
+        NavigationLink {
+            NativePlanContents(plan: active)
+        } label: {
+            NativeCard {
+                HStack(spacing: 12) {
+                    NativeActionIcon(symbol: "checklist", tint: AppTab.plan.tint, size: 38)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(active["name"].text).font(.headline)
+                        Text("当前计划 · 每周 \(active["weekly_frequency"].text) 天")
+                            .font(.caption)
+                            .foregroundStyle(NativeTheme.muted)
+                    }
+                    Spacer(minLength: 4)
+                    planChevron
+                }
+            }
+        }
+        .foregroundStyle(NativeTheme.ink)
+        .buttonStyle(PreviewPressStyle())
+    }
+
+    private var templateList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("官方训练模板")
+                .font(.title3.weight(.bold))
+                .accessibilityAddTraits(.isHeader)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(NativeTheme.muted)
+                    .accessibilityHidden(true)
+                TextField("搜索计划", text: $keyword)
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 46)
+            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(NativeTheme.line))
+
+            Toggle(isOn: $usePreferences) {
+                Label("按我的偏好筛选", systemImage: "line.3.horizontal.decrease")
+                    .font(.subheadline)
+            }
+            .padding(.horizontal, 2)
+
+            NativeErrorText(message: templates.error)
+            if templates.loading { ProgressView().frame(maxWidth: .infinity, minHeight: 44) }
+            LazyVStack(spacing: 8) {
+                ForEach(ranked, id: \.id) { item in
+                    NavigationLink {
+                        NativeTemplateDetail(templateID: item.id) { revision += 1 }
+                    } label: {
+                        NativeCard {
+                            HStack(spacing: 12) {
+                                NativeActionIcon(symbol: "dumbbell", tint: AppTab.plan.tint, size: 38)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(item["name"].text).font(.subheadline.weight(.semibold))
+                                    Label("\(item["days_per_week"].text) 天 / 周 · \(item["duration_minutes"].text) 分钟", systemImage: "clock")
+                                        .font(.caption)
+                                        .foregroundStyle(NativeTheme.muted)
+                                    let equipment = item["equipment"].strings.map(NativeLabels.tool).joined(separator: "、")
+                                    if !equipment.isEmpty {
+                                        Text(equipment).font(.caption2).foregroundStyle(AppTab.plan.tint)
+                                    }
+                                }
+                                Spacer(minLength: 4)
+                                planChevron
+                            }
+                        }
+                    }
+                    .foregroundStyle(NativeTheme.ink)
+                    .buttonStyle(PreviewPressStyle())
+                }
+            }
+            if !templates.loading && ranked.isEmpty && templates.error == nil {
+                Text("没有匹配的模板").font(.subheadline).foregroundStyle(NativeTheme.muted)
+            }
+        }
+        .foregroundStyle(NativeTheme.ink)
+    }
+
+    private var planChevron: some View {
+        Image(systemName: "chevron.right")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(NativeTheme.muted)
+            .accessibilityHidden(true)
+    }
+
     private func load() async {
+        error = nil
         await templates.load { try await session.api("training/templates") }
         do { active = try await session.api("training/plans/active") }
         catch NativeAPIError.response(_, let code) where code == "ACTIVE_PLAN_NOT_FOUND" { active = .null }
@@ -91,17 +176,47 @@ struct NativePlanContents: View {
 struct NativePlanDays: View {
     let days: [NativeJSON]
     var body: some View {
-        ForEach(Array(days.enumerated()),id:\.offset) { index, day in
+        ForEach(Array(days.enumerated()), id: \.offset) { index, day in
             NativeCard {
-                Text(day["name"].text.isEmpty ? "训练日 \(index+1)" : day["name"].text).font(.headline)
-                Text("约 \(day["estimated_minutes"].text) 分钟").font(.caption).foregroundStyle(NativeTheme.muted)
-                ForEach(Array(day["exercises"].values.enumerated()),id:\.offset) { _, item in
-                    VStack(alignment:.leading,spacing:4) {
-                        NavigationLink { NativeExerciseDetail(exerciseID:item["exercise_id"].text) } label:{ Text(item["exercise_name"].text.isEmpty ? "查看动作详情" : item["exercise_name"].text) }
-                        Text("\(item["target_sets"].text) 组 × \(item["rep_min"].text)–\(item["rep_max"].text) 次 · 休息 \(item["rest_seconds"].text) 秒").font(.caption).foregroundStyle(NativeTheme.muted)
-                    }.padding(.vertical,4)
+                HStack(spacing: 10) {
+                    NativeActionIcon(symbol: "dumbbell", tint: AppTab.plan.tint, size: 38)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(day["name"].text.isEmpty ? "训练日 \(index + 1)" : day["name"].text)
+                            .font(.headline)
+                            .accessibilityAddTraits(.isHeader)
+                        if !day["estimated_minutes"].text.isEmpty {
+                            Label("约 \(day["estimated_minutes"].text) 分钟", systemImage: "clock")
+                                .font(.caption)
+                                .foregroundStyle(NativeTheme.muted)
+                        }
+                    }
+                }
+                ForEach(Array(day["exercises"].values.enumerated()), id: \.offset) { _, item in
+                    Divider()
+                    NavigationLink {
+                        NativeExerciseDetail(exerciseID: item["exercise_id"].text)
+                    } label: {
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item["exercise_name"].text.isEmpty ? "查看动作详情" : item["exercise_name"].text)
+                                    .font(.subheadline.weight(.semibold))
+                                Text("\(item["target_sets"].text) 组 × \(item["rep_min"].text)–\(item["rep_max"].text) 次 · 休息 \(item["rest_seconds"].text) 秒")
+                                    .font(.caption)
+                                    .foregroundStyle(NativeTheme.muted)
+                            }
+                            Spacer(minLength: 4)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(NativeTheme.muted)
+                                .accessibilityHidden(true)
+                        }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PreviewPressStyle())
                 }
             }
+            .foregroundStyle(NativeTheme.ink)
         }
     }
 }
@@ -170,6 +285,7 @@ private struct NativePlanDayDraft: Identifiable,Codable {
 
 struct NativePlanCreation: View {
     @EnvironmentObject private var session: NativeSession
+    var onActivate: () -> Void = {}
     @State private var mode = "manual"
     @State private var name = "我的训练计划"
     @State private var text = ""
@@ -235,7 +351,7 @@ struct NativePlanCreation: View {
                 }
                 if !draft.isNull {
                     if !draft["recognized_text"].text.isEmpty { Button("编辑识别文字后重新生成") { text = draft["recognized_text"].text; mode = "text"; draft = .null } }
-                    NativePlanDraftReview(initial:draft)
+                    NativePlanDraftReview(initial: draft, onActivate: onActivate)
                 }
             }.nativePage()
         }.navigationTitle("创建训练计划").navigationBarTitleDisplayMode(.inline)
@@ -255,26 +371,328 @@ struct NativePlanCreation: View {
 }
 
 struct NativeCalendarView: View {
-    @EnvironmentObject private var session: NativeSession
-    @StateObject private var resource = NativeResource()
-    @State private var adding = false
     @State private var revision = 0
+
     var body: some View {
         ScrollView {
-            VStack(alignment:.leading,spacing:14) {
-                DatePicker("查看日期",selection:$session.selectedDate,displayedComponents:.date).datePickerStyle(.graphical).environment(\.timeZone,NativeDates.china)
-                NativeErrorText(message:resource.error)
-                ForEach(resource.value.records,id:\.id) { event in
-                    NavigationLink { NativeCalendarEvent(eventID:event.id) } label: {
-                        NativeCard { Text(event["title"].text).font(.headline); Text(event["scheduled_date"].text+" · "+NativeLabels.status(event["status"].text)+" · "+event["estimated_minutes"].text+" 分钟").font(.caption).foregroundStyle(NativeTheme.muted) }
-                    }.buttonStyle(.plain)
+            NativePlanSchedule(expanded: true, revision: revision).nativePage()
+        }
+        .background(NativeTheme.background)
+        .navigationTitle("训练日历")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { revision += 1 }
+    }
+}
+
+private enum NativeCalendarStatus: String, CaseIterable, Identifiable {
+    case planned, completed, missed, skipped
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .planned: "待训练"
+        case .completed: "已完成"
+        case .missed: "未完成"
+        case .skipped: "已跳过"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .planned: NativeTheme.accent
+        case .completed: NativeTheme.color(0x2C715C)
+        case .missed: AppTab.plan.tint
+        case .skipped: NativeTheme.muted
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .planned: "dumbbell.fill"
+        case .completed: "checkmark"
+        case .missed: "clock.arrow.circlepath"
+        case .skipped: "forward.end"
+        }
+    }
+}
+
+private struct NativePlanSchedule: View {
+    @EnvironmentObject private var session: NativeSession
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var resource = NativeResource()
+    @State private var expanded: Bool
+    @State private var adding = false
+    @State private var changes = 0
+    @ScaledMetric(relativeTo: .subheadline) private var dayHeight: CGFloat = 46
+    let revision: Int
+
+    private static let calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = NativeDates.china
+        calendar.firstWeekday = 2
+        return calendar
+    }()
+    private static let weekdays = ["一", "二", "三", "四", "五", "六", "日"]
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 7)
+
+    init(expanded: Bool = false, revision: Int) {
+        _expanded = State(initialValue: expanded)
+        self.revision = revision
+    }
+
+    private var calendar: Calendar { Self.calendar }
+    private var component: Calendar.Component { expanded ? .month : .weekOfYear }
+    private var selectedDay: String { NativeDates.day(session.selectedDate) }
+    private var window: DateInterval {
+        calendar.dateInterval(of: component, for: session.selectedDate)
+            ?? DateInterval(start: calendar.startOfDay(for: session.selectedDate), duration: 86400)
+    }
+
+    private var windowStart: String { NativeDates.day(window.start) }
+    private var windowEnd: String { NativeDates.day(window.end.addingTimeInterval(-1)) }
+    private var hasWindow: Bool {
+        resource.value["start"].text == windowStart && resource.value["end"].text == windowEnd
+    }
+
+    private var eventsByDate: [String: [NativeJSON]] {
+        guard hasWindow else { return [:] }
+        return Dictionary(grouping: resource.value["events"].records) { $0["scheduled_date"].text }
+    }
+
+    private var days: [Date?] {
+        let count = calendar.dateComponents([.day], from: window.start, to: window.end).day ?? 0
+        let leading = expanded ? (calendar.component(.weekday, from: window.start) + 5) % 7 : 0
+        return Array(repeating: nil, count: leading) + (0..<count).map {
+            calendar.date(byAdding: .day, value: $0, to: window.start)
+        }
+    }
+
+    var body: some View {
+        let events = eventsByDate
+        VStack(alignment: .leading, spacing: 14) {
+            NativeCard {
+                calendarHeader
+                LazyVGrid(columns: columns, spacing: 4) {
+                    ForEach(Self.weekdays, id: \.self) { day in
+                        Text(day)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(NativeTheme.muted)
+                            .frame(maxWidth: .infinity)
+                            .accessibilityHidden(true)
+                    }
+                    ForEach(Array(days.enumerated()), id: \.offset) { _, date in
+                        if let date {
+                            dayCell(date, events: events[NativeDates.day(date)] ?? [])
+                        } else {
+                            Color.clear.frame(height: dayHeight).accessibilityHidden(true)
+                        }
+                    }
                 }
-                if resource.value.records.isEmpty && !resource.loading { Text("这个日期范围内没有训练安排").foregroundStyle(NativeTheme.muted) }
-            }.nativePage()
-        }.navigationTitle("训练日历")
-            .toolbar { ToolbarItem(placement:.primaryAction) { Button("新建") { adding = true } } }
-            .task(id:"\(NativeDates.day(session.selectedDate))|\(revision)") { await resource.load { try await session.api("calendar",query:["start_date":NativeDates.day(session.selectedDate.addingTimeInterval(-7*86400)),"end_date":NativeDates.day(session.selectedDate.addingTimeInterval(7*86400))]) } }
-            .sheet(isPresented:$adding) { NavigationStack { NativeCalendarNewEvent { revision += 1 } }.environmentObject(session) }
+                if expanded && !events.isEmpty { calendarLegend }
+            }
+            selectedSchedule(events[selectedDay] ?? [])
+        }
+        .task(id: "\(windowStart)|\(windowEnd)|\(revision)|\(changes)") {
+            let start = windowStart
+            let end = windowEnd
+            await resource.load {
+                let events = try await session.api("calendar", query: ["start_date": start, "end_date": end])
+                return .object(["start": .string(start), "end": .string(end), "events": events])
+            }
+        }
+        .sheet(isPresented: $adding) {
+            NavigationStack { NativeCalendarNewEvent { changes += 1 } }
+                .environmentObject(session)
+        }
+    }
+
+    private var calendarHeader: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text("训练日历")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) { expanded.toggle() }
+                } label: {
+                    Label(expanded ? "周视图" : "月视图", systemImage: expanded ? "calendar" : "calendar.badge.plus")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: 44)
+                }
+                .buttonStyle(PreviewPressStyle())
+                .foregroundStyle(NativeTheme.accent)
+            }
+            HStack(spacing: 3) {
+                Text(monthTitle)
+                    .font(.system(.title3, design: .rounded).weight(.bold))
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 4)
+                if !calendar.isDateInToday(session.selectedDate) {
+                    Button("今天") { select(.now) }
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 4)
+                        .frame(minHeight: 44)
+                        .buttonStyle(PreviewPressStyle())
+                        .foregroundStyle(NativeTheme.accent)
+                }
+                calendarStep(-1)
+                calendarStep(1)
+            }
+        }
+        .foregroundStyle(NativeTheme.ink)
+    }
+
+    private var monthTitle: String {
+        let year = calendar.component(.year, from: session.selectedDate)
+        let month = calendar.component(.month, from: session.selectedDate)
+        return "\(year) 年 \(month) 月"
+    }
+
+    private func calendarStep(_ offset: Int) -> some View {
+        Button {
+            let value = expanded ? offset : offset * 7
+            if let next = calendar.date(byAdding: expanded ? .month : .day, value: value, to: session.selectedDate) {
+                select(next)
+            }
+        } label: {
+            Image(systemName: offset < 0 ? "chevron.left" : "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(NativeTheme.ink)
+                .frame(width: 29, height: 29)
+                .background(NativeTheme.background, in: Circle())
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PreviewPressStyle())
+        .accessibilityLabel(expanded ? (offset < 0 ? "上个月" : "下个月") : (offset < 0 ? "上一周" : "下一周"))
+    }
+
+    private func select(_ date: Date) {
+        guard !calendar.isDate(date, inSameDayAs: session.selectedDate) else { return }
+        session.selectedDate = calendar.isDateInToday(date) ? .now : calendar.startOfDay(for: date)
+    }
+
+    private func dayCell(_ date: Date, events: [NativeJSON]) -> some View {
+        let isSelected = calendar.isDate(date, inSameDayAs: session.selectedDate)
+        let isToday = calendar.isDateInToday(date)
+        let day = calendar.component(.day, from: date)
+        let month = calendar.component(.month, from: date)
+        let eventStatuses = Set(events.map { $0["status"].text })
+        let statuses = NativeCalendarStatus.allCases.filter { eventStatuses.contains($0.rawValue) }
+        return Button {
+            select(date)
+        } label: {
+            VStack(spacing: 3) {
+                Text(day, format: .number)
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .monospacedDigit()
+                HStack(spacing: 2) {
+                    ForEach(statuses) { status in
+                        Circle().fill(isSelected ? Color.white : status.tint).frame(width: 4, height: 4)
+                    }
+                }
+                .frame(height: 4)
+                .accessibilityHidden(true)
+            }
+            .foregroundStyle(isSelected ? .white : NativeTheme.ink)
+            .frame(maxWidth: .infinity, minHeight: dayHeight)
+            .background(isSelected ? NativeTheme.accent : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                if isToday && !isSelected {
+                    RoundedRectangle(cornerRadius: 12).strokeBorder(NativeTheme.accent.opacity(0.45))
+                }
+            }
+            .contentShape(Rectangle())
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isSelected)
+        }
+        .buttonStyle(PreviewPressStyle())
+        .accessibilityLabel("\(isToday ? "今天，" : "")\(month)月\(day)日")
+        .accessibilityValue(statuses.map(\.label).joined(separator: "、"))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var calendarLegend: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) { legendLabels }
+            VStack(alignment: .leading, spacing: 6) { legendLabels }
+        }
+        .foregroundStyle(NativeTheme.muted)
+        .accessibilityHidden(true)
+    }
+
+    private var legendLabels: some View {
+        ForEach(NativeCalendarStatus.allCases) { status in
+            HStack(spacing: 4) {
+                Circle().fill(status.tint).frame(width: 5, height: 5)
+                Text(status.label).font(.caption2)
+            }.fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    private func selectedSchedule(_ events: [NativeJSON]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(calendar.isDateInToday(session.selectedDate) ? "今天的安排" : "\(calendar.component(.month, from: session.selectedDate)) 月 \(calendar.component(.day, from: session.selectedDate)) 日")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Button {
+                    adding = true
+                } label: {
+                    Label("新建", systemImage: "plus")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(minHeight: 44)
+                }
+                .buttonStyle(PreviewPressStyle())
+                .foregroundStyle(NativeTheme.accent)
+                .accessibilityLabel("新建训练安排")
+            }
+            NativeErrorText(message: resource.error)
+            ForEach(events, id: \.id) { event in
+                NavigationLink {
+                    NativeCalendarEvent(eventID: event.id, onChange: { changes += 1 })
+                } label: {
+                    eventRow(event)
+                }
+                .buttonStyle(PreviewPressStyle())
+            }
+            if events.isEmpty {
+                if resource.loading || !hasWindow && resource.error == nil {
+                    ProgressView().frame(maxWidth: .infinity, minHeight: 44)
+                } else if resource.error == nil && hasWindow {
+                    NativeCard {
+                        Label("没有训练安排", systemImage: "moon.stars")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(NativeTheme.muted)
+                    }
+                }
+            }
+        }
+        .foregroundStyle(NativeTheme.ink)
+    }
+
+    private func eventRow(_ event: NativeJSON) -> some View {
+        let status = NativeCalendarStatus(rawValue: event["status"].text) ?? .planned
+        return NativeCard {
+            HStack(spacing: 12) {
+                NativeActionIcon(symbol: status.icon, tint: status.tint, size: 40)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(event["title"].text).font(.subheadline.weight(.semibold))
+                    Text("\(status.label) · \(event["estimated_minutes"].text) 分钟")
+                        .font(.caption)
+                        .foregroundStyle(NativeTheme.muted)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(NativeTheme.muted)
+                    .accessibilityHidden(true)
+            }
+        }
+        .foregroundStyle(NativeTheme.ink)
     }
 }
 
@@ -300,6 +718,7 @@ private struct NativeCalendarNewEvent: View {
 struct NativeCalendarEvent: View {
     @EnvironmentObject private var session: NativeSession
     let eventID: String
+    var onChange: () -> Void = {}
     @StateObject private var resource = NativeResource()
     @State private var strategy = "shift"
     @State private var targetDate = Date()
@@ -333,7 +752,10 @@ struct NativeCalendarEvent: View {
                         ForEach(adjustment["warnings"].strings,id:\.self) { Text($0).foregroundStyle(.orange) }
                         NativeActionButton(title:"确认执行调整") { key in
                             let submitted = try await session.api("calendar/reschedule-drafts/"+adjustment.id+"/submit",method:"POST",body:["expected_version":.int(adjustment.version)],key:key)
-                            _ = try await session.approve(submitted["confirmation_id"].text); adjustment = .null; revision += 1
+                            _ = try await session.approve(submitted["confirmation_id"].text)
+                            adjustment = .null
+                            revision += 1
+                            onChange()
                         }
                     }
                 }

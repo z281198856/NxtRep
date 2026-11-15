@@ -3,6 +3,8 @@ import Charts
 
 struct NativeProgressView: View {
     @EnvironmentObject private var session: NativeSession
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var measurements = NativeResource()
     @StateObject private var overview = NativeResource()
     @StateObject private var trend = NativeResource()
@@ -11,65 +13,215 @@ struct NativeProgressView: View {
     @State private var metric = "weight"
     @State private var adding = false
     @State private var revision = 0
+
+    private var metricName: String {
+        switch metric {
+        case "waist": "腰围"
+        case "body_fat": "体脂率"
+        default: "体重"
+        }
+    }
+    private var metricUnit: String {
+        switch metric {
+        case "waist": session.lengthUnit
+        case "body_fat": "%"
+        default: session.weightUnit
+        }
+    }
+    private var metricTint: Color {
+        switch metric {
+        case "waist": NutrientKind.protein.labelColor
+        case "body_fat": NutrientKind.fat.labelColor
+        default: NativeTheme.accent
+        }
+    }
+    private var trendPoints: [NativeJSON] { trend.value["points"].values }
+
     var body: some View {
         ScrollView {
-            VStack(alignment:.leading,spacing:14) {
-                Picker("日期范围",selection:$days) { Text("近 7 天").tag(7); Text("近 30 天").tag(30); Text("近 90 天").tag(90) }.pickerStyle(.segmented)
-                NativeErrorText(message:overview.error)
-                if !overview.value.isNull {
-                    NativeCard {
-                        Text("训练概览").font(.headline)
-                        LabeledContent("训练次数",value:overview.value["training"]["workout_count"].text)
-                        LabeledContent("训练时长",value:overview.value["training"]["total_duration_minutes"].text+" 分钟")
-                        LabeledContent("个人纪录",value:overview.value["training"]["pr_count"].text)
-                        NavigationLink("查看训练历史") { NativeWorkoutHistory() }
-                    }
-                }
-                HStack { Button("新增身体测量") { adding = true }; Spacer(); NavigationLink("围度法体脂") { NativeNavyBodyFat() } }.buttonStyle(.bordered)
-                NavigationLink { NativeBodyPhotoLibrary() } label: { Label("身体照片与阶段报告",systemImage:"photo.stack").frame(maxWidth:.infinity,minHeight:44) }.buttonStyle(.borderedProminent)
-                NativeCard {
-                    Text("身体趋势").font(.headline)
-                    Picker("指标",selection:$metric) { Text("体重").tag("weight"); Text("腰围").tag("waist"); Text("体脂率").tag("body_fat") }.pickerStyle(.segmented)
-                    NativeErrorText(message:trend.error)
-                    if trend.value["points"].values.isEmpty { Text("这个时间范围内还没有足够记录").foregroundStyle(NativeTheme.muted) }
-                    else {
-                        Chart(Array(trend.value["points"].values.enumerated()),id:\.offset) { _, point in
-                            if let date = NativeDates.parse(point["date"].text) {
-                                LineMark(x:.value("日期",date),y:.value("趋势",converted(point["smoothed_value"].double))).foregroundStyle(NativeTheme.accent)
-                                PointMark(x:.value("日期",date),y:.value("原始记录",converted(point["raw_value"].double))).foregroundStyle(NativeTheme.accent.opacity(0.5))
-                            }
-                        }.frame(height:190).chartYAxisLabel(metric == "body_fat" ? "%" : (metric == "weight" ? session.weightUnit : session.lengthUnit))
-                    }
-                }
-                Text("身体记录").font(.headline)
+            LazyVStack(alignment: .leading, spacing: 15) {
+                trendCard
+                shortcuts
+                trainingOverview
+                Text("身体记录").font(.headline).accessibilityAddTraits(.isHeader)
                 NativeErrorText(message:measurements.error)
+                if measurements.value.records.isEmpty && measurements.loadedAt != nil {
+                    Label("还没有身体记录", systemImage: "scalemass").font(.subheadline).foregroundStyle(NativeTheme.muted)
+                        .padding(.vertical, 10)
+                }
                 ForEach(measurements.value.records,id:\.id) { measurement in
                     NavigationLink { NativeMeasurementForm(existing:measurement) { revision += 1 } } label: {
-                        NativeCard {
-                            Text(NativeDates.display(measurement["measured_at"].text)).font(.subheadline.weight(.semibold))
-                            if !measurement["weight_kg"].isNull { Text("体重 "+session.weightText(measurement["weight_kg"].double)).font(.subheadline) }
-                            if !measurement["waist_cm"].isNull { Text("腰围 "+session.lengthText(measurement["waist_cm"].double)).font(.caption) }
-                            if !measurement["body_fat_percent"].isNull { Text("体脂 "+measurement["body_fat_percent"].text+"%").font(.caption) }
-                        }
-                    }.buttonStyle(.plain)
+                        measurementRow(measurement)
+                    }
+                    .buttonStyle(PreviewPressStyle())
                 }
                 NativeCard {
-                    Text("个人纪录").font(.headline)
+                    Label("个人纪录", systemImage: "trophy.fill").font(.headline).accessibilityAddTraits(.isHeader)
                     NativeErrorText(message:records.error)
                     ForEach(records.value.records,id:\.id) { record in
                         NavigationLink { NativeWorkoutScreen(workoutID:record["workout_id"].text) } label: {
-                            VStack(alignment:.leading,spacing:5) { Text(record["exercise_name"].text); Text(record["record_type"].text+" · "+record["value"].text+" · "+NativeDates.display(record["occurred_at"].text)).font(.caption).foregroundStyle(NativeTheme.muted) }
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(record["exercise_name"].text).font(.subheadline.weight(.semibold)).foregroundStyle(NativeTheme.ink)
+                                    Text(NativeDates.display(record["occurred_at"].text)).font(.caption).foregroundStyle(NativeTheme.muted)
+                                }
+                                Spacer(minLength: 5)
+                                Text(personalRecordValue(record)).font(.subheadline.weight(.semibold)).monospacedDigit()
+                                Image(systemName: "chevron.right").font(.caption).accessibilityHidden(true)
+                            }
+                            .frame(minHeight: 44).contentShape(Rectangle())
                         }
+                        .buttonStyle(PreviewPressStyle())
                     }
-                    if records.value.records.isEmpty { Text("还没有个人纪录").foregroundStyle(NativeTheme.muted) }
+                    if records.value.records.isEmpty && records.loadedAt != nil {
+                        Text("还没有个人纪录").font(.subheadline).foregroundStyle(NativeTheme.muted)
+                    }
                 }
             }.nativePage()
-        }.navigationTitle("进展")
-            .task(id:"\(days)|\(revision)") { await load() }
-            .task(id:metric) { await loadTrend() }
-            .refreshable { await load() }
+        }.background(NativeTheme.background).navigationTitle("进展").navigationBarTitleDisplayMode(.inline)
+            .task(id: "\(days)|\(revision)") { await load() }
+            .task(id: "\(metric)|\(days)|\(revision)") { await loadTrend() }
+            .refreshable { await loadTrend(); await load() }
             .sheet(isPresented:$adding) { NavigationStack { NativeMeasurementForm { revision += 1 } }.environmentObject(session) }
     }
+
+    private var trendCard: some View {
+        NativeCard {
+            HStack {
+                Text("身体趋势").font(.headline).accessibilityAddTraits(.isHeader)
+                Spacer()
+                Picker("日期范围", selection: $days) {
+                    Text("近 7 天").tag(7)
+                    Text("近 30 天").tag(30)
+                    Text("近 90 天").tag(90)
+                }
+                .pickerStyle(.menu)
+            }
+            Picker("指标", selection: $metric) {
+                Text("体重").tag("weight")
+                Text("腰围").tag("waist")
+                Text("体脂率").tag("body_fat")
+            }
+            .pickerStyle(.segmented)
+            NativeErrorText(message: trend.error)
+            if trend.loading || trend.value["metric"].text != metric {
+                if trend.error == nil {
+                    ProgressView().frame(maxWidth: .infinity, minHeight: 145).accessibilityLabel("正在读取身体趋势")
+                }
+            } else if let latest = trendPoints.last, !latest["raw_value"].isNull {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(converted(latest["raw_value"].double).formatted(.number.precision(.fractionLength(0...2))))
+                        .font(.system(.largeTitle, design: .rounded, weight: .bold)).monospacedDigit().foregroundStyle(metricTint)
+                    Text(metricUnit).font(.subheadline.weight(.semibold)).foregroundStyle(NativeTheme.muted)
+                    Spacer(minLength: 4)
+                    Text(latest["date"].text).font(.caption).foregroundStyle(NativeTheme.muted)
+                }
+                .accessibilityElement(children: .combine)
+                Chart(Array(trendPoints.enumerated()), id: \.offset) { _, point in
+                    if let date = NativeDates.parse(point["date"].text) {
+                        LineMark(x: .value("日期", date), y: .value(metricName, converted(point["smoothed_value"].double)))
+                            .foregroundStyle(metricTint)
+                            .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                        PointMark(x: .value("日期", date), y: .value(metricName, converted(point["raw_value"].double)))
+                            .foregroundStyle(metricTint.opacity(0.72))
+                    }
+                }
+                .chartYScale(domain: .automatic(includesZero: false))
+                .chartYAxis { AxisMarks(position: .leading) }
+                .frame(height: 160)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: trendPoints.count)
+            } else {
+                Label("这段时间还没有\(metricName)记录", systemImage: "chart.xyaxis.line")
+                    .font(.subheadline).foregroundStyle(NativeTheme.muted)
+                    .frame(maxWidth: .infinity, minHeight: 100)
+            }
+        }
+    }
+
+    private var shortcuts: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 9), count: typeSize.isAccessibilitySize ? 2 : 3), spacing: 9) {
+            Button { adding = true } label: {
+                NativeIconTile(title: "记体重", icon: "scalemass.fill", tint: NativeTheme.accent)
+            }
+            NavigationLink { NativeNavyBodyFat() } label: {
+                NativeIconTile(title: "围度估脂", icon: "ruler", tint: NutrientKind.protein.labelColor)
+            }
+            NavigationLink { NativeBodyPhotoLibrary() } label: {
+                NativeIconTile(title: "照片与报告", icon: "photo.stack", tint: NutrientKind.fat.labelColor)
+            }
+        }
+        .buttonStyle(PreviewPressStyle())
+    }
+
+    private var trainingOverview: some View {
+        NativeCard {
+            NativeErrorText(message: overview.error)
+            HStack {
+                Text("训练概览").font(.headline).accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 5)
+                NavigationLink("训练历史") { NativeWorkoutHistory() }
+                    .font(.footnote.weight(.semibold))
+                    .frame(minHeight: 44)
+            }
+            if !overview.value.isNull {
+                let training = overview.value["training"]
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: typeSize.isAccessibilitySize ? 2 : 3), spacing: 8) {
+                    statistic("训练次数", value: training["workout_count"].text, symbol: "dumbbell", tint: NativeTheme.accent)
+                    statistic("训练分钟", value: training["total_duration_minutes"].text, symbol: "timer", tint: NutrientKind.protein.labelColor)
+                    statistic("个人纪录", value: training["pr_count"].text, symbol: "trophy", tint: NutrientKind.carbs.labelColor)
+                }
+            } else if overview.loading {
+                ProgressView().accessibilityLabel("正在读取训练概览")
+            }
+        }
+    }
+
+    private func statistic(_ title: String, value: String, symbol: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(tint).accessibilityHidden(true)
+            Text(value.isEmpty ? "—" : value).font(.system(.title3, design: .rounded, weight: .bold)).monospacedDigit()
+            Text(title).font(.caption).foregroundStyle(NativeTheme.muted)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 13))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func measurementRow(_ measurement: NativeJSON) -> some View {
+        NativeCard {
+            HStack(alignment: .center, spacing: 11) {
+                NativeActionIcon(symbol: "scalemass", tint: NativeTheme.accent)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(measurement["weight_kg"].isNull ? "身体测量" : session.weightText(measurement["weight_kg"].double))
+                        .font(.headline).monospacedDigit()
+                    Text(NativeDates.display(measurement["measured_at"].text))
+                        .font(.caption).foregroundStyle(NativeTheme.muted)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(NativeTheme.muted).accessibilityHidden(true)
+            }
+            if !measurement["waist_cm"].isNull || !measurement["body_fat_percent"].isNull {
+                let waist = measurement["waist_cm"]
+                let fat = measurement["body_fat_percent"]
+                let values = [
+                    waist.isNull ? nil : "腰围 " + session.lengthText(waist.double),
+                    fat.isNull ? nil : "体脂 " + fat.text + "%"
+                ].compactMap { $0 }
+                Text(values.joined(separator: " · ")).font(.caption).foregroundStyle(NativeTheme.muted)
+            }
+        }
+        .foregroundStyle(NativeTheme.ink)
+    }
+
+    private func personalRecordValue(_ record: NativeJSON) -> String {
+        switch record["record_type"].text {
+        case "max_weight": return session.weightText(record["value"].double)
+        case "max_reps": return record["value"].text + " 次"
+        default: return record["value"].text
+        }
+    }
+
     private func converted(_ value:Double) -> Double { metric == "weight" ? session.displayWeight(value) : (metric == "waist" ? session.displayLength(value) : value) }
     private var range: [String:String] { ["start_date":NativeDates.day(Date().addingTimeInterval(-Double(days-1)*86400)),"end_date":NativeDates.day()] }
     private func loadTrend() async { await trend.load { var query = range; query["metric"] = metric; query["window"] = days >= 60 ? "14d" : "7d"; return try await session.api("progress/body-trend",query:query) } }
@@ -77,7 +229,6 @@ struct NativeProgressView: View {
         await overview.load { try await session.api("progress/overview",query:range) }
         await measurements.load { .array(try await session.allPages("body/measurements")) }
         await records.load { .array(try await session.allPages("progress/prs")) }
-        await loadTrend()
     }
 }
 

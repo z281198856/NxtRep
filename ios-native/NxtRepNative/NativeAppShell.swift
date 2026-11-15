@@ -69,81 +69,155 @@ private struct NativeSyncBanner: View {
 }
 
 struct NativeHomeView: View {
-    @EnvironmentObject private var session:NativeSession
+    @EnvironmentObject private var session: NativeSession
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
     @StateObject private var resource = NativeResource()
     @State private var revision = 0
     @State private var showNutrition = false
     @State private var showWater = false
-    private var workout:NativeJSON { resource.value["workout"] }
-    private var events:[NativeJSON] { resource.value["events"].records }
+
+    private var day: String { NativeDates.day(session.selectedDate) }
+    private var summary: DailySummary? { session.summary?.date == day ? session.summary : nil }
+    private var workout: NativeJSON { resource.value["workout"] }
+    private var events: [NativeJSON] {
+        resource.value["date"].text == day ? resource.value["events"].records : []
+    }
+    private var shortcutColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 9), count: typeSize.isAccessibilitySize ? 2 : 3)
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment:.leading,spacing:18) {
-                HStack {
-                    Image("BrandMark").resizable().scaledToFit().frame(width:30,height:30).clipShape(RoundedRectangle(cornerRadius:8))
-                    Text("NxtRep").font(.title2.bold()); Spacer()
-                    NavigationLink { NativeCoachNoticesView() } label: { Image(systemName:"bell.badge").frame(width:44,height:44) }.accessibilityLabel("主动教练建议")
-                }
-                Text("每一次，向前一点。").font(.system(size:28,weight:.bold,design:.rounded))
-                NativeDayPicker()
+            VStack(alignment: .leading, spacing: 16) {
+                heading
                 NativeErrorText(message:session.error ?? resource.error)
-                nutritionCard
+                NativeDailyNutritionCard(summary: summary, onNutrient: { kind in
+                    if kind == .water { showWater = true }
+                    else { showNutrition = true }
+                })
+                LazyVGrid(columns: shortcutColumns, spacing: 9) {
+                    entry("记一餐", icon: "fork.knife", color: NutrientKind.carbs.labelColor) { NativeMealEditor(onSave: {}) }
+                    Button { showWater = true } label: {
+                        NativeIconTile(title: "记饮水", icon: "drop.fill", tint: NutrientKind.water.labelColor)
+                    }
+                    .buttonStyle(PreviewPressStyle())
+                    entry("记体重", icon: "scalemass.fill", color: NativeTheme.accent) { NativeMeasurementForm(onSave: {}) }
+                }
                 if !workout.isNull {
-                    NavigationLink { NativeWorkoutScreen(workoutID:workout.id) } label: {
-                        NativeCard {
-                            HStack { Label("继续训练",systemImage:"dumbbell.fill").font(.title3.bold()); Spacer(); Image(systemName:"arrow.up.right") }
-                            Text(NativeLabels.status(workout["status"].text)+" · \(workout["exercises"].values.count) 个动作").foregroundStyle(NativeTheme.muted)
-                        }
-                    }.buttonStyle(.plain)
+                    NavigationLink { NativeWorkoutScreen(workoutID: workout.id) } label: { activeWorkout }
+                        .buttonStyle(PreviewPressStyle())
                 }
-                HStack { Text("当天安排").font(.title3.bold()); Spacer(); NavigationLink("日历") { NativeCalendarView() } }
-                ForEach(events,id:\.id) { event in
-                    NavigationLink { NativeCalendarEvent(eventID:event.id) } label: {
-                        NativeCard { HStack { VStack(alignment:.leading,spacing:5) { Text(event["title"].text).font(.headline); Text(NativeLabels.status(event["status"].text)+" · "+event["estimated_minutes"].text+" 分钟").font(.caption).foregroundStyle(NativeTheme.muted) }; Spacer(); Image(systemName:"chevron.right") } }
-                    }.buttonStyle(.plain)
+                agenda
+                Text("常用工具").font(.headline).accessibilityAddTraits(.isHeader)
+                LazyVGrid(columns: shortcutColumns, spacing: 9) {
+                    entry("食品库", icon: "carrot.fill", color: NutrientKind.carbs.labelColor) { NativeFoodLibrary() }
+                    entry("动作库", icon: "figure.strengthtraining.traditional", color: NativeTheme.accent) { NativeExerciseLibrary() }
+                    entry("拍照记餐", icon: "camera.fill", color: NutrientKind.protein.labelColor) { NativeNutritionPhotoView() }
+                    entry("训练历史", icon: "clock.arrow.circlepath", color: NativeTheme.accent) { NativeWorkoutHistory() }
+                    entry("照片与报告", icon: "photo.on.rectangle", color: NutrientKind.fat.labelColor) { NativeBodyPhotoLibrary() }
+                    entry("离线记录", icon: "icloud.and.arrow.up", color: NutrientKind.water.labelColor) { NativeLocalRecordsView() }
                 }
-                if events.isEmpty && !resource.loading { Text("这一天没有安排，可以休息或自主开练。").font(.subheadline).foregroundStyle(NativeTheme.muted) }
-                NavigationLink { NativeWorkoutStart() } label: { Label("自主开练",systemImage:"play.fill").frame(maxWidth:.infinity,minHeight:48) }.buttonStyle(.borderedProminent)
-                Text("记录与工具").font(.title3.bold())
-                LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:12) {
-                    entry("食物库",icon:"carrot",color:.orange) { NativeFoodLibrary() }
-                    entry("动作库",icon:"figure.strengthtraining.traditional",color:.purple) { NativeExerciseLibrary() }
-                    entry("拍照记餐",icon:"camera",color:.green) { NativeNutritionPhotoView() }
-                    entry("训练历史",icon:"clock.arrow.circlepath",color:.brown) { NativeWorkoutHistory() }
-                    entry("身体测量",icon:"ruler",color:.blue) { NativeMeasurementForm(onSave:{}) }
-                    entry("照片与报告",icon:"photo.on.rectangle",color:.indigo) { NativeBodyPhotoLibrary() }
-                }
-                NavigationLink("离线记录与草稿") { NativeLocalRecordsView() }.font(.caption)
             }.nativePage()
         }.background(NativeTheme.background).navigationBarHidden(true)
-        .task(id:"\(NativeDates.day(session.selectedDate))|\(revision)") { await load() }
+        .task(id:"\(day)|\(revision)") { await load() }
         .refreshable { await session.reload(); await load() }
         .onChange(of:scenePhase) { _,phase in if phase == .active { revision += 1 } }
         .sheet(isPresented:$showNutrition) { NavigationStack { NativeNutritionView() } }
         .sheet(isPresented:$showWater) { NavigationStack { NativeWaterView() } }
     }
-    private var nutritionCard:some View {
+    private var heading: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Image("BrandMark").resizable().scaledToFit()
+                    .frame(width: 26, height: 26).clipShape(RoundedRectangle(cornerRadius: 7))
+                    .accessibilityHidden(true)
+                Text("NxtRep").font(.subheadline.weight(.semibold))
+                Spacer()
+                NavigationLink { NativeCoachNoticesView() } label: {
+                    NativeActionIcon(symbol: "bell.badge", tint: NativeTheme.accent, size: 44)
+                }
+                .buttonStyle(PreviewPressStyle())
+                .accessibilityLabel("主动教练建议")
+            }
+            HStack(alignment: .center, spacing: 8) {
+                Text(day == NativeDates.day() ? "今天" : "记录总览")
+                    .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                NativeDayPicker().labelsHidden().fixedSize()
+            }
+        }
+        .foregroundStyle(NativeTheme.ink)
+    }
+
+    private var activeWorkout: some View {
+        HStack(spacing: 12) {
+            NativeActionIcon(symbol: "dumbbell.fill", tint: .white, size: 44)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("继续训练").font(.headline)
+                Text("\(workout["exercises"].values.count) 个动作")
+                    .font(.footnote).foregroundStyle(.white.opacity(0.75))
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "arrow.up.right").font(.subheadline.weight(.semibold)).accessibilityHidden(true)
+        }
+        .foregroundStyle(.white)
+        .padding(14)
+        .background(NativeTheme.hero, in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private var agenda: some View {
         NativeCard {
-            HStack { Text("今日补给").font(.headline); Spacer(); Text(session.summary.map { "\(Int($0.consumed.kcal.value.rounded())) 千卡" } ?? "暂无数据").font(.subheadline).monospacedDigit() }
-            if let summary = session.summary {
-                HStack(spacing:10) { ForEach(NutrientKind.allCases) { kind in NutrientRing(kind:kind,amount:summary.amount(kind),usesLiveData:true,goal:summary.goal(kind)) { if kind == .water { showWater = true } else { showNutrition = true } } } }
-                Text(summary.target == nil ? "尚未设置营养目标，可在饮食页查看记录与建议。" : "圆环按个人目标上限显示，点击查看明细。").font(.caption2).foregroundStyle(NativeTheme.muted)
-            } else { Text("连接后显示这一天的实际营养与饮水记录。").font(.subheadline).foregroundStyle(NativeTheme.muted) }
-            HStack { NavigationLink("记一餐") { NativeMealEditor(onSave:{}) }; Spacer(); Button("记饮水") { showWater = true } }.font(.subheadline.bold()).frame(minHeight:36)
+            HStack {
+                Text("当天安排").font(.headline).accessibilityAddTraits(.isHeader)
+                Spacer()
+                NavigationLink { NativeCalendarView() } label: {
+                    Label("日历", systemImage: "calendar").font(.footnote.weight(.semibold))
+                        .frame(minHeight: 44)
+                }
+            }
+            ForEach(events, id: \.id) { event in
+                NavigationLink { NativeCalendarEvent(eventID: event.id) } label: {
+                    HStack(spacing: 10) {
+                        NativeActionIcon(symbol: "dumbbell", tint: NativeTheme.accent)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(event["title"].text).font(.subheadline.weight(.semibold)).foregroundStyle(NativeTheme.ink)
+                            Text(NativeLabels.status(event["status"].text) + " · " + event["estimated_minutes"].text + " 分钟")
+                                .font(.caption).foregroundStyle(NativeTheme.muted)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(NativeTheme.muted)
+                    }
+                    .frame(minHeight: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(PreviewPressStyle())
+            }
+            if events.isEmpty && resource.loading {
+                ProgressView().accessibilityLabel("正在读取日程")
+            } else if events.isEmpty && resource.error == nil {
+                Label("这一天没有训练安排", systemImage: "moon.stars")
+                    .font(.subheadline).foregroundStyle(NativeTheme.muted)
+            }
+            NavigationLink { NativeWorkoutStart() } label: {
+                Label("自主开练", systemImage: "play.fill").frame(maxWidth: .infinity, minHeight: 32)
+            }
+            .buttonStyle(.borderedProminent)
         }
     }
-    private func entry<Destination:View>(_ name:String,icon:String,color:Color,@ViewBuilder destination:()->Destination)->some View {
-        NavigationLink(destination:destination) { NativeCard { Image(systemName:icon).font(.title2).foregroundStyle(color); Text(name).font(.subheadline.bold()).foregroundStyle(NativeTheme.ink) } }.buttonStyle(.plain)
+
+    private func entry<Destination: View>(_ name: String, icon: String, color: Color, @ViewBuilder destination: () -> Destination) -> some View {
+        NavigationLink(destination: destination) { NativeIconTile(title: name, icon: icon, tint: color) }
+            .buttonStyle(PreviewPressStyle())
     }
     private func load() async {
         await resource.load {
-            let day = NativeDates.day(session.selectedDate)
+            let day = self.day
             let events = try await session.api("calendar",query:["start_date":day,"end_date":day])
             let current:NativeJSON
             do { current = try await session.api("workouts/active") }
             catch NativeAPIError.response(let code,let name) where code == 404 && name == "WORKOUT_NOT_FOUND" { current = .null }
-            return .object(["events":events,"workout":current])
+            return .object(["date": .string(day), "events": events, "workout": current])
         }
     }
 }

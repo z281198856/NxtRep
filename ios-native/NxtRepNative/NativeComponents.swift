@@ -36,6 +36,116 @@ struct NativeCard<Content: View>: View {
     }
 }
 
+struct NativeActionIcon: View {
+    let symbol: String
+    let tint: Color
+    var size: CGFloat = 36
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: size * 0.43, weight: .semibold))
+            .foregroundStyle(tint)
+            .frame(width: size, height: size)
+            .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: size * 0.35))
+            .accessibilityHidden(true)
+    }
+}
+
+struct NativeIconTile: View {
+    let title: String
+    let icon: String
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: 6) {
+            NativeActionIcon(symbol: icon, tint: tint)
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(NativeTheme.ink)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 70)
+        .padding(.horizontal, 3)
+        .padding(.vertical, 3)
+        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(NativeTheme.line))
+        .contentShape(RoundedRectangle(cornerRadius: 18))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct NativeDailyNutritionCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
+    let summary: DailySummary?
+    var title = "当日营养"
+    var showTargets = false
+    var onNutrient: ((NutrientKind) -> Void)? = nil
+
+    var body: some View {
+        NativeCard {
+            if let summary {
+                let calories = summary.consumed.kcal.value.rounded()
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(NativeTheme.muted)
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            Text(calories.formatted(.number.precision(.fractionLength(0))))
+                                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                                .monospacedDigit()
+                                .foregroundStyle(NativeTheme.ink)
+                                .contentTransition(reduceMotion ? .identity : .numericText(value: calories))
+                            Text("千卡").font(.footnote.weight(.semibold)).foregroundStyle(NativeTheme.muted)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                    Spacer(minLength: 8)
+                    NativeActionIcon(symbol: "flame.fill", tint: NutrientKind.carbs.labelColor, size: 44)
+                }
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: typeSize.isAccessibilitySize ? 2 : 4), spacing: 12) {
+                    ForEach(NutrientKind.allCases) { kind in
+                        NutrientRing(
+                            kind: kind,
+                            amount: summary.amount(kind),
+                            usesLiveData: true,
+                            goal: summary.goal(kind),
+                            onTap: onNutrient.map { action in { action(kind) } }
+                        )
+                    }
+                }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: calories)
+                if showTargets, let target = summary.target {
+                    targetRanges(target)
+                }
+            } else {
+                Label(title, systemImage: "chart.donut").font(.headline).foregroundStyle(NativeTheme.ink)
+                Text("暂无当日数据").font(.subheadline).foregroundStyle(NativeTheme.muted)
+            }
+        }
+    }
+
+    private func targetRanges(_ target: [String: APINumber]) -> some View {
+        DisclosureGroup("每日目标") {
+            ForEach(["kcal", "carbs", "protein", "fat"], id: \.self) { metric in
+                let unit = metric == "kcal" ? " 千卡" : " 克"
+                let suffix = metric == "kcal" ? "" : "_g"
+                if let low = target[metric + "_min" + suffix]?.value,
+                   let high = target[metric + "_max" + suffix]?.value {
+                    let lower = low.formatted(.number.precision(.fractionLength(0...1)))
+                    let upper = high.formatted(.number.precision(.fractionLength(0...1)))
+                    LabeledContent(["kcal": "热量", "carbs": "碳水", "protein": "蛋白质", "fat": "脂肪"][metric] ?? metric,
+                                   value: lower + "–" + upper + unit)
+                        .font(.footnote)
+                        .padding(.top, 5)
+                }
+            }
+        }
+        .font(.footnote.weight(.medium))
+        .foregroundStyle(NativeTheme.muted)
+    }
+}
+
 struct NativeErrorText: View {
     let message: String?
     var body: some View { if let message { Text(message).font(.subheadline).foregroundStyle(.red).textSelection(.enabled) } }

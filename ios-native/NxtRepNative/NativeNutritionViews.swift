@@ -1,85 +1,286 @@
 import SwiftUI
 
+private enum NativeMealSlot: String, CaseIterable, Identifiable {
+    case breakfast, lunch, dinner, snack, other
+
+    var id: String { rawValue }
+    var title: String { NativeLabels.meals[rawValue] ?? rawValue }
+    var icon: String {
+        switch self {
+        case .breakfast: "sunrise.fill"
+        case .lunch: "sun.max.fill"
+        case .dinner: "moon.stars.fill"
+        case .snack: "cup.and.saucer.fill"
+        case .other: "fork.knife"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .breakfast: NativeTheme.color(0xA05E18)
+        case .lunch: NativeTheme.color(0xAD5738)
+        case .dinner: NativeTheme.color(0x6351A4)
+        case .snack: NativeTheme.color(0x9B4B6B)
+        case .other: NativeTheme.accent
+        }
+    }
+}
+
+private struct NativeMealEntryIntent: Identifiable {
+    var meal: NativeMealSlot? = nil
+    var id: String { meal?.id ?? "manual" }
+}
+
 struct NativeNutritionView: View {
     @EnvironmentObject private var session: NativeSession
+    @Environment(\.dynamicTypeSize) private var typeSize
     @StateObject private var resource = NativeResource()
-    @State private var weekly: NativeJSON = .null
-    @State private var create = false
+    @StateObject private var weekly = NativeResource()
+    @State private var entryIntent: NativeMealEntryIntent?
     @State private var revision = 0
+
+    private var selectedDay: String { NativeDates.day(session.selectedDate) }
+    private var summary: DailySummary? { session.summary?.date == selectedDay ? session.summary : nil }
+    private var entries: [NativeJSON] {
+        resource.value["for_date"].text == selectedDay ? resource.value["entries"].records : []
+    }
+    private var recentSummary: NativeJSON {
+        weekly.value["for_date"].text == selectedDay ? weekly.value["summary"] : .null
+    }
+    private var tileColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 8), count: typeSize >= .xLarge ? 3 : 5)
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment:.leading, spacing:14) {
-                NativeDayPicker()
-                NativeErrorText(message:resource.error)
-                if let summary = session.summary {
-                    NativeCard {
-                        Text("当日营养").font(.headline)
-                        NativeNutrientValues(value:.object(["kcal":.number(summary.consumed.kcal.value),"carbs_g":.number(summary.consumed.carbsG.value),"protein_g":.number(summary.consumed.proteinG.value),"fat_g":.number(summary.consumed.fatG.value)]))
-                        Text("饮水 \(summary.waterMl) 毫升").foregroundStyle(NutrientKind.water.labelColor)
-                        if let target = summary.target {
-                            Text("个人每日目标范围").font(.subheadline.bold())
-                            ForEach(["kcal","protein","carbs","fat"],id:\.self) { metric in
-                                let minKey = metric == "kcal" ? "kcal_min" : metric+"_min_g"
-                                let maxKey = metric == "kcal" ? "kcal_max" : metric+"_max_g"
-                                if let low = target[minKey]?.value,let high = target[maxKey]?.value { LabeledContent(["kcal":"热量","protein":"蛋白质","carbs":"碳水","fat":"脂肪"][metric]!,value:"\(Int(low.rounded()))–\(Int(high.rounded())) "+(metric == "kcal" ? "千卡" : "克")) }
-                            }
-                        }
-                    }
-                }
-                LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:10) {
-                    NavigationLink { NativeFoodLibrary() } label: { Label("食品库",systemImage:"fork.knife") }
-                    Button { create = true } label: { Label("手动记录",systemImage:"square.and.pencil") }
-                    NavigationLink { NativeWaterView() } label: { Label("饮水记录",systemImage:"drop") }
-                    NavigationLink { NativeRecentMeals() } label: { Label("复制最近餐食",systemImage:"doc.on.doc") }
-                    NavigationLink { NativeNutritionPhotoView() } label: { Label("拍照记一餐",systemImage:"camera") }
-                    NavigationLink { NativeNutritionTools() } label: { Label("饮食工具",systemImage:"wand.and.stars") }
-                }.buttonStyle(.bordered).font(.subheadline)
-                if resource.loading { ProgressView() }
-                ForEach(["breakfast","lunch","dinner","snack","other"],id:\.self) { meal in
-                    let entries = resource.value.records.filter { $0["meal_type"].text == meal }
-                    if !entries.isEmpty {
-                        Text(NativeLabels.meals[meal]!).font(.headline).padding(.top,4)
-                        ForEach(entries,id:\.id) { entry in
-                            NavigationLink { NativeMealEditor(existing:entry) { revision += 1 } } label: { NativeMealRow(entry:entry) }.buttonStyle(.plain)
-                        }
-                    }
-                }
-                if !resource.loading && resource.value.records.isEmpty { ContentUnavailableView("当天还没有饮食记录",systemImage:"fork.knife",description:Text("可从食品库选择、手动记录，或拍照估算后核对。")) }
-                if !weekly.isNull {
-                    NativeCard {
-                        Text("最近七天").font(.headline)
-                        Text("已记录 \(weekly["recorded_days"].text) 天 · \(weekly["total_entries"].text) 条饮食")
-                        Text("日均营养").font(.subheadline.weight(.semibold))
-                        NativeNutrientValues(value:weekly["daily_average"])
-                    }
-                }
-            }.nativePage()
+            VStack(alignment: .leading, spacing: 20) {
+                dayPicker
+                NativeErrorText(message: session.error ?? resource.error ?? weekly.error)
+                NativeDailyNutritionCard(summary: summary, showTargets: true)
+                quickActions
+                foodTools
+                mealHistory
+                if !recentSummary.isNull { weeklyCard }
+            }
+            .nativePage()
         }
-        .navigationTitle("饮食").navigationBarTitleDisplayMode(.inline)
-        .task(id:"\(NativeDates.day(session.selectedDate))|\(revision)") { await load() }
+        .background(NativeTheme.background)
+        .navigationTitle("饮食")
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: "\(selectedDay)|\(revision)") { await load() }
         .refreshable { await load() }
-        .sheet(isPresented:$create) { NavigationStack { NativeMealEditor { revision += 1 } }.environmentObject(session) }
+        .sheet(item: $entryIntent) { intent in
+            NavigationStack {
+                NativeMealEditor(initialMeal: intent.meal?.id) { revision += 1 }
+            }
+            .environmentObject(session)
+        }
     }
+
+    private var dayPicker: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "calendar")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(NativeTheme.accent)
+                .accessibilityHidden(true)
+            DatePicker("记录日期", selection: $session.selectedDate, displayedComponents: .date)
+                .labelsHidden()
+                .datePickerStyle(.compact)
+                .environment(\.timeZone, NativeDates.china)
+            Spacer(minLength: 0)
+            if selectedDay != NativeDates.day() {
+                Button("回到今天") { session.selectedDate = .now }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(NativeTheme.accent)
+                    .frame(minHeight: 44)
+            }
+        }
+    }
+
+    private var quickActions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("快捷记录").font(.headline).accessibilityAddTraits(.isHeader)
+            LazyVGrid(columns: tileColumns, spacing: 8) {
+                NavigationLink { NativeMeasurementForm(onSave: {}) } label: {
+                    NativeIconTile(title: "体重", icon: "scalemass.fill", tint: NativeTheme.color(0x375E93))
+                }
+                .accessibilityLabel("记录体重")
+
+                ForEach([NativeMealSlot.breakfast, .lunch, .dinner]) { meal in
+                    Button { entryIntent = NativeMealEntryIntent(meal: meal) } label: {
+                        NativeIconTile(title: meal.title, icon: meal.icon, tint: meal.tint)
+                    }
+                    .accessibilityLabel("记录\(meal.title)")
+                }
+
+                NavigationLink { NativeWaterView() } label: {
+                    NativeIconTile(title: "饮水", icon: "drop.fill", tint: NutrientKind.water.labelColor)
+                }
+                .accessibilityLabel("饮水记录")
+            }
+            .buttonStyle(PreviewPressStyle())
+        }
+    }
+
+    private var foodTools: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("饮食工具").font(.headline).accessibilityAddTraits(.isHeader)
+            LazyVGrid(columns: tileColumns, spacing: 8) {
+                NavigationLink { NativeFoodLibrary() } label: {
+                    NativeIconTile(title: "食品库", icon: "fork.knife", tint: NativeTheme.accent)
+                }
+                Button { entryIntent = NativeMealEntryIntent() } label: {
+                    NativeIconTile(title: "手动记", icon: "square.and.pencil", tint: NativeTheme.accent)
+                }
+                .accessibilityLabel("手动记录饮食")
+                NavigationLink { NativeNutritionPhotoView() } label: {
+                    NativeIconTile(title: "拍照", icon: "camera.fill", tint: NativeTheme.accent)
+                }
+                .accessibilityLabel("拍照记一餐")
+                NavigationLink { NativeRecentMeals() } label: {
+                    NativeIconTile(title: "复制", icon: "doc.on.doc", tint: NativeTheme.accent)
+                }
+                .accessibilityLabel("复制最近餐食")
+                NavigationLink { NativeNutritionTools() } label: {
+                    NativeIconTile(title: "更多", icon: "ellipsis", tint: NativeTheme.accent)
+                }
+                .accessibilityLabel("更多饮食工具")
+            }
+            .buttonStyle(PreviewPressStyle())
+        }
+    }
+
+    private var mealHistory: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("餐食记录").font(.headline).accessibilityAddTraits(.isHeader)
+            if entries.isEmpty {
+                if resource.loading || (resource.value["for_date"].text != selectedDay && resource.error == nil) {
+                    ProgressView().frame(maxWidth: .infinity, minHeight: 56).accessibilityLabel("正在读取餐食")
+                } else if resource.error == nil {
+                    NativeCard {
+                        Label("当天还没有餐食记录", systemImage: "fork.knife")
+                            .font(.subheadline)
+                            .foregroundStyle(NativeTheme.muted)
+                    }
+                }
+            } else {
+                ForEach(entries, id: \.id) { entry in
+                    NavigationLink { NativeMealEditor(existing: entry) { revision += 1 } } label: {
+                        NativeMealRow(entry: entry, showsDate: false, showsChevron: true)
+                    }
+                    .buttonStyle(PreviewPressStyle())
+                }
+            }
+        }
+    }
+
+    private var weeklyCard: some View {
+        NativeCard {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("日均营养").font(.subheadline.weight(.semibold))
+                    NativeNutrientValues(value: recentSummary["daily_average"])
+                }
+                .padding(.top, 12)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "chart.bar.xaxis").foregroundStyle(NativeTheme.accent).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("最近七天").font(.subheadline.weight(.semibold)).foregroundStyle(NativeTheme.ink)
+                        Text("\(recentSummary["recorded_days"].text) 天有记录 · \(recentSummary["total_entries"].text) 餐")
+                            .font(.caption)
+                            .foregroundStyle(NativeTheme.muted)
+                    }
+                }
+            }
+        }
+    }
+
     private func load() async {
+        let date = session.selectedDate
+        let day = NativeDates.day(date)
         await session.reload()
-        await resource.load { try await session.api("nutrition/entries",query:["date":NativeDates.day(session.selectedDate)]) }
-        do { weekly = try await session.api("nutrition/weekly-summary",query:["start_date":NativeDates.day(session.selectedDate.addingTimeInterval(-6*86400))]) }
-        catch { resource.error = NativeSession.readable(error) }
+        guard !Task.isCancelled, selectedDay == day else { return }
+        await resource.load {
+            let entries = try await session.api("nutrition/entries", query: ["date": day])
+            return .object(["for_date": .string(day), "entries": entries])
+        }
+        guard !Task.isCancelled, selectedDay == day else { return }
+        await weekly.load {
+            let start = NativeDates.day(date.addingTimeInterval(-6 * 86_400))
+            let summary = try await session.api("nutrition/weekly-summary", query: ["start_date": start])
+            return .object(["for_date": .string(day), "summary": summary])
+        }
     }
 }
 
 struct NativeMealRow: View {
     let entry: NativeJSON
+    var showsDate = true
+    var showsChevron = false
+
+    private var meal: NativeMealSlot { NativeMealSlot(rawValue: entry["meal_type"].text) ?? .other }
+    private var when: String {
+        let raw = entry["eaten_at"].text
+        guard !showsDate, let date = NativeDates.parse(raw) else { return NativeDates.display(raw) }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = NativeDates.china
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
     var body: some View {
         NativeCard {
-            HStack {
-                Text(entry["items"].values.map { $0["name"].text }.joined(separator:"、")).font(.subheadline.weight(.semibold))
-                Spacer()
-                Text(entry["totals"]["kcal"].text + " 千卡").font(.subheadline).foregroundStyle(AppTab.meals.tint)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: meal.icon)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(meal.tint)
+                    .frame(width: 36, height: 36)
+                    .background(meal.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    let names = entry["items"].values.map { $0["name"].text }.filter { !$0.isEmpty }
+                    Text(names.isEmpty ? meal.title : names.joined(separator: "、"))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(NativeTheme.ink)
+                        .lineLimit(2)
+                    Text("\(meal.title) · \(when)")
+                        .font(.caption)
+                        .foregroundStyle(NativeTheme.muted)
+                }
+                Spacer(minLength: 0)
+                Text("\(entry["totals"]["kcal"].text) 千卡")
+                    .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(AppTab.meals.tint)
+                if showsChevron {
+                    Image(systemName: "chevron.right").font(.caption2.weight(.semibold))
+                        .foregroundStyle(NativeTheme.muted).accessibilityHidden(true)
+                }
             }
-            Text(NativeDates.display(entry["eaten_at"].text)).font(.caption).foregroundStyle(NativeTheme.muted)
-            Text("碳水 \(entry["totals"]["carbs_g"].text)g · 蛋白质 \(entry["totals"]["protein_g"].text)g · 脂肪 \(entry["totals"]["fat_g"].text)g").font(.caption).foregroundStyle(NativeTheme.muted)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { macros }
+                VStack(alignment: .leading, spacing: 6) { macros }
+            }
         }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private var macros: some View {
+        macro(.carbs, key: "carbs_g")
+        macro(.protein, key: "protein_g")
+        macro(.fat, key: "fat_g")
+    }
+
+    private func macro(_ kind: NutrientKind, key: String) -> some View {
+        Label {
+            Text("\(kind.title) \(entry["totals"][key].text)g")
+        } icon: {
+            Circle().fill(kind.labelColor).frame(width: 5, height: 5).accessibilityHidden(true)
+        }
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(kind.labelColor)
     }
 }
 
@@ -116,15 +317,34 @@ private struct NativeMealLine: Identifiable {
 struct NativeMealEditor: View {
     @EnvironmentObject private var session: NativeSession
     @Environment(\.dismiss) private var dismiss
-    var existing: NativeJSON = .null
+    let existing: NativeJSON
+    let initialMeal: String?
     let onSave: () -> Void
     @State private var lines = [NativeMealLine()]
-    @State private var meal = "lunch"
+    @State private var meal: String
     @State private var eatenAt = Date()
     @State private var flexible = false
     @State private var notes = ""
     @State private var deleteDialog = false
     @State private var mutationError: String?
+
+    init(existing: NativeJSON = .null, initialMeal: String? = nil, onSave: @escaping () -> Void) {
+        self.existing = existing
+        self.initialMeal = initialMeal
+        self.onSave = onSave
+        _meal = State(initialValue: existing.isNull ? initialMeal ?? "lunch" : existing["meal_type"].text)
+    }
+
+    private var draftKey: String {
+        if !existing.isNull { return "nutrition-manual-" + existing.id }
+        let base = "nutrition-manual-" + NativeDates.day(session.selectedDate)
+        return base + (initialMeal.map { "-" + $0 } ?? "")
+    }
+
+    private var draftTitle: String {
+        initialMeal.flatMap { NativeLabels.meals[$0] }.map { "记录" + $0 } ?? "手动饮食记录"
+    }
+
     var body: some View {
         Form {
             Section("进食信息") {
@@ -153,19 +373,19 @@ struct NativeMealEditor: View {
                 var body: [String:NativeJSON] = ["meal_type":.string(meal),"items":.array(try lines.map { try $0.payload() }),"is_flexible_meal":.bool(flexible),"notes":notes.isEmpty ? .null : .string(notes)]
                 if existing.isNull { body["eaten_at"] = .string(NativeDates.timestamp(eatenAt)) }
                 else { body["expected_version"] = .int(existing.version); body["reason"] = .string("用户在 iPhone 编辑饮食记录") }
-                _ = try await session.api(existing.isNull ? "nutrition/entries" : "nutrition/entries/" + existing.id,method:existing.isNull ? "POST" : "PATCH",body:body,key:key,draftKey:existing.isNull ? "nutrition-manual-"+NativeDates.day(session.selectedDate) : nil)
+                _ = try await session.api(existing.isNull ? "nutrition/entries" : "nutrition/entries/" + existing.id,method:existing.isNull ? "POST" : "PATCH",body:body,key:key,draftKey:existing.isNull ? draftKey : nil)
                 await session.reload(); onSave(); dismiss()
             }
             if !existing.isNull { Button("删除这条饮食记录",role:.destructive) { deleteDialog = true } }
             NativeErrorText(message:mutationError)
         }
-        .navigationTitle(existing.isNull ? "手动记录" : "编辑饮食")
+        .navigationTitle(existing.isNull ? draftTitle : "编辑饮食")
         .toolbar { ToolbarItem(placement:.cancellationAction) { Button("取消") { dismiss() } } }
         .onAppear {
-            eatenAt = session.selectedDate
+            eatenAt = NativeDates.day(session.selectedDate) == NativeDates.day() ? .now : session.selectedDate
             if !existing.isNull { lines = existing["items"].values.map(NativeMealLine.init); meal = existing["meal_type"].text; flexible = existing["is_flexible_meal"].flag; notes = existing["notes"].text }
         }
-        .nativeDraft("nutrition-manual-"+(existing.isNull ? NativeDates.day(session.selectedDate) : existing.id),label:"手动饮食记录",value:.object(["lines":.array(lines.map(\.draft)),"meal":.string(meal),"time":.string(NativeDates.timestamp(eatenAt)),"flexible":.bool(flexible),"notes":.string(notes)])) { value in
+        .nativeDraft(draftKey,label:draftTitle,value:.object(["lines":.array(lines.map(\.draft)),"meal":.string(meal),"time":.string(NativeDates.timestamp(eatenAt)),"flexible":.bool(flexible),"notes":.string(notes)])) { value in
             if existing.isNull { lines = value["lines"].values.map(NativeMealLine.init); meal = value["meal"].text; eatenAt = NativeDates.parse(value["time"].text) ?? .now; flexible = value["flexible"].flag; notes = value["notes"].text }
         }
         .confirmationDialog("删除这条饮食记录？",isPresented:$deleteDialog,titleVisibility:.visible) {
