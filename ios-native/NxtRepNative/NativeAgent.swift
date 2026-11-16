@@ -75,9 +75,7 @@ final class NativeAgent: ObservableObject {
         pending = session.local?.draft("ai-pending")["value"] ?? .null
         restoreInput()
         let pendingID = pending["conversation_id"].text
-        let selected = pendingID.isEmpty
-            ? (conversationID ?? session.local?.draft("ai-current")["value"].text ?? "")
-            : pendingID
+        let selected = pendingID.isEmpty ? (conversationID ?? "") : pendingID
         do {
             if !selected.isEmpty { try await open(selected) }
             if !pending.isNull { error = "上次回复尚未核实，请先核实结果，避免重复发送。" }
@@ -92,19 +90,13 @@ final class NativeAgent: ObservableObject {
         try persistInput()
         let next = try await session.api("agent/conversations/"+id)
         guard next["status"].text == "active" else { throw NativeAPIError.message("这段对话已归档，请先在历史中恢复。") }
-        try rememberConversation(id)
         showConversation(next)
         try await history()
     }
     func startNewConversation() throws {
         guard canCompose else { throw NativeAPIError.message("请先完成或核实当前回复。") }
         try persistInput()
-        try rememberConversation(nil)
         showConversation(.null)
-    }
-
-    private func rememberConversation(_ id: String?) throws {
-        try session?.local?.saveDraft("ai-current",label:"当前 AI 会话",value:id.map(NativeJSON.string) ?? .null)
     }
 
     private func showConversation(_ next: NativeJSON) {
@@ -171,7 +163,6 @@ final class NativeAgent: ObservableObject {
                     throw NativeAPIError.message("创建对话后没有收到有效编号，请打开历史检查。")
                 }
                 conversation = created
-                try rememberConversation(created.id)
             }
             if stopping {
                 notice = "已停止发送。"

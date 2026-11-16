@@ -50,13 +50,17 @@ struct NativeCoachView: View {
         }
         .sheet(isPresented: $showHistory) {
             NavigationStack {
-                NativeConversationHistory { id in
+                NativeConversationHistory(onSelect: { id in
                     Task {
                         showHistory = false
                         do { try await agent.open(id) }
                         catch { agent.error = NativeSession.readable(error) }
                     }
-                }
+                }, onRemoved: { id in
+                    guard agent.conversation.id == id else { return }
+                    do { try agent.startNewConversation() }
+                    catch { agent.error = NativeSession.readable(error) }
+                })
             }
         }
         .sheet(isPresented: $showAttachment) {
@@ -312,36 +316,117 @@ struct NativeReplyText: View {
 struct NativeConversationHistory: View {
     @EnvironmentObject private var session: NativeSession
     @StateObject private var resource = NativeResource()
-    let onSelect:(String)->Void
+    let onSelect: (String) -> Void
+    let onRemoved: (String) -> Void
     @State private var archived = false
-    @State private var renaming:NativeJSON = .null
+    @State private var renaming: NativeJSON?
     @State private var title = ""
-    @State private var deleting:NativeJSON = .null
-    @State private var revision = 0
+    @State private var deleting: NativeJSON?
+    @State private var mutatingHistory = false
+
     var body: some View {
         List {
-            Toggle("查看已归档",isOn:$archived)
+            Toggle("查看已归档", isOn: $archived).disabled(mutatingHistory)
             NativeErrorText(message:resource.error)
             if resource.loading { ProgressView() }
-            ForEach(resource.value.records,id:\.id) { conversation in
-                VStack(alignment:.leading,spacing:8) {
-                    Button(conversation["title"].text.isEmpty ? "新对话" : conversation["title"].text) { onSelect(conversation.id) }.disabled(archived)
-                    Text(NativeDates.display(conversation["last_message_at"].text.isEmpty ? conversation["created_at"].text : conversation["last_message_at"].text)).font(.caption).foregroundStyle(NativeTheme.muted)
-                    HStack {
-                        Button("重命名") { renaming = conversation; title = conversation["title"].text }
-                        NativeActionButton(title:archived ? "恢复" : "归档") { _ in _ = try await session.api("agent/conversations/"+conversation.id,method:"PATCH",body:["status":.string(archived ? "active" : "archived"),"expected_version":.int(conversation.version)]); revision += 1 }
-                        Button("删除",role:.destructive) { deleting = conversation }
-                    }.font(.caption)
-                }.padding(.vertical,5)
+            if resource.loadedAt != nil && !resource.loading && resource.error == nil && resource.value.records.isEmpty {
+                Text(archived ? "没有已归档的对话" : "还没有对话记录").foregroundStyle(NativeTheme.muted)
             }
-        }.navigationTitle("对话历史").task(id:"\(archived)|\(revision)") { await resource.load { .array(try await session.allPages("agent/conversations",query:["status":archived ? "archived" : "active"])) } }
-        .alert("重命名对话",isPresented:Binding(get:{!renaming.isNull},set:{if !$0 { renaming = .null }})) {
-            TextField("标题",text:$title)
-            Button("保存") { let item = renaming; Task { do { _ = try await session.api("agent/conversations/"+item.id,method:"PATCH",body:["title":.string(title),"expected_version":.int(item.version)]); revision += 1 } catch { resource.error = NativeSession.readable(error) } }; renaming = .null }
-            Button("取消",role:.cancel) { renaming = .null }
+            ForEach(resource.value.records, id: \.id) { conversation in
+                historyRow(conversation)
+                    .disabled(resource.loading || mutatingHistory)
+            }
         }
-        .confirmationDialog("永久删除这段对话及消息？",isPresented:Binding(get:{!deleting.isNull},set:{if !$0 { deleting = .null }}),titleVisibility:.visible) {
-            Button("删除",role:.destructive) { let item = deleting; deleting = .null; Task { do { _ = try await session.api("agent/conversations/"+item.id,method:"DELETE",body:["expected_version":.int(item.version)]); revision += 1 } catch { resource.error = NativeSession.readable(error) } } }
+        .navigationTitle("对话历史")
+        .interactiveDismissDisabled(mutatingHistory)
+        .task(id: archived) { await load() }
+        .alert("重命名对话", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }), presenting: renaming) { item in
+            TextField("标题", text: $title)
+            Button("保存") { change(item, fields: ["title": .string(title)]) }
+                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("取消", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "永久删除这段对话及消息？",
+            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+            titleVisibility: .visible,
+            presenting: deleting
+        ) { item in
+            Button("确认删除", role: .destructive) { change(item, method: "DELETE") }
+            Button("取消", role: .cancel) {}
+        } message: { item in
+            Text(displayTitle(item))
+        }
+    }
+
+    private func displayTitle(_ conversation: NativeJSON) -> String {
+        let saved = conversation["title"].text
+        return saved.isEmpty ? "未命名对话" : saved
+    }
+
+    private func historyRow(_ conversation: NativeJSON) -> some View {
+        let last = conversation["last_message_at"].text
+        let date = last.isEmpty ? conversation["created_at"].text : last
+        return VStack(alignment: .leading, spacing: 5) {
+            Button { onSelect(conversation.id) } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(displayTitle(conversation)).font(.subheadline.weight(.semibold)).foregroundStyle(NativeTheme.ink)
+                        Text(NativeDates.display(date)).font(.caption).foregroundStyle(NativeTheme.muted)
+                    }
+                    Spacer(minLength: 8)
+                    if !archived {
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(NativeTheme.muted)
+                    }
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(archived)
+            HStack(spacing: 18) {
+                Button("重命名") {
+                    title = conversation["title"].text
+                    renaming = conversation
+                }
+                Button(archived ? "恢复" : "归档") {
+                    change(conversation, fields: ["status": .string(archived ? "active" : "archived")])
+                }
+                Button("删除", role: .destructive) { deleting = conversation }
+            }
+            .buttonStyle(.borderless)
+            .font(.footnote.weight(.medium))
+            .controlSize(.large)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func load() async {
+        let status = archived ? "archived" : "active"
+        await resource.load { .array(try await session.allPages("agent/conversations", query: ["status": status])) }
+    }
+
+    private func change(_ item: NativeJSON, method: String = "PATCH", fields: [String: NativeJSON] = [:]) {
+        guard !mutatingHistory, !item.id.isEmpty else { return }
+        mutatingHistory = true
+        resource.error = nil
+        var body = fields
+        body["expected_version"] = .int(item.version)
+        Task {
+            defer { mutatingHistory = false }
+            do {
+                _ = try await session.api("agent/conversations/" + item.id, method: method, body: body)
+                if method == "DELETE" || fields["status"] != nil {
+                    resource.value = .array(resource.value.records.filter { $0.id != item.id })
+                }
+                if method == "DELETE" || fields["status"]?.text == "archived" {
+                    onRemoved(item.id)
+                }
+                await load()
+            } catch {
+                if case NativeAPIError.response(409, _) = error { await load() }
+                resource.error = NativeSession.readable(error)
+            }
         }
     }
 }

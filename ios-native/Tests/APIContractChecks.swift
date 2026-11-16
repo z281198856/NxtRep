@@ -257,12 +257,23 @@ private enum APIContractChecks {
         try agent.startNewConversation()
         precondition(agent.conversation.id.isEmpty && agent.messages.isEmpty && agent.input.isEmpty)
         precondition(StubProtocol.server.conversationsCreated == 1)
+        let oldID = StubProtocol.server.conversationID
+        try local.saveDraft("ai-current", label: "当前 AI 会话", value: .string(oldID))
         let reopened = NativeAgent()
         await reopened.attach(session)
-        precondition(reopened.conversation.id.isEmpty && reopened.canCompose)
-        try await reopened.open(StubProtocol.server.conversationID)
+        precondition(reopened.conversation.id.isEmpty && reopened.messages.isEmpty && reopened.canCompose)
+        precondition(StubProtocol.server.conversationsCreated == 1)
+        try await reopened.open(oldID)
         precondition(reopened.input == "继续训练计划" && reopened.messages.count == 2)
         print("PASS: coach opens a writable new chat, creates on send, receives SSE, and keeps per-chat drafts")
+
+        let pending: NativeJSON = .object(["conversation_id": .string(oldID), "run_id": .string(StubProtocol.server.runID)])
+        try local.saveDraft("ai-pending", label: "待核实的 AI 请求", value: pending)
+        let recovering = NativeAgent()
+        await recovering.attach(session)
+        precondition(recovering.conversation.id == oldID && recovering.needsVerification && !recovering.canCompose)
+        try local.saveDraft("ai-pending", label: "待核实的 AI 请求", value: .null)
+        print("PASS: reopening ignores the last viewed chat and preserves interrupted reply recovery")
 
         StubProtocol.server.stopTest = true
         reopened.input = "这是一条联调消息"
