@@ -173,76 +173,205 @@ private struct NativePhotoFood: Identifiable {
     init(saved:NativeJSON) { name = saved["name"].text; amount = saved["amount"].text; kcal = saved["kcal"].text; protein = saved["protein"].text; carbs = saved["carbs"].text; fat = saved["fat"].text; assumptions = saved["assumptions"].strings }
     var snapshot:NativeJSON { .object(["name":.string(name),"amount":.string(amount),"kcal":.string(kcal),"protein":.string(protein),"carbs":.string(carbs),"fat":.string(fat),"assumptions":.strings(assumptions)]) }
     func record() throws -> NativeJSON {
-        guard !name.isEmpty, let grams = Double(amount), grams > 0, let k = Double(kcal), let p = Double(protein), let c = Double(carbs), let f = Double(fat), [k,p,c,f].allSatisfy({$0 >= 0}) else { throw NativeAPIError.message("请核对每项食物的名称、份量和营养数值。") }
-        return .object(["food_version_id":.null,"name":.string(name),"amount_g":.number(grams),"basis_amount_g":.number(grams),"kcal":.number(k),"protein_g":.number(p),"carbs_g":.number(c),"fat_g":.number(f),"source":.string("model_estimated"),"confidence":.string("low")])
+        guard !name.isEmpty, let grams = NativeQuantity.number(amount), grams > 0,
+              let k = NativeQuantity.number(kcal), let p = NativeQuantity.number(protein),
+              let c = NativeQuantity.number(carbs), let f = NativeQuantity.number(fat),
+              [k,p,c,f].allSatisfy({$0 >= 0})
+        else { throw NativeAPIError.message("请核对每项食物的名称、份量和营养数值。") }
+        let explanation = String(assumptions.joined(separator: "；").prefix(2000))
+        return .object(["food_version_id":.null,"name":.string(name),"amount_g":.number(grams),"basis_amount_g":.number(grams),"kcal":.number(k),"protein_g":.number(p),"carbs_g":.number(c),"fat_g":.number(f),"source":.string("model_estimated"),"confidence":.string("low"),"estimate_assumptions": explanation.isEmpty ? .null : .string(explanation)])
     }
     func reviewed() throws -> NativeJSON {
-        guard !name.isEmpty, let grams = Double(amount), grams > 0 else { throw NativeAPIError.message("请填写食物名称和有效份量。") }
+        guard !name.isEmpty, let grams = NativeQuantity.number(amount), grams > 0 else { throw NativeAPIError.message("请填写食物名称和有效份量。") }
         return .object(["name":.string(name),"estimated_amount_g":.number(grams),"amount_min_g":.number(grams),"amount_max_g":.number(grams),"confidence":.string("high"),"portion_confidence":.string("high"),"portion_basis":.string("用户核对份量"),"visual_evidence":.null])
     }
 }
 
 struct NativeNutritionPhotoView: View {
     @EnvironmentObject private var session: NativeSession
+    let initialMeal: String
+    let initialDate: Date?
+    let onUseEstimate: (([NativeJSON]) -> Void)?
     @State private var assetID = ""
-    @State private var meal = "lunch"
-    @State private var eatenAt = Date()
+    @State private var meal: String
+    @State private var eatenAt: Date
     @State private var notes = ""
     @State private var draft: NativeJSON = .null
     @State private var foods: [NativePhotoFood] = []
-    @State private var checked = false
     @State private var saved = false
+    @State private var initialized = false
+
+    init(initialMeal: String = "lunch", initialDate: Date? = nil, onUseEstimate: (([NativeJSON]) -> Void)? = nil) {
+        self.initialMeal = initialMeal
+        self.initialDate = initialDate
+        self.onUseEstimate = onUseEstimate
+        _meal = State(initialValue: initialMeal)
+        _eatenAt = State(initialValue: initialDate ?? .now)
+    }
+
+    private var draftKey: String {
+        guard onUseEstimate != nil, let initialDate else { return "nutrition-photo" }
+        return "nutrition-photo-add-" + NativeDates.day(initialDate) + "-" + initialMeal
+    }
+
+    private var needsUpdate: Bool {
+        guard !draft.isNull else { return false }
+        if notes != draft["notes"].text { return true }
+        let estimated = draft["calculation"]["items"].values.map { NativePhotoFood($0) }
+        return foods.contains { food in
+            !estimated.contains { $0.name == food.name && NativeQuantity.number($0.amount) == NativeQuantity.number(food.amount) }
+        }
+    }
+
+    private var totals: [Double]? {
+        guard !foods.isEmpty, !needsUpdate else { return nil }
+        let fields = [\NativePhotoFood.kcal, \.carbs, \.protein, \.fat]
+        let result = fields.compactMap { field -> Double? in
+            let values = foods.compactMap { NativeQuantity.number($0[keyPath: field]) }
+            return values.count == foods.count ? values.reduce(0, +) : nil
+        }
+        return result.count == fields.count && result.allSatisfy(\.isFinite) ? result : nil
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment:.leading,spacing:16) {
-                NativeImageSelector(purpose:"nutrition_entry") { assetID = $0; draft = .null; foods = []; checked = false; saved = false }
-                NativeMealPicker(selection:$meal)
-                DatePicker("进食时间",selection:$eatenAt)
-                NativeField(title:"补充食物、配料或份量信息",text:$notes)
-                NativeActionButton(title:foods.isEmpty ? "估算这餐" : "按核对内容重新估算") { _ in
-                    guard !assetID.isEmpty else { throw NativeAPIError.message("请先上传餐食照片。") }
-                    var body: [String:NativeJSON] = ["image_asset_id":.string(assetID),"meal_type":.string(meal),"eaten_at":.string(NativeDates.timestamp(eatenAt)),"notes":notes.isEmpty ? .null : .string(notes)]
-                    if !foods.isEmpty { body["reviewed_foods"] = .array(try foods.map { try $0.reviewed() }) }
-                    let result = try await session.api("nutrition/entry-drafts:estimate-image",method:"POST",body:body)
-                    draft = result; foods = result["calculation"]["items"].values.map { NativePhotoFood($0) }; checked = false
+            VStack(alignment: .leading, spacing: 15) {
+                NativeImageSelector(purpose: "nutrition_entry") { id in
+                    assetID = id
+                    draft = .null
+                    foods = []
+                    saved = false
                 }
-                if !draft.isNull {
-                    Text("照片估算需核对，不能作为精确测量。").font(.subheadline).foregroundStyle(.orange)
-                    ForEach(recognitionNotes,id:\.self) { Text($0).font(.caption).foregroundStyle(NativeTheme.muted) }
-                    ForEach($foods) { $food in
-                        NativePhotoFoodEditor(food:$food) { foods.removeAll {$0.id == food.id}; checked = false }
+                options
+                if let totals { NativeMealTotalCard(values: totals, estimated: true) }
+                ForEach($foods) { $food in
+                    let id = food.id
+                    NativePhotoFoodEditor(food: $food) { foods.removeAll { $0.id == id } }
+                }
+                if needsUpdate {
+                    Label("核对信息已调整，请重新估算。", systemImage: "arrow.clockwise")
+                        .font(.footnote).foregroundStyle(NativeTheme.muted)
+                }
+                if !recognitionNotes.isEmpty {
+                    DisclosureGroup("估算说明") {
+                        ForEach(recognitionNotes, id: \.self) { Text($0).font(.footnote).padding(.top, 4) }
                     }
-                    Toggle("我已核对食物、份量和对应营养数值",isOn:$checked)
-                    NativeActionButton(title:"确认保存饮食记录") { key in
-                        guard checked, !foods.isEmpty else { throw NativeAPIError.message("请先逐项核对估算结果。") }
-                        _ = try await session.api("nutrition/entries",method:"POST",body:["meal_type":.string(meal),"eaten_at":.string(NativeDates.timestamp(eatenAt)),"items":.array(try foods.map { try $0.record() }),"is_flexible_meal":.bool(false),"notes":.string("AI 照片估算，经用户核对；图片 ID："+assetID)],key:key,draftKey:"nutrition-photo")
-                        saved = true; await session.reload()
-                    }.disabled(!checked || saved)
-                    if saved { Label("这餐已保存",systemImage:"checkmark.circle.fill").foregroundStyle(.green) }
                 }
+                if !assetID.isEmpty && !saved && (draft.isNull || needsUpdate || foods.isEmpty) {
+                    NativeActionButton(title: foods.isEmpty ? "估算这餐" : "按调整后的份量重新估算", action: estimate)
+                }
+                if totals != nil && !saved {
+                    NativeActionButton(title: onUseEstimate == nil ? "确认保存这餐" : "加入这餐", action: save)
+                }
+                if saved { Label("这餐已保存", systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
             }.nativePage()
-        }.navigationTitle("拍照记一餐").onAppear { eatenAt = session.selectedDate }
-            .nativeDraft("nutrition-photo",label:"拍照饮食核对",value:photoSnapshot) { v in assetID = v["image"].text; meal = v["meal"].text; eatenAt = NativeDates.parse(v["time"].text) ?? .now; notes = v["notes"].text; draft = v["draft"]; foods = v["foods"].values.map { NativePhotoFood(saved:$0) }; checked = false; saved = false }
-            .onChange(of:foodFingerprint) { _,_ in checked = false; saved = false }
+        }
+        .background(NativeTheme.background)
+        .scrollDismissesKeyboard(.interactively)
+        .navigationTitle("AI 拍照估算")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            guard !initialized else { return }
+            initialized = true
+            if initialDate == nil {
+                eatenAt = NativeDates.day(session.selectedDate) == NativeDates.day() ? .now : session.selectedDate
+            }
+        }
+        .nativeDraft(draftKey, label: "拍照饮食核对", value: snapshot) { value in
+            initialized = true
+            assetID = value["image"].text
+            meal = value["meal"].text
+            eatenAt = NativeDates.parse(value["time"].text) ?? initialDate ?? .now
+            notes = value["notes"].text
+            draft = value["draft"]
+            foods = value["foods"].values.map { NativePhotoFood(saved: $0) }
+        }
     }
-    private var recognitionNotes: [String] { draft["recognition"]["assumptions"].strings + draft["recognition"]["follow_up_questions"].strings }
-    private var photoSnapshot:NativeJSON { .object(["image":.string(assetID),"meal":.string(meal),"time":.string(NativeDates.timestamp(eatenAt)),"notes":.string(notes),"draft":draft,"foods":.array(foods.map(\.snapshot))]) }
-    private var foodFingerprint: String { foods.map { [$0.name,$0.amount,$0.kcal,$0.protein,$0.carbs,$0.fat].joined(separator:"|") }.joined(separator:";") }
+
+    private var options: some View {
+        NativeCard {
+            DisclosureGroup("补充食物或份量") {
+                VStack(alignment: .leading, spacing: 10) {
+                    if onUseEstimate == nil {
+                        NativeMealPicker(selection: $meal)
+                        DatePicker("进食时间", selection: $eatenAt).environment(\.timeZone, NativeDates.china)
+                    }
+                    NativeField(title: "食物、配料、实际克数", text: $notes)
+                }.padding(.top, 8)
+            }.font(.subheadline)
+        }
+        .disabled(saved)
+    }
+
+    private func estimate(_ key: String) async throws {
+        guard !assetID.isEmpty else { throw NativeAPIError.message("请先上传餐食照片。") }
+        let input = snapshot
+        var body: [String: NativeJSON] = [
+            "image_asset_id": .string(assetID), "meal_type": .string(initialDate == nil ? meal : initialMeal),
+            "eaten_at": .string(NativeDates.timestamp(initialDate ?? eatenAt)),
+            "notes": notes.isEmpty ? .null : .string(notes)
+        ]
+        if !foods.isEmpty { body["reviewed_foods"] = .array(try foods.map { try $0.reviewed() }) }
+        let response = try await session.api("nutrition/entry-drafts:estimate-image", method: "POST", body: body, key: key)
+        guard input == snapshot else { return }
+        let recognized = response["calculation"]["items"].values.map { NativePhotoFood($0) }
+        guard !recognized.isEmpty else { throw NativeAPIError.message("暂未识别出可用的食物，请换张照片再试。") }
+        draft = response
+        foods = recognized
+    }
+
+    private func save(_ key: String) async throws {
+        guard !foods.isEmpty, !needsUpdate else { throw NativeAPIError.message("请先核对食物与克数。") }
+        let items = try foods.map { try $0.record() }
+        if let onUseEstimate {
+            try session.local?.saveDraft(draftKey, label: "拍照饮食核对", value: .null)
+            onUseEstimate(items)
+            return
+        }
+        _ = try await session.api("nutrition/entries", method: "POST", body: [
+            "meal_type": .string(meal), "eaten_at": .string(NativeDates.timestamp(eatenAt)),
+            "items": .array(items), "is_flexible_meal": .bool(false),
+            "notes": .string("AI 照片估算，经用户核对；图片 ID：" + assetID)
+        ], key: key, draftKey: draftKey)
+        saved = true
+        await session.reload()
+    }
+
+    private var recognitionNotes: [String] {
+        draft["recognition"]["assumptions"].strings + draft["recognition"]["follow_up_questions"].strings
+    }
+
+    private var snapshot: NativeJSON {
+        .object(["image": .string(assetID), "meal": .string(meal), "time": .string(NativeDates.timestamp(eatenAt)),
+                 "notes": .string(notes), "draft": draft, "foods": .array(foods.map(\.snapshot))])
+    }
 }
 
 private struct NativePhotoFoodEditor: View {
     @Binding var food: NativePhotoFood
     let remove: () -> Void
+
     var body: some View {
         NativeCard {
-            NativeField(title:"食品名称",text:$food.name)
-            NativeField(title:"份量（克）",text:$food.amount,keyboard:.decimalPad)
-            NativeField(title:"该份量热量（千卡）",text:$food.kcal,keyboard:.decimalPad)
-            NativeField(title:"蛋白质（克）",text:$food.protein,keyboard:.decimalPad)
-            NativeField(title:"碳水（克）",text:$food.carbs,keyboard:.decimalPad)
-            NativeField(title:"脂肪（克）",text:$food.fat,keyboard:.decimalPad)
-            ForEach(food.assumptions,id:\.self) { Text($0).font(.caption).foregroundStyle(NativeTheme.muted) }
-            Button("移除此项",role:.destructive,action:remove)
+            HStack(spacing: 10) {
+                NativeActionIcon(symbol: "fork.knife", tint: AppTab.meals.tint)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(food.name).font(.headline)
+                    Text(food.amount + " 克 · 估算 " + food.kcal + " 千卡").font(.caption).foregroundStyle(NativeTheme.muted)
+                }
+                Spacer(minLength: 5)
+                Button(role: .destructive, action: remove) {
+                    Image(systemName: "xmark.circle").frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("移除" + food.name)
+            }
+            DisclosureGroup("调整识别结果") {
+                VStack(spacing: 8) {
+                    NativeField(title: "食品名称", text: $food.name)
+                    NativeField(title: "实际份量（克）", text: $food.amount, keyboard: .decimalPad)
+                }.padding(.top, 8)
+            }.font(.subheadline)
         }
     }
 }

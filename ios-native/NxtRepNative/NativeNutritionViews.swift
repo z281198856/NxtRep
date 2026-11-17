@@ -290,28 +290,75 @@ private struct NativeMealLine: Identifiable {
     var name = ""
     var amount = "100"
     var basis = "100"
-    var kcal = "0"
-    var protein = "0"
-    var carbs = "0"
-    var fat = "0"
-    var source = "user"
+    var kcal = ""
+    var protein = ""
+    var carbs = ""
+    var fat = ""
+    var source = "user_provided"
     var confidence = "confirmed"
+    var assumptions = ""
+
     init() {}
+
     init(_ item: NativeJSON) {
-        versionID = item["food_version_id"]; name = item["name"].text; amount = item["amount_g"].text
-        basis = item["basis_amount_g"].text; kcal = item["kcal"].text; protein = item["protein_g"].text
-        carbs = item["carbs_g"].text; fat = item["fat_g"].text
-        source = item["source"].text; confidence = item["confidence"].text
+        versionID = item["food_version_id"]
+        name = item["name"].text
+        amount = item["amount_g"].isNull ? item["basis_amount_g"].text : item["amount_g"].text
+        basis = item["basis_amount_g"].text
+        kcal = item["kcal"].text
+        protein = item["protein_g"].text
+        carbs = item["carbs_g"].text
+        fat = item["fat_g"].text
+        source = item["source"].text
+        confidence = item["confidence"].text
+        assumptions = item["estimate_assumptions"].text
     }
+
+    var estimated: Bool { ["model_estimated", "vision_estimate"].contains(source) }
+    var manual: Bool { versionID.isNull && !estimated }
+    var legacyPlaceholder: Bool {
+        manual && name.isEmpty && amount == "100" && basis == "100" && [kcal, carbs, protein, fat].allSatisfy { $0 == "0" }
+    }
+
+    private var basisValues: [Double]? {
+        let values = [basis, kcal, carbs, protein, fat].compactMap(NativeQuantity.number)
+        guard values.count == 5, values[0] > 0, values.allSatisfy({ $0 >= 0 }) else { return nil }
+        return values
+    }
+
+    var total: [Double]? {
+        guard let basisValues, let grams = NativeQuantity.number(amount), (0.001...99_999.999).contains(grams) else { return nil }
+        let scaled = basisValues.dropFirst().map { $0 * grams / basisValues[0] }
+        return scaled.allSatisfy(\.isFinite) ? scaled : nil
+    }
+
     func payload() throws -> NativeJSON {
-        guard let grams = Double(amount), grams > 0 else { throw NativeAPIError.message("每项食品的份量必须大于 0。") }
-        if !versionID.isNull { return .object(["food_version_id":versionID,"amount_g":.number(grams)]) }
-        guard !name.trimmingCharacters(in:.whitespaces).isEmpty, let b = Double(basis), b > 0,
-              let k = Double(kcal), let p = Double(protein), let c = Double(carbs), let f = Double(fat),
-              [k,p,c,f].allSatisfy({$0 >= 0}) else { throw NativeAPIError.message("请填写食品名称、基准份量和有效营养数值。") }
-        return .object(["food_version_id":.null,"name":.string(name),"amount_g":.number(grams),"basis_amount_g":.number(b),"kcal":.number(k),"protein_g":.number(p),"carbs_g":.number(c),"fat_g":.number(f),"source":.string(source),"confidence":.string(confidence)])
+        guard let grams = NativeQuantity.number(amount), (0.001...99_999.999).contains(grams) else {
+            throw NativeAPIError.message("请填写有效的食品份量。")
+        }
+        if !versionID.isNull {
+            return .object(["food_version_id": versionID, "amount_g": .number(grams)])
+        }
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty, let values = basisValues else {
+            throw NativeAPIError.message("请补全食品名称和包装营养数据。")
+        }
+        return .object([
+            "food_version_id": .null, "name": .string(cleanName), "amount_g": .number(grams),
+            "basis_amount_g": .number(values[0]), "kcal": .number(values[1]), "carbs_g": .number(values[2]),
+            "protein_g": .number(values[3]), "fat_g": .number(values[4]), "source": .string(source),
+            "confidence": .string(confidence), "estimate_assumptions": assumptions.isEmpty ? .null : .string(assumptions)
+        ])
     }
-    var draft:NativeJSON { .object(["food_version_id":versionID,"name":.string(name),"amount_g":.string(amount),"basis_amount_g":.string(basis),"kcal":.string(kcal),"protein_g":.string(protein),"carbs_g":.string(carbs),"fat_g":.string(fat),"source":.string(source),"confidence":.string(confidence)]) }
+
+    var draft: NativeJSON {
+        .object([
+            "food_version_id": versionID, "name": .string(name), "amount_g": .string(amount),
+            "basis_amount_g": .string(basis), "kcal": .string(kcal), "protein_g": .string(protein),
+            "carbs_g": .string(carbs), "fat_g": .string(fat), "source": .string(source),
+            "confidence": .string(confidence), "estimate_assumptions": .string(assumptions)
+        ])
+    }
 }
 
 struct NativeMealEditor: View {
@@ -320,11 +367,14 @@ struct NativeMealEditor: View {
     let existing: NativeJSON
     let initialMeal: String?
     let onSave: () -> Void
-    @State private var lines = [NativeMealLine()]
+    @State private var lines: [NativeMealLine] = []
     @State private var meal: String
     @State private var eatenAt = Date()
     @State private var flexible = false
     @State private var notes = ""
+    @State private var showLibrary = false
+    @State private var showPhoto = false
+    @State private var initialized = false
     @State private var deleteDialog = false
     @State private var mutationError: String?
 
@@ -342,61 +392,254 @@ struct NativeMealEditor: View {
     }
 
     private var draftTitle: String {
-        initialMeal.flatMap { NativeLabels.meals[$0] }.map { "记录" + $0 } ?? "手动饮食记录"
+        initialMeal.flatMap { NativeLabels.meals[$0] }.map { "记" + $0 } ?? "记一餐"
+    }
+
+    private var totals: [Double]? {
+        let values = lines.compactMap(\.total)
+        guard !values.isEmpty, values.count == lines.count else { return nil }
+        let result = (0..<4).map { index in values.reduce(0.0) { $0 + $1[index] } }
+        return result.allSatisfy(\.isFinite) ? result : nil
     }
 
     var body: some View {
-        Form {
-            Section("进食信息") {
-                NativeMealPicker(selection:$meal)
-                if existing.isNull { DatePicker("进食时间",selection:$eatenAt) }
-                else { Text(NativeDates.display(existing["eaten_at"].text)) }
-                Toggle("灵活餐",isOn:$flexible)
-                NativeField(title:"备注",text:$notes)
-            }
-            ForEach($lines) { $line in
-                Section(line.name.isEmpty ? "食品" : line.name) {
-                    NativeField(title:"名称",text:$line.name).disabled(!line.versionID.isNull)
-                    NativeField(title:"食用份量（克）",text:$line.amount,keyboard:.decimalPad)
-                    if line.versionID.isNull {
-                        NativeField(title:"以下营养数值对应的基准份量（克）",text:$line.basis,keyboard:.decimalPad)
-                        NativeField(title:"热量（千卡）",text:$line.kcal,keyboard:.decimalPad)
-                        NativeField(title:"蛋白质（克）",text:$line.protein,keyboard:.decimalPad)
-                        NativeField(title:"碳水（克）",text:$line.carbs,keyboard:.decimalPad)
-                        NativeField(title:"脂肪（克）",text:$line.fat,keyboard:.decimalPad)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                mealSelector
+                HStack(spacing: 10) {
+                    Button { showLibrary = true } label: {
+                        NativeIconTile(title: "从食品库选择", icon: "plus.circle.fill", tint: AppTab.meals.tint)
                     }
-                    if lines.count > 1 { Button("移除此项",role:.destructive) { lines.removeAll { $0.id == line.id } } }
+                    Button { showPhoto = true } label: {
+                        NativeIconTile(title: "AI 拍照估算", icon: "camera.fill", tint: NutrientKind.protein.labelColor)
+                    }
+                }
+                .buttonStyle(PreviewPressStyle())
+                if let totals { NativeMealTotalCard(values: totals, estimated: lines.contains(where: \.estimated)) }
+                ForEach($lines) { $line in
+                    let id = line.id
+                    NativeMealPortionCard(line: $line) { lines.removeAll { $0.id == id } }
+                }
+                optionalDetails
+                NativeErrorText(message: mutationError)
+            }.nativePage()
+        }
+        .background(NativeTheme.background)
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            NativeActionButton(title: "保存这餐", action: save)
+                .disabled(totals == nil || lines.contains { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+                .padding(.horizontal, 18).padding(.vertical, 7).background(.regularMaterial)
+        }
+        .navigationTitle(existing.isNull ? draftTitle : "编辑这餐")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
+        .onAppear(perform: prepare)
+        .nativeDraft(draftKey, label: draftTitle, value: snapshot, restore: restore)
+        .sheet(isPresented: $showLibrary) {
+            NavigationStack {
+                NativeFoodLibrary(onSelect: { food in
+                    lines.append(NativeMealLine(food))
+                    showLibrary = false
+                })
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showLibrary = false } } }
+            }.environmentObject(session)
+        }
+        .sheet(isPresented: $showPhoto) {
+            NavigationStack {
+                NativeNutritionPhotoView(initialMeal: meal, initialDate: eatenAt) { items in
+                    lines += items.map(NativeMealLine.init)
+                    showPhoto = false
+                }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showPhoto = false } } }
+            }.environmentObject(session)
+        }
+        .confirmationDialog("删除这条饮食记录？", isPresented: $deleteDialog, titleVisibility: .visible) {
+            Button("确认删除", role: .destructive) { Task { await deleteMeal() } }
+        }
+    }
+
+    private var mealSelector: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                ForEach(NativeMealSlot.allCases) { slot in
+                    Button { meal = slot.id } label: {
+                        Label(slot.title, systemImage: slot.icon)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(meal == slot.id ? .white : slot.tint)
+                            .padding(.horizontal, 12).frame(minHeight: 44)
+                            .background(meal == slot.id ? slot.tint : slot.tint.opacity(0.10), in: Capsule())
+                    }
+                    .buttonStyle(PreviewPressStyle())
+                    .accessibilityAddTraits(meal == slot.id ? .isSelected : [])
                 }
             }
-            Button("添加一项食品") { lines.append(NativeMealLine()) }
-            NativeActionButton(title:"保存饮食记录") { key in
-                var body: [String:NativeJSON] = ["meal_type":.string(meal),"items":.array(try lines.map { try $0.payload() }),"is_flexible_meal":.bool(flexible),"notes":notes.isEmpty ? .null : .string(notes)]
-                if existing.isNull { body["eaten_at"] = .string(NativeDates.timestamp(eatenAt)) }
-                else { body["expected_version"] = .int(existing.version); body["reason"] = .string("用户在 iPhone 编辑饮食记录") }
-                _ = try await session.api(existing.isNull ? "nutrition/entries" : "nutrition/entries/" + existing.id,method:existing.isNull ? "POST" : "PATCH",body:body,key:key,draftKey:existing.isNull ? draftKey : nil)
-                await session.reload(); onSave(); dismiss()
-            }
-            if !existing.isNull { Button("删除这条饮食记录",role:.destructive) { deleteDialog = true } }
-            NativeErrorText(message:mutationError)
         }
-        .navigationTitle(existing.isNull ? draftTitle : "编辑饮食")
-        .toolbar { ToolbarItem(placement:.cancellationAction) { Button("取消") { dismiss() } } }
-        .onAppear {
+        .scrollIndicators(.hidden)
+    }
+
+    private var optionalDetails: some View {
+        NativeCard {
+            DisclosureGroup("时间与更多选项") {
+                VStack(alignment: .leading, spacing: 12) {
+                    if existing.isNull {
+                        DatePicker("进食时间", selection: $eatenAt).environment(\.timeZone, NativeDates.china)
+                    } else {
+                        LabeledContent("进食时间", value: NativeDates.display(existing["eaten_at"].text))
+                    }
+                    Toggle("灵活餐", isOn: $flexible)
+                    NativeField(title: "备注", text: $notes)
+                    Button("按包装营养表手动添加") { lines.append(NativeMealLine()) }.frame(minHeight: 44)
+                    if !existing.isNull {
+                        Button("删除这条饮食记录", role: .destructive) { deleteDialog = true }.frame(minHeight: 44)
+                    }
+                }.padding(.top, 10)
+            }.font(.subheadline)
+        }
+    }
+
+    private func prepare() {
+        guard !initialized else { return }
+        initialized = true
+        if existing.isNull {
             eatenAt = NativeDates.day(session.selectedDate) == NativeDates.day() ? .now : session.selectedDate
-            if !existing.isNull { lines = existing["items"].values.map(NativeMealLine.init); meal = existing["meal_type"].text; flexible = existing["is_flexible_meal"].flag; notes = existing["notes"].text }
+        } else {
+            lines = existing["items"].values.map(NativeMealLine.init)
+            meal = existing["meal_type"].text
+            eatenAt = NativeDates.parse(existing["eaten_at"].text) ?? .now
+            flexible = existing["is_flexible_meal"].flag
+            notes = existing["notes"].text
         }
-        .nativeDraft(draftKey,label:draftTitle,value:.object(["lines":.array(lines.map(\.draft)),"meal":.string(meal),"time":.string(NativeDates.timestamp(eatenAt)),"flexible":.bool(flexible),"notes":.string(notes)])) { value in
-            if existing.isNull { lines = value["lines"].values.map(NativeMealLine.init); meal = value["meal"].text; eatenAt = NativeDates.parse(value["time"].text) ?? .now; flexible = value["flexible"].flag; notes = value["notes"].text }
+    }
+
+    private func restore(_ value: NativeJSON) {
+        guard existing.isNull else { return }
+        initialized = true
+        lines = value["lines"].values.map(NativeMealLine.init).filter { !$0.legacyPlaceholder }
+        meal = value["meal"].text
+        eatenAt = NativeDates.parse(value["time"].text) ?? .now
+        flexible = value["flexible"].flag
+        notes = value["notes"].text
+    }
+
+    private var snapshot: NativeJSON {
+        .object(["lines": .array(lines.map(\.draft)), "meal": .string(meal), "time": .string(NativeDates.timestamp(eatenAt)),
+                 "flexible": .bool(flexible), "notes": .string(notes)])
+    }
+
+    private func save(_ key: String) async throws {
+        let creating = existing.isNull
+        var body: [String: NativeJSON] = [
+            "meal_type": .string(meal), "items": .array(try lines.map { try $0.payload() }),
+            "is_flexible_meal": .bool(flexible), "notes": notes.isEmpty ? .null : .string(notes)
+        ]
+        if creating {
+            body["eaten_at"] = .string(NativeDates.timestamp(eatenAt))
+        } else {
+            body["expected_version"] = .int(existing.version)
+            body["reason"] = .string("用户在 iPhone 编辑饮食记录")
         }
-        .confirmationDialog("删除这条饮食记录？",isPresented:$deleteDialog,titleVisibility:.visible) {
-            Button("确认删除",role:.destructive) { Task {
-                do {
-                    let submitted = try await session.api("nutrition/entries/" + existing.id,method:"DELETE",body:["expected_version":.int(existing.version),"reason":.string("用户在 iPhone 删除饮食记录")])
-                    _ = try await session.approve(submitted["confirmation_id"].text)
-                    onSave(); dismiss()
-                } catch { mutationError = NativeSession.readable(error) }
-            } }
+        _ = try await session.api(creating ? "nutrition/entries" : "nutrition/entries/" + existing.id,
+                                  method: creating ? "POST" : "PATCH", body: body, key: key, draftKey: creating ? draftKey : nil)
+        await session.reload()
+        onSave()
+        dismiss()
+    }
+
+    private func deleteMeal() async {
+        do {
+            let submitted = try await session.api("nutrition/entries/" + existing.id, method: "DELETE", body: [
+                "expected_version": .int(existing.version), "reason": .string("用户在 iPhone 删除饮食记录")
+            ])
+            _ = try await session.approve(submitted["confirmation_id"].text)
+            await session.reload()
+            onSave()
+            dismiss()
+        } catch { mutationError = NativeSession.readable(error) }
+    }
+}
+
+private struct NativeMealPortionCard: View {
+    @Binding var line: NativeMealLine
+    let remove: () -> Void
+
+    var body: some View {
+        NativeCard {
+            HStack(spacing: 10) {
+                NativeActionIcon(symbol: NativeFoodCategory.icon(line.name), tint: AppTab.meals.tint)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(line.name.isEmpty ? "手动添加的食品" : line.name).font(.headline)
+                    if let calories = line.total?.first {
+                        Text((line.estimated ? "AI 估算约 " : "") + NativeQuantity.format(calories, decimals: 1) + " 千卡")
+                            .font(.caption).foregroundStyle(NativeTheme.muted)
+                    }
+                }
+                Spacer(minLength: 0)
+                Button(role: .destructive, action: remove) {
+                    Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(NativeTheme.muted)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("移除" + (line.name.isEmpty ? "这项食品" : line.name))
+            }
+            if line.manual {
+                NativeField(title: "食品名称", text: $line.name)
+                DisclosureGroup("包装营养数据") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        NativeField(title: "基准份量（克）", text: $line.basis, keyboard: .decimalPad)
+                        NativeField(title: "热量（千卡）", text: $line.kcal, keyboard: .decimalPad)
+                        NativeField(title: "碳水（克）", text: $line.carbs, keyboard: .decimalPad)
+                        NativeField(title: "蛋白质（克）", text: $line.protein, keyboard: .decimalPad)
+                        NativeField(title: "脂肪（克）", text: $line.fat, keyboard: .decimalPad)
+                    }.padding(.top, 8)
+                }.font(.subheadline)
+            }
+            HStack {
+                Text("吃了多少").font(.subheadline.weight(.medium))
+                Spacer()
+                TextField("份量", text: $line.amount).keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing).font(.title3.bold()).monospacedDigit()
+                    .frame(width: 84, minHeight: 44)
+                    .accessibilityLabel(line.name + "份量")
+                Text("克").font(.subheadline).foregroundStyle(NativeTheme.muted)
+            }
+            NativeQuantityChoices(values: [50, 100, 150, 200], unit: "克", value: $line.amount, tint: AppTab.meals.tint)
         }
+    }
+}
+
+struct NativeMealTotalCard: View {
+    let values: [Double]
+    let estimated: Bool
+
+    var body: some View {
+        NativeCard {
+            HStack(spacing: 10) {
+                NativeActionIcon(symbol: "flame.fill", tint: NutrientKind.carbs.labelColor, size: 42)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(estimated ? "这餐约" : "这餐合计").font(.caption).foregroundStyle(NativeTheme.muted)
+                    Text(NativeQuantity.format(values[0], decimals: 1) + " 千卡")
+                        .font(.system(.title2, design: .rounded, weight: .bold)).monospacedDigit()
+                }
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 78), spacing: 8)], spacing: 8) {
+                macro(.carbs, value: values[1])
+                macro(.protein, value: values[2])
+                macro(.fat, value: values[3])
+            }
+        }
+    }
+
+    private func macro(_ kind: NutrientKind, value: Double) -> some View {
+        VStack(spacing: 2) {
+            Text(kind.title).font(.caption)
+            Text(NativeQuantity.format(value, decimals: 1) + " 克").font(.footnote.weight(.semibold)).monospacedDigit()
+        }
+        .foregroundStyle(kind.labelColor)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 7)
+        .background(kind.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -407,37 +650,81 @@ struct NativeWaterView: View {
     @State private var consumedAt = Date()
     @State private var revision = 0
     @State private var deleting: NativeJSON = .null
+    @State private var initialized = false
+
     var body: some View {
-        Form {
-            Section("记录饮水") {
-                NativeField(title:"饮水量（毫升，1–5000）",text:$amount,keyboard:.numberPad)
-                DatePicker("饮水时间",selection:$consumedAt)
-                HStack { ForEach([150,250,350,500],id:\.self) { ml in Button("\(ml)") { amount = String(ml) }.buttonStyle(.bordered) } }
-                NativeActionButton(title:"保存饮水记录") { key in
-                    guard let ml = Int(amount), (1...5000).contains(ml) else { throw NativeAPIError.message("饮水量应为 1–5000 毫升的整数。") }
-                    _ = try await session.api("nutrition/water",method:"POST",body:["amount_ml":.int(ml),"consumed_at":.string(NativeDates.timestamp(consumedAt))],key:key,draftKey:"water-"+NativeDates.day(session.selectedDate))
-                    revision += 1; await session.reload()
-                }
-            }
-            Section("\(NativeDates.day(session.selectedDate)) · \(resource.value.records.reduce(0) {$0+$1["amount_ml"].integer}) 毫升") {
-                NativeErrorText(message:resource.error)
-                ForEach(resource.value.records,id:\.id) { entry in
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                NativeCard {
                     HStack {
-                        VStack(alignment:.leading) { Text("\(entry["amount_ml"].integer) 毫升"); Text(NativeDates.display(entry["consumed_at"].text)).font(.caption).foregroundStyle(NativeTheme.muted) }
+                        NativeActionIcon(symbol: "drop.fill", tint: NutrientKind.water.labelColor, size: 46)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("喝了多少？").font(.headline)
+                            Text("选择常用杯量，或输入毫升数。").font(.caption).foregroundStyle(NativeTheme.muted)
+                        }
+                    }
+                    NativeQuantityChoices(values: [150, 250, 350, 500], unit: "毫升", value: $amount, tint: NutrientKind.water.labelColor)
+                    HStack {
+                        Text("饮水量").font(.subheadline)
                         Spacer()
-                        Button(role:.destructive) { deleting = entry } label: { Image(systemName:"trash") }.buttonStyle(.borderless)
+                        TextField("毫升", text: $amount).keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing).font(.title2.bold()).monospacedDigit()
+                            .frame(width: 90, minHeight: 44).accessibilityLabel("饮水量，毫升")
+                        Text("毫升").font(.subheadline).foregroundStyle(NativeTheme.muted)
+                    }
+                    DisclosureGroup("饮水时间") {
+                        DatePicker("饮水时间", selection: $consumedAt).environment(\.timeZone, NativeDates.china)
+                    }.font(.subheadline)
+                    NativeActionButton(title: "记录 \(Int(amount).map { "\($0) 毫升" } ?? "饮水")") { key in
+                        guard let ml = Int(amount), (1...5000).contains(ml) else { throw NativeAPIError.message("饮水量应为 1–5000 毫升的整数。") }
+                        _ = try await session.api("nutrition/water", method: "POST", body: [
+                            "amount_ml": .int(ml), "consumed_at": .string(NativeDates.timestamp(consumedAt))
+                        ], key: key, draftKey: draftKey)
+                        revision += 1
+                        await session.reload()
                     }
                 }
-                if resource.value.records.isEmpty { Text("当天还没有饮水记录").foregroundStyle(NativeTheme.muted) }
-            }
-        }.navigationTitle("饮水记录")
-        .onAppear { consumedAt = session.selectedDate }
-        .nativeDraft("water-"+NativeDates.day(session.selectedDate),label:"饮水记录",value:.object(["amount":.string(amount),"time":.string(NativeDates.timestamp(consumedAt))])) { value in amount = value["amount"].text; consumedAt = NativeDates.parse(value["time"].text) ?? .now }
+                NativeCard {
+                    Text("当日饮水 · \(resource.value.records.reduce(0) { $0 + $1["amount_ml"].integer }) 毫升").font(.headline)
+                    NativeErrorText(message: resource.error)
+                    ForEach(resource.value.records, id: \.id) { entry in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(entry["amount_ml"].integer) 毫升").font(.subheadline.weight(.semibold))
+                                Text(NativeDates.display(entry["consumed_at"].text)).font(.caption).foregroundStyle(NativeTheme.muted)
+                            }
+                            Spacer()
+                            Button(role: .destructive) { deleting = entry } label: {
+                                Image(systemName: "trash").frame(width: 44, height: 44)
+                            }.buttonStyle(.plain).accessibilityLabel("删除这条饮水记录")
+                        }
+                    }
+                    if resource.value.records.isEmpty && resource.loadedAt != nil {
+                        Text("当天还没有饮水记录").font(.subheadline).foregroundStyle(NativeTheme.muted)
+                    }
+                }
+            }.nativePage()
+        }
+        .background(NativeTheme.background)
+        .scrollDismissesKeyboard(.interactively)
+        .navigationTitle("记饮水").navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            guard !initialized else { return }
+            initialized = true
+            consumedAt = NativeDates.day(session.selectedDate) == NativeDates.day() ? .now : session.selectedDate
+        }
+        .nativeDraft(draftKey,label:"饮水记录",value:.object(["amount":.string(amount),"time":.string(NativeDates.timestamp(consumedAt))])) { value in
+            initialized = true
+            amount = value["amount"].text
+            consumedAt = NativeDates.parse(value["time"].text) ?? .now
+        }
         .task(id:revision) { await resource.load { try await session.api("nutrition/water",query:["date":NativeDates.day(session.selectedDate)]) } }
         .confirmationDialog("删除这条饮水记录？",isPresented:Binding(get:{!deleting.isNull},set:{if !$0 { deleting = .null }}),titleVisibility:.visible) {
             Button("删除",role:.destructive) { let id = deleting.id; Task { do { _ = try await session.api("nutrition/water/"+id,method:"DELETE"); revision += 1; await session.reload() } catch { resource.error = NativeSession.readable(error) } }; deleting = .null }
         }
     }
+
+    private var draftKey: String { "water-" + NativeDates.day(session.selectedDate) }
 }
 
 struct NativeRecentMeals: View {

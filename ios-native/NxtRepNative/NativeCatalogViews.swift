@@ -2,6 +2,7 @@ import SwiftUI
 
 struct NativeFoodLibrary: View {
     @EnvironmentObject private var session: NativeSession
+    var onSelect: ((NativeJSON) -> Void)? = nil
     @StateObject private var resource = NativeResource()
     @State private var keyword = ""
     @State private var frequent = false
@@ -36,7 +37,7 @@ struct NativeFoodLibrary: View {
                 Button("添加自定义食品") { showCreate = true }.frame(minHeight: 44)
             }.nativePage()
         }
-        .navigationTitle("食品库").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(onSelect == nil ? "食品库" : "选择食品").navigationBarTitleDisplayMode(.inline)
         .task(id: "\(keyword)|\(frequent)|\(revision)") {
             do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
             await resource.load {
@@ -51,22 +52,36 @@ struct NativeFoodLibrary: View {
         .sheet(isPresented: $showCreate) { NavigationStack { NativeCustomFoodForm { revision += 1 } }.environmentObject(session) }
     }
 
-    private func foodLink(_ food: NativeJSON) -> some View {
-        NavigationLink { NativeFoodDetail(food: food) } label: {
-            NativeCard {
-                HStack {
-                    Image(systemName: NativeFoodCategory.icon(food["name"].text)).foregroundStyle(AppTab.meals.tint).frame(width: 34)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(food["name"].text).font(.headline)
-                        Text([food["brand"].text, food["state"].text].filter { !$0.isEmpty }.joined(separator: " · "))
-                            .font(.caption).foregroundStyle(NativeTheme.muted)
-                        Text("每 \(food["basis_amount_g"].text) 克 · \(food["kcal"].text) 千卡").font(.caption).foregroundStyle(NativeTheme.muted)
+    @ViewBuilder private func foodLink(_ food: NativeJSON) -> some View {
+        if let onSelect {
+            Button { onSelect(food) } label: { foodRow(food, icon: "plus.circle.fill") }
+                .buttonStyle(PreviewPressStyle())
+                .accessibilityHint("添加到这餐")
+        } else {
+            NavigationLink { NativeFoodDetail(food: food) } label: { foodRow(food, icon: "chevron.right") }
+                .buttonStyle(PreviewPressStyle())
+        }
+    }
+
+    private func foodRow(_ food: NativeJSON, icon: String) -> some View {
+        NativeCard {
+            HStack(spacing: 10) {
+                NativeActionIcon(symbol: NativeFoodCategory.icon(food["name"].text), tint: AppTab.meals.tint)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(food["name"].text).font(.headline).foregroundStyle(NativeTheme.ink)
+                    let detail = [food["brand"].text, food["state"].text].filter { !$0.isEmpty }.joined(separator: " · ")
+                    if !detail.isEmpty {
+                        Text(detail).font(.caption).foregroundStyle(NativeTheme.muted)
                     }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption)
+                    Text("每 \(food["basis_amount_g"].text) 克 · \(food["kcal"].text) 千卡")
+                        .font(.caption).foregroundStyle(NativeTheme.muted)
                 }
+                Spacer(minLength: 4)
+                Image(systemName: icon).font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTab.meals.tint).accessibilityHidden(true)
             }
-        }.buttonStyle(.plain)
+            .contentShape(Rectangle())
+        }
     }
 }
 

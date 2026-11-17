@@ -75,6 +75,43 @@ struct NativeIconTile: View {
     }
 }
 
+enum NativeQuantity {
+    static func number(_ text: String) -> Double? {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
+        guard let value = Double(normalized), value.isFinite else { return nil }
+        return value
+    }
+
+    static func format(_ value: Double, decimals: Int) -> String {
+        value.formatted(.number.grouping(.never).precision(.fractionLength(0...decimals)))
+    }
+}
+
+struct NativeQuantityChoices: View {
+    let values: [Int]
+    let unit: String
+    @Binding var value: String
+    let tint: Color
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 63), spacing: 7)], spacing: 7) {
+            ForEach(values, id: \.self) { option in
+                let selected = NativeQuantity.number(value) == Double(option)
+                Button { value = String(option) } label: {
+                    Text("\(option) \(unit)")
+                        .font(.caption.weight(.semibold)).monospacedDigit()
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(selected ? .white : tint)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(selected ? tint : tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(PreviewPressStyle())
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+    }
+}
+
 struct NativeDailyNutritionCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize

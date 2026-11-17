@@ -245,39 +245,164 @@ struct NativeMeasurementForm: View {
     @State private var fat = ""
     @State private var conditions = ""
     @State private var notes = ""
+    @State private var lastWeight: Double?
+    @State private var initialized = false
+
     var body: some View {
-        Form {
-            DatePicker("测量时间",selection:$date)
-            NativeField(title:"体重（\(session.weightUnit)，可留空）",text:$weight,keyboard:.decimalPad)
-            NativeField(title:"腰围（\(session.lengthUnit)，可留空）",text:$waist,keyboard:.decimalPad)
-            NativeField(title:"颈围（\(session.lengthUnit)，可留空）",text:$neck,keyboard:.decimalPad)
-            NativeField(title:"臀围（\(session.lengthUnit)，可留空）",text:$hip,keyboard:.decimalPad)
-            NativeField(title:"体脂率（%，可留空）",text:$fat,keyboard:.decimalPad)
-            NativeField(title:"测量条件",text:$conditions)
-            NativeField(title:"备注",text:$notes)
-            NativeActionButton(title:"保存身体记录") { key in
-                let entries = [weight,waist,neck,hip,fat]
-                guard entries.contains(where:{!$0.isEmpty}), entries.filter({!$0.isEmpty}).allSatisfy({ (Double($0) ?? -1) > 0 }) else { throw NativeAPIError.message("请至少填写一个有效测量值。") }
-                var body: [String:NativeJSON] = ["measured_at":.string(NativeDates.timestamp(date)),"weight_kg":weight.isEmpty ? .null : .number(session.toKG(Double(weight)!)),"waist_cm":waist.isEmpty ? .null : .number(session.toCM(Double(waist)!)),"neck_cm":neck.isEmpty ? .null : .number(session.toCM(Double(neck)!)),"hip_cm":hip.isEmpty ? .null : .number(session.toCM(Double(hip)!)),"body_fat_percent":fat.isEmpty ? .null : .number(Double(fat)!),"body_fat_method":fat.isEmpty ? .null : .string("manual"),"source":.string("manual"),"conditions":conditions.isEmpty ? .null : .string(conditions),"notes":notes.isEmpty ? .null : .string(notes)]
-                if !existing.isNull { body["expected_version"] = .int(existing.version); body["reason"] = .string("用户修改身体测量记录") }
-                _ = try await session.api(existing.isNull ? "body/measurements" : "body/measurements/"+existing.id,method:existing.isNull ? "POST" : "PATCH",body:body,key:key,draftKey:existing.isNull ? "measurement" : nil)
-                onSave(); dismiss()
-            }
-        }.navigationTitle(existing.isNull ? "身体测量" : "编辑测量")
-            .nativeDraft("measurement"+(existing.isNull ? "" : "-"+existing.id),label:"身体测量",value:formDraft) { value in
-                guard existing.isNull else { return }
-                date = NativeDates.parse(value["time"].text) ?? .now; weight = value["weight"].text; waist = value["waist"].text; neck = value["neck"].text; hip = value["hip"].text; fat = value["fat"].text; conditions = value["conditions"].text; notes = value["notes"].text
-            }
-            .onAppear { if !existing.isNull {
-                date = NativeDates.parse(existing["measured_at"].text) ?? .now
-                weight = existing["weight_kg"].isNull ? "" : session.displayWeight(existing["weight_kg"].double).formatted(.number.precision(.fractionLength(0...3)))
-                waist = existing["waist_cm"].isNull ? "" : session.displayLength(existing["waist_cm"].double).formatted(.number.precision(.fractionLength(0...3)))
-                neck = existing["neck_cm"].isNull ? "" : session.displayLength(existing["neck_cm"].double).formatted(.number.precision(.fractionLength(0...3)))
-                hip = existing["hip_cm"].isNull ? "" : session.displayLength(existing["hip_cm"].double).formatted(.number.precision(.fractionLength(0...3)))
-                fat = existing["body_fat_percent"].text; conditions = existing["conditions"].text; notes = existing["notes"].text
-            } }
+        ScrollView {
+            VStack(spacing: 14) {
+                weightCard
+                NativeCard {
+                    DatePicker("测量时间", selection: $date).environment(\.timeZone, NativeDates.china)
+                }
+                NativeCard {
+                    DisclosureGroup("围度、体脂和备注") {
+                        VStack(spacing: 10) {
+                            NativeField(title: "腰围（\(session.lengthUnit)）", text: $waist, keyboard: .decimalPad)
+                            NativeField(title: "颈围（\(session.lengthUnit)）", text: $neck, keyboard: .decimalPad)
+                            NativeField(title: "臀围（\(session.lengthUnit)）", text: $hip, keyboard: .decimalPad)
+                            NativeField(title: "体脂率（%）", text: $fat, keyboard: .decimalPad)
+                            NativeField(title: "测量条件", text: $conditions)
+                            NativeField(title: "备注", text: $notes)
+                        }.padding(.top, 8)
+                    }.font(.subheadline)
+                }
+            }.nativePage()
+        }
+        .background(NativeTheme.background)
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            NativeActionButton(title: "保存身体记录", action: save)
+                .disabled([weight, waist, neck, hip, fat].allSatisfy { $0.isEmpty })
+                .padding(.horizontal, 18).padding(.vertical, 7).background(.regularMaterial)
+        }
+        .navigationTitle(existing.isNull ? "记体重" : "编辑测量")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear(perform: prepare)
+        .task { await readLastWeight() }
+        .nativeDraft("measurement" + (existing.isNull ? "" : "-" + existing.id), label: "身体测量", value: formDraft, restore: restore)
     }
-    private var formDraft:NativeJSON { .object(["time":.string(NativeDates.timestamp(date)),"weight":.string(weight),"waist":.string(waist),"neck":.string(neck),"hip":.string(hip),"fat":.string(fat),"conditions":.string(conditions),"notes":.string(notes)]) }
+
+    private var weightCard: some View {
+        NativeCard {
+            VStack(spacing: 10) {
+                NativeActionIcon(symbol: "scalemass.fill", tint: NativeTheme.accent, size: 48)
+                Text("体重").font(.subheadline.weight(.semibold)).foregroundStyle(NativeTheme.muted)
+                HStack(spacing: 8) {
+                    weightStep(-0.1)
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        TextField("—", text: $weight)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                            .monospacedDigit()
+                            .frame(maxWidth: 130, minHeight: 48)
+                            .accessibilityLabel("体重，" + session.weightUnit)
+                        Text(session.weightUnit).font(.subheadline.weight(.semibold)).foregroundStyle(NativeTheme.muted)
+                    }
+                    weightStep(0.1)
+                }
+                if let lastWeight, weight.isEmpty {
+                    Button {
+                        weight = NativeQuantity.format(lastWeight, decimals: 3)
+                    } label: {
+                        Label("用上次的 \(NativeQuantity.format(lastWeight, decimals: 2)) \(session.weightUnit)", systemImage: "clock.arrow.circlepath")
+                            .font(.footnote.weight(.semibold)).frame(minHeight: 44)
+                    }.buttonStyle(PreviewPressStyle())
+                }
+            }.frame(maxWidth: .infinity).padding(.vertical, 10)
+        }
+    }
+
+    private func weightStep(_ change: Double) -> some View {
+        Button {
+            guard let current = NativeQuantity.number(weight), current + change > 0 else { return }
+            weight = NativeQuantity.format(current + change, decimals: 3)
+        } label: {
+            NativeActionIcon(symbol: change < 0 ? "minus" : "plus", tint: NativeTheme.accent, size: 44)
+        }
+        .buttonStyle(PreviewPressStyle())
+        .disabled(NativeQuantity.number(weight) == nil)
+        .accessibilityLabel((change < 0 ? "减去 0.1 " : "增加 0.1 ") + session.weightUnit)
+    }
+
+    private func prepare() {
+        guard !initialized else { return }
+        initialized = true
+        guard !existing.isNull else { return }
+        date = NativeDates.parse(existing["measured_at"].text) ?? .now
+        if !existing["weight_kg"].isNull { weight = NativeQuantity.format(session.displayWeight(existing["weight_kg"].double), decimals: 3) }
+        if !existing["waist_cm"].isNull { waist = NativeQuantity.format(session.displayLength(existing["waist_cm"].double), decimals: 3) }
+        if !existing["neck_cm"].isNull { neck = NativeQuantity.format(session.displayLength(existing["neck_cm"].double), decimals: 3) }
+        if !existing["hip_cm"].isNull { hip = NativeQuantity.format(session.displayLength(existing["hip_cm"].double), decimals: 3) }
+        fat = existing["body_fat_percent"].text
+        conditions = existing["conditions"].text
+        notes = existing["notes"].text
+    }
+
+    private func readLastWeight() async {
+        guard existing.isNull,
+              let result = try? await session.api("body/measurements", query: ["page_size": "10"]),
+              let recent = result.records.first(where: { !$0["weight_kg"].isNull })
+        else { return }
+        lastWeight = session.displayWeight(recent["weight_kg"].double)
+    }
+
+    private func restore(_ value: NativeJSON) {
+        guard existing.isNull else { return }
+        initialized = true
+        date = NativeDates.parse(value["time"].text) ?? .now
+        weight = value["weight"].text
+        waist = value["waist"].text
+        neck = value["neck"].text
+        hip = value["hip"].text
+        fat = value["fat"].text
+        conditions = value["conditions"].text
+        notes = value["notes"].text
+    }
+
+    private func measurement(_ text: String, title: String, limit: Double, convert: (Double) -> Double = { $0 }) throws -> NativeJSON {
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .null }
+        guard let value = NativeQuantity.number(text), value > 0, convert(value) <= limit else {
+            throw NativeAPIError.message("请填写有效的\(title)。")
+        }
+        return .number(convert(value))
+    }
+
+    private func save(_ key: String) async throws {
+        let measuredWeight = try measurement(weight, title: "体重", limit: 500, convert: session.toKG)
+        let measuredWaist = try measurement(waist, title: "腰围", limit: 400, convert: session.toCM)
+        let measuredNeck = try measurement(neck, title: "颈围", limit: 200, convert: session.toCM)
+        let measuredHip = try measurement(hip, title: "臀围", limit: 400, convert: session.toCM)
+        let measuredFat = try measurement(fat, title: "体脂率", limit: 70)
+        guard [measuredWeight, measuredWaist, measuredNeck, measuredHip, measuredFat].contains(where: { !$0.isNull }) else {
+            throw NativeAPIError.message("请至少填写一项测量值。")
+        }
+        let unchangedFat = measuredFat.double == existing["body_fat_percent"].double
+        let method = unchangedFat && !existing["body_fat_method"].isNull ? existing["body_fat_method"] : .string("manual")
+        let creating = existing.isNull
+        var body: [String: NativeJSON] = [
+            "measured_at": .string(NativeDates.timestamp(date)), "weight_kg": measuredWeight,
+            "waist_cm": measuredWaist, "neck_cm": measuredNeck, "hip_cm": measuredHip,
+            "body_fat_percent": measuredFat, "body_fat_method": measuredFat.isNull ? .null : method,
+            "source": existing["source"].isNull ? .string("manual") : existing["source"],
+            "conditions": conditions.isEmpty ? .null : .string(conditions), "notes": notes.isEmpty ? .null : .string(notes)
+        ]
+        if !creating {
+            body["expected_version"] = .int(existing.version)
+            body["reason"] = .string("用户修改身体测量记录")
+        }
+        _ = try await session.api(creating ? "body/measurements" : "body/measurements/" + existing.id,
+                                  method: creating ? "POST" : "PATCH", body: body, key: key, draftKey: creating ? "measurement" : nil)
+        onSave()
+        dismiss()
+    }
+
+    private var formDraft: NativeJSON {
+        .object(["time": .string(NativeDates.timestamp(date)), "weight": .string(weight),
+                 "waist": .string(waist), "neck": .string(neck), "hip": .string(hip), "fat": .string(fat),
+                 "conditions": .string(conditions), "notes": .string(notes)])
+    }
 }
 
 struct NativeNavyBodyFat: View {
