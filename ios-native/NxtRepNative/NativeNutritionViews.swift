@@ -599,7 +599,7 @@ private struct NativeMealPortionCard: View {
                 Spacer()
                 TextField("份量", text: $line.amount).keyboardType(.decimalPad)
                     .multilineTextAlignment(.trailing).font(.title3.bold()).monospacedDigit()
-                    .frame(width: 84, minHeight: 44)
+                    .frame(width: 84).frame(minHeight: 44)
                     .accessibilityLabel(line.name + "份量")
                 Text("克").font(.subheadline).foregroundStyle(NativeTheme.muted)
             }
@@ -669,7 +669,7 @@ struct NativeWaterView: View {
                         Spacer()
                         TextField("毫升", text: $amount).keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing).font(.title2.bold()).monospacedDigit()
-                            .frame(width: 90, minHeight: 44).accessibilityLabel("饮水量，毫升")
+                            .frame(width: 90).frame(minHeight: 44).accessibilityLabel("饮水量，毫升")
                         Text("毫升").font(.subheadline).foregroundStyle(NativeTheme.muted)
                     }
                     DisclosureGroup("饮水时间") {
